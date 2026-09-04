@@ -394,11 +394,11 @@ export class VenueService {
   /**
    * Sinh slug không đụng hàng.
    *
-   * Thử `ten-san`, `ten-san-2`, `ten-san-3`… Vẫn có thể đụng nếu hai người tạo
+   * Thử `ten-sân`, `ten-sân-2`, `ten-sân-3`… Vẫn có thể đụng nếu hai người tạo
    * cùng lúc — `create()` để lỗi trùng bung ra chứ không thử lại vô hạn.
    */
   private async uniqueSlug(name: string): Promise<string> {
-    const base = slugify(name) || "san";
+    const base = slugify(name) || "court";
 
     for (let attempt = 1; attempt <= 20; attempt += 1) {
       const slug = attempt === 1 ? base : `${base}-${attempt}`;

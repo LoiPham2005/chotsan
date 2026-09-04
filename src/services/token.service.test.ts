@@ -55,7 +55,7 @@ describe("TokenService", () => {
     expect(db.refreshToken.create).toHaveBeenCalled();
   });
 
-  it("dùng lại token ĐÃ THU HỒI thì huỷ đúng MỘT HỌ, không phải mọi phiên", async () => {
+  it("dùng lại token ĐÃ WEEKDAY_NAMES HỒI thì huỷ đúng MỘT HỌ, không phải mọi phiên", async () => {
     /*
      * Token đã xoay vòng mà còn được dùng lại chỉ có một cách giải thích hợp
      * lý: nó đã bị đánh cắp. Cả kẻ trộm lẫn thiết bị thật đều nằm trong họ đó,

@@ -56,7 +56,19 @@
   --taken-bg: #f1f5f9;
   --taken-line: #e2e8f0;
 
+  /* ---------------------------------------------------------------------
+   * BÓNG ĐỔ — bốn mức, mỗi mức một khoảng cách khác nhau so với mặt nền.
+   *
+   * Nhiều bóng chồng lên nhau trong cùng một bóng đổ (một lớp sát, một lớp
+   * xa) là thứ tách "phẳng lì" khỏi "có chiều sâu". Một lớp duy nhất luôn
+   * trông như dán decal.
+   * ------------------------------------------------------------------- */
   --card-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  --shadow-nang-1: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --shadow-nang-2: 0 2px 4px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-nang-3: 0 4px 8px rgba(15, 23, 42, 0.04), 0 12px 28px rgba(15, 23, 42, 0.12);
+  /* Bóng mang màu thương hiệu — chỉ cho thứ đang được CHỌN, không phải mọi nút. */
+  --shadow-chon: 0 2px 8px rgba(16, 185, 129, 0.28), 0 8px 24px rgba(16, 185, 129, 0.16);
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
@@ -119,6 +131,12 @@
   --radius-token-sm: var(--radius-sm);
   --radius-token-md: var(--radius-md);
   --radius-token-lg: var(--radius-lg);
+  --radius-token-xl: 20px;
+
+  --shadow-nang-1: var(--shadow-nang-1);
+  --shadow-nang-2: var(--shadow-nang-2);
+  --shadow-nang-3: var(--shadow-nang-3);
+  --shadow-chon: var(--shadow-chon);
 }
 
 /* ===========================================================================

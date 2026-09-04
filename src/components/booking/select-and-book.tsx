@@ -2,11 +2,11 @@
 
 import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
-import { datSanAction, type DatSanState } from "@/app/(khach)/san/[slug]/actions";
+import { holdBookingAction, type HoldBookingState } from "@/app/(public)/venues/[slug]/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DaySummaryStrip, SlotGrid, type SlotSelection } from "@/components/booking/slot-grid";
-import { nhanKhungGio } from "@/lib/ngay";
+import { timeRangeLabel } from "@/lib/date";
 import { formatVnd } from "@/lib/slots";
 import type { DayAvailability } from "@/services/availability.service";
 
@@ -28,23 +28,25 @@ import type { DayAvailability } from "@/services/availability.service";
  * Số tiền THẬT do `bookingService.hold()` tính lại ở máy chủ. Hai chỗ không
  * được phép lệch, nên tầng dưới KHÔNG nhận số tiền từ form.
  */
-export function ChonVaDat({
+export function SelectAndBook({
   day,
   venueId,
-  ngay,
+  days,
 }: {
   day: DayAvailability;
   venueId: string;
-  ngay: string;
+  days: string;
 }) {
-  const [chon, setChon] = useState<SlotSelection | null>(null);
-  const [state, formAction] = useActionState<DatSanState, FormData>(datSanAction, {});
+  const [selection, setSelection] = useState<SlotSelection | null>(null);
+  const [state, formAction] = useActionState<HoldBookingState, FormData>(holdBookingAction, {});
 
-  const san = chon ? day.courts.find((court) => court.courtId === chon.courtId) : undefined;
+  const court = selection
+    ? day.courts.find((court) => court.courtId === selection.courtId)
+    : undefined;
 
-  const tamTinh = chon
-    ? (san?.slots ?? [])
-        .filter((slot) => slot.minute >= chon.startMinute && slot.minute < chon.endMinute)
+  const estimate = selection
+    ? (court?.slots ?? [])
+        .filter((slot) => slot.minute >= selection.startMinute && slot.minute < selection.endMinute)
         .reduce((sum, slot) => sum + slot.price, 0)
     : 0;
 
@@ -52,7 +54,7 @@ export function ChonVaDat({
     <>
       <DaySummaryStrip day={day} className="mb-3" />
 
-      <SlotGrid day={day} onSelect={setChon} />
+      <SlotGrid day={day} onSelect={setSelection} />
 
       {state.error && (
         <p role="alert" className="alert alert-danger mt-3">
@@ -60,23 +62,23 @@ export function ChonVaDat({
         </p>
       )}
 
-      {chon && (
+      {selection && (
         <form
           action={formAction}
           className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 p-3 shadow-[0_-4px_16px_rgba(15,23,42,0.08)] backdrop-blur sm:static sm:mt-4 sm:rounded-token-lg sm:border sm:shadow-none"
         >
           <input type="hidden" name="venueId" value={venueId} />
-          <input type="hidden" name="courtId" value={chon.courtId} />
-          <input type="hidden" name="ngay" value={ngay} />
-          <input type="hidden" name="startMinute" value={chon.startMinute} />
-          <input type="hidden" name="endMinute" value={chon.endMinute} />
+          <input type="hidden" name="courtId" value={selection.courtId} />
+          <input type="hidden" name="days" value={days} />
+          <input type="hidden" name="startMinute" value={selection.startMinute} />
+          <input type="hidden" name="endMinute" value={selection.endMinute} />
 
           <div className="mx-auto max-w-3xl">
             <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
               <p className="text-sm font-semibold text-content">
-                {san?.courtName} · {nhanKhungGio(chon.startMinute, chon.endMinute)}
+                {court?.courtName} · {timeRangeLabel(selection.startMinute, selection.endMinute)}
               </p>
-              <p className="text-lg font-bold text-brand">{formatVnd(tamTinh)}</p>
+              <p className="text-lg font-bold text-brand">{formatVnd(estimate)}</p>
             </div>
 
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -91,10 +93,10 @@ export function ChonVaDat({
                   required
                   maxLength={80}
                   autoComplete="name"
-                  aria-describedby={state.fields?.customerName ? "loi-ten" : undefined}
+                  aria-describedby={state.fields?.customerName ? "failed-ten" : undefined}
                 />
                 {state.fields?.customerName && (
-                  <p id="loi-ten" className="mt-1 text-xs text-danger">
+                  <p id="failed-ten" className="mt-1 text-xs text-danger">
                     {state.fields.customerName[0]}
                   </p>
                 )}
@@ -112,10 +114,10 @@ export function ChonVaDat({
                   placeholder="Số điện thoại"
                   required
                   autoComplete="tel"
-                  aria-describedby={state.fields?.customerPhone ? "loi-sdt" : undefined}
+                  aria-describedby={state.fields?.customerPhone ? "failed-sdt" : undefined}
                 />
                 {state.fields?.customerPhone && (
-                  <p id="loi-sdt" className="mt-1 text-xs text-danger">
+                  <p id="failed-sdt" className="mt-1 text-xs text-danger">
                     {state.fields.customerPhone[0]}
                   </p>
                 )}
@@ -126,12 +128,12 @@ export function ChonVaDat({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setChon(null)}
+                onClick={() => setSelection(null)}
                 className="shrink-0"
               >
                 Bỏ chọn
               </Button>
-              <NutDat />
+              <SubmitBookingButton />
             </div>
 
             <p className="mt-2 text-center text-xs text-muted">
@@ -142,7 +144,7 @@ export function ChonVaDat({
       )}
 
       {/* Chừa chỗ cho thanh dính đáy, nếu không nó che mất hàng cuối của lưới. */}
-      {chon && <div className="h-64 sm:hidden" aria-hidden />}
+      {selection && <div className="h-64 sm:hidden" aria-hidden />}
     </>
   );
 }
@@ -151,7 +153,7 @@ export function ChonVaDat({
  * Nút gửi tách riêng vì `useFormStatus` chỉ đọc được trạng thái khi nó nằm
  * TRONG `<form>` — gọi ở component chứa form thì luôn trả `pending: false`.
  */
-function NutDat() {
+function SubmitBookingButton() {
   const { pending } = useFormStatus();
 
   return (

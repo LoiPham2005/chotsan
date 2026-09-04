@@ -6,7 +6,7 @@
  * redirect kinh điển trên tham số `?next=`.
  *
  * Dùng cho cả `next` trong form đăng nhập (`(auth)/actions.ts`) lẫn `next`
- * trong luồng OAuth (`api/auth/oauth/[provider]/start`) — cùng một rủi ro,
+ * trong luồng OAuth (`api/auth/oauth/[provider]/ngay`) — cùng một rủi ro,
  * cùng một cách chặn.
  */
 export function safeRedirectPath(value: unknown, fallback: string): string {

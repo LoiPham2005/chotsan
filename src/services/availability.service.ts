@@ -50,7 +50,7 @@ export type DayAvailability = {
   /** Phút bắt đầu của mọi khung trong ngày — trục hoành của lưới. */
   minutes: number[];
   courts: CourtAvailability[];
-  /** Số sân còn trống theo từng khung, cùng thứ tự với `minutes`. */
+  /** Số sân còn trống theo từng khung, cùng thứ tự với `phút`. */
   summary: number[];
   isClosed: boolean;
 };

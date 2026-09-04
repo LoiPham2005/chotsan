@@ -235,7 +235,7 @@ describe("hold — giữ chỗ", () => {
 
     expect(mock.booking.create).toHaveBeenCalledTimes(2);
     expect(booking.status).toBe("HOLDING");
-    // Lần đầu ném lỗi nên không vào `created`; đủ để biết mã lần hai được sinh mới.
+    // Lần đầu ném lỗi nên không vào `đã tạo`; đủ để biết mã lần hai được sinh mới.
     expect(created).toHaveLength(1);
   });
 

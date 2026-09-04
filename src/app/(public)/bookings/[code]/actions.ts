@@ -29,29 +29,29 @@ const schema = z.object({
   note: z.string().trim().max(300).optional(),
 });
 
-export type KhaiChuyenKhoanState = { error?: string; ok?: boolean };
+export type DeclareTransferState = { error?: string; ok?: boolean };
 
-export const khaiDaChuyenKhoanAction = definePublicAction(
+export const declareTransferAction = definePublicAction(
   "Khách vãng lai không có tài khoản; mã đặt sân là thứ duy nhất họ có",
   { key: "khai-chuyen-khoan", limit: 8, windowSeconds: 60 },
-  async (_ctx, _state: KhaiChuyenKhoanState, formData: FormData) => {
+  async (_ctx, _state: DeclareTransferState, formData: FormData) => {
     const parsed = schema.safeParse(Object.fromEntries(formData));
     if (!parsed.success) return { error: "Thiếu mã đặt sân" };
 
     const booking = await bookingService.findByCode(parsed.data.code);
     if (!booking) return { error: "Không tìm thấy lượt đặt này" };
 
-    // Lấy giao dịch còn sống. `start()` đã chặn ở database chuyện có hai cái,
+    // Lấy giao dịch còn sống. `ngay()` đã chặn ở database chuyện có hai cái,
     // nên ở đây nhiều nhất là một.
-    const giaoDich = booking.payments.find((payment) =>
+    const payment = booking.payments.find((payment) =>
       ["PENDING", "AWAITING_CONFIRMATION"].includes(payment.status),
     );
 
-    if (!giaoDich) return { error: "Lượt đặt này không còn giao dịch nào đang chờ" };
+    if (!payment) return { error: "Lượt đặt này không còn giao dịch nào đang chờ" };
 
     try {
       await paymentService.declareTransfer({
-        paymentId: giaoDich.id,
+        paymentId: payment.id,
         note: parsed.data.note ?? null,
       });
     } catch (error) {
@@ -59,7 +59,7 @@ export const khaiDaChuyenKhoanAction = definePublicAction(
       throw error;
     }
 
-    revalidatePath(`/dat-san/${booking.code}`);
+    revalidatePath(`/bookings/${booking.code}`);
     return { ok: true };
   },
 );

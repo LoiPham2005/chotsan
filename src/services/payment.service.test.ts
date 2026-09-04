@@ -233,22 +233,22 @@ describe("start — mở giao dịch", () => {
 describe("transferInstruction — mã QR chuyển khoản", () => {
   it("dựng QR VietQR từ tài khoản của SÂN, kèm đúng số tiền và nội dung", async () => {
     const { db } = createDb();
-    const chiDan = await new PaymentService(db).transferInstruction("p1");
+    const instruction = await new PaymentService(db).transferInstruction("p1");
 
-    expect(chiDan.accountNumber).toBe("1234567890");
-    expect(chiDan.transferNote).toBe("CS 8F3K2M");
-    expect(chiDan.amount).toBe(360_000);
-    expect(chiDan.qrPayload).toContain("970436"); // BIN Vietcombank
-    expect(chiDan.qrPayload).toContain("5406360000"); // số tiền
+    expect(instruction.accountNumber).toBe("1234567890");
+    expect(instruction.transferNote).toBe("CS 8F3K2M");
+    expect(instruction.amount).toBe(360_000);
+    expect(instruction.qrPayload).toContain("970436"); // BIN Vietcombank
+    expect(instruction.qrPayload).toContain("5406360000"); // số tiền
   });
 
   it("ngân hàng ngoài danh sách BIN: vẫn chuyển tay được, chỉ là không có QR", async () => {
     // Thà không có QR còn hơn có một QR sai — khách quét rồi tiền đi đâu không ai biết.
     const { db } = createDb({ venueBank: { ...VENUE_BANK, bankName: "NGAN_HANG_LA" } });
-    const chiDan = await new PaymentService(db).transferInstruction("p1");
+    const instruction = await new PaymentService(db).transferInstruction("p1");
 
-    expect(chiDan.qrPayload).toBeNull();
-    expect(chiDan.accountNumber).toBe("1234567890");
+    expect(instruction.qrPayload).toBeNull();
+    expect(instruction.accountNumber).toBe("1234567890");
   });
 
   it("sân chưa khai tài khoản thì báo rõ, không dựng QR rỗng", async () => {

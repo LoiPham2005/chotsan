@@ -4,8 +4,8 @@ import { PrismaClient } from "@prisma/client";
 import { seedRbac } from "./seeds/seed-rbac";
 import { seedAdmin } from "./seeds/seed-admin";
 import { seedDev } from "./seeds/seed-dev";
-import { seedMonTheThao } from "./seeds/seed-mon-the-thao";
-import { seedSanMau } from "./seeds/seed-san-mau";
+import { seedSports } from "./seeds/seed-sports";
+import { seedVenues } from "./seeds/seed-venues";
 
 /**
  * Chạy: `pnpm db:seed`
@@ -21,11 +21,11 @@ import { seedSanMau } from "./seeds/seed-san-mau";
  * BA PHẦN, TÁCH THEO MỨC ĐỘ AN TOÀN
  *
  *   seedRbac       — quyền & vai trò. Chạy ở MỌI môi trường, kể cả production.
- *   seedMonTheThao — danh mục môn. Cũng chạy ở production: không có nó thì
+ *   seedSports — danh mục môn. Cũng chạy ở production: không có nó thì
  *                    không tạo được cơ sở nào.
  *   seedAdmin      — tài khoản quản trị đầu tiên, đọc từ ADMIN_EMAIL/ADMIN_PASSWORD.
  *   seedDev        — tài khoản mẫu có mật khẩu công khai. CHỈ dev.
- *   seedSanMau     — ba cơ sở mẫu kèm giờ, sân con, bảng giá. CHỈ dev.
+ *   seedVenues     — ba cơ sở mẫu kèm giờ, sân con, bảng giá. CHỈ dev.
  */
 /*
  * Prisma 7 bỏ query engine Rust: `new PrismaClient()` KHÔNG có adapter sẽ ném
@@ -51,7 +51,7 @@ async function main() {
   await seedRbac(prisma);
   console.log("✓ Đã đồng bộ quyền và vai trò hệ thống");
 
-  await seedMonTheThao(prisma);
+  await seedSports(prisma);
 
   await seedAdmin(prisma);
 
@@ -59,7 +59,7 @@ async function main() {
     console.log("⏭️  Bỏ qua dữ liệu mẫu: đang ở production");
   } else {
     await seedDev(prisma);
-    await seedSanMau(prisma);
+    await seedVenues(prisma);
   }
 
   console.log("🌱 Xong.");

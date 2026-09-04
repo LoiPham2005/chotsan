@@ -374,7 +374,7 @@ const webAuthnOptionsResponse = envelope(
 const notificationSchema = named(
   "Notification",
   z.object({
-    /** Id bản ghi NGƯỜI NHẬN, không phải id thông báo — dùng cho `/read`. */
+    /** Id bản ghi NGƯỜI NHẬN, không phải id thông báo — dùng cho `/lấy`. */
     id: z.string(),
     title: z.string(),
     body: z.string(),

@@ -47,7 +47,7 @@ async function main() {
     "venues_phi_huy_tu_0_den_100",
   ];
 
-  const daCo = new Set(
+  const existing = new Set(
     (
       await db.$queryRawUnsafe<{ ten: string }[]>(
         `select indexname as ten from pg_indexes where schemaname = 'public'
@@ -56,7 +56,7 @@ async function main() {
     ).map((row) => row.ten),
   );
 
-  const thieu = CAN_GIU.filter((ten) => !daCo.has(ten));
+  const thieu = CAN_GIU.filter((ten) => !existing.has(ten));
 
   const suffix = Date.now().toString(36);
 
@@ -113,9 +113,9 @@ async function main() {
     });
 
   let ok = true;
-  const bao = (nhan: string, dat_: boolean, chiTiet: string) => {
+  const bao = (label: string, dat_: boolean, chiTiet: string) => {
     if (!dat_) ok = false;
-    console.log(`${dat_ ? "✓" : "✗"} ${nhan} — ${chiTiet}`);
+    console.log(`${dat_ ? "✓" : "✗"} ${label} — ${chiTiet}`);
   };
 
   bao(
@@ -125,9 +125,9 @@ async function main() {
   );
 
   // 1. ĐỒNG THỜI, không tuần tự: cả hai đều thấy "còn trống" ở bước kiểm.
-  const ketQua = await Promise.allSettled([dat("Người A"), dat("Người B")]);
-  const thang = ketQua.filter((r) => r.status === "fulfilled");
-  const thua = ketQua.filter((r) => r.status === "rejected");
+  const result = await Promise.allSettled([dat("Người A"), dat("Người B")]);
+  const thang = result.filter((r) => r.status === "fulfilled");
+  const thua = result.filter((r) => r.status === "rejected");
 
   bao(
     "hai request đồng thời",
@@ -219,11 +219,11 @@ async function main() {
   );
 
   // 8. Mã QR VietQR dựng từ tài khoản của sân.
-  const chiDan = await thanhToan.transferInstruction(gd.id);
+  const instruction = await thanhToan.transferInstruction(gd.id);
   bao(
     "dựng được mã QR chuyển khoản",
-    chiDan.qrPayload !== null && chiDan.transferNote === `CS ${luot.code}`,
-    `nội dung "${chiDan.transferNote}", QR ${chiDan.qrPayload?.length ?? 0} ký tự`,
+    instruction.qrPayload !== null && instruction.transferNote === `CS ${luot.code}`,
+    `nội dung "${instruction.transferNote}", QR ${instruction.qrPayload?.length ?? 0} ký tự`,
   );
 
   // 9. Chủ sân duyệt → lượt đặt tự chuyển sang CONFIRMED.

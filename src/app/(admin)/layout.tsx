@@ -19,7 +19,7 @@ import { permissionService } from "@/services/permission.service";
  * Vì vậy hai lớp sau vẫn giữ nguyên và KHÔNG được lược bớt:
  *
  *   1. Mỗi trang tự gọi `requirePermission(...)` với đúng quyền của nó —
- *      layout không thể biết `/users` cần `user:read` còn `/roles` cần
+ *      layout không thể biết `/users` cần `user:lấy` còn `/roles` cần
  *      `role:read`.
  *   2. Mỗi Server Action tự kiểm quyền. Đây mới là lớp chặn thật.
  *

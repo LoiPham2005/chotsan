@@ -17,38 +17,38 @@ import { useEffect, useState } from "react";
  * duyệt xong), và đoán mò trạng thái đó ở trình duyệt là cách chắc chắn để
  * hiện sai.
  */
-export function DemNguocGiuCho({ hetHanIso }: { hetHanIso: string }) {
-  const [conLai, setConLai] = useState<number | null>(null);
+export function HoldCountdown({ expiresAtIso }: { expiresAtIso: string }) {
+  const [secondsLeft, setConLai] = useState<number | null>(null);
 
   useEffect(() => {
-    const hetHan = new Date(hetHanIso).getTime();
+    const expiresAt = new Date(expiresAtIso).getTime();
 
     const tick = () => {
-      const giay = Math.max(0, Math.round((hetHan - Date.now()) / 1000));
-      setConLai(giay);
-      if (giay === 0) window.location.reload();
+      const seconds = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
+      setConLai(seconds);
+      if (seconds === 0) window.location.reload();
     };
 
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [hetHanIso]);
+  }, [expiresAtIso]);
 
   // Lần dựng đầu ở máy chủ chưa có `Date.now()` của máy khách. Trả khoảng trống
   // giữ chỗ thay vì một con số — số ở máy chủ và ở trình duyệt sẽ khác nhau, và
   // React báo lỗi hydration.
-  if (conLai === null) return <span className="tabular-nums text-muted">--:--</span>;
+  if (secondsLeft === null) return <span className="tabular-nums text-muted">--:--</span>;
 
-  const phut = Math.floor(conLai / 60);
-  const giay = conLai % 60;
-  const sapHet = conLai <= 120;
+  const minutes = Math.floor(secondsLeft / 60);
+  const seconds = secondsLeft % 60;
+  const almostOver = secondsLeft <= 120;
 
   return (
     <span
-      className={`tabular-nums font-semibold ${sapHet ? "text-danger" : "text-content"}`}
-      aria-live={sapHet ? "polite" : "off"}
+      className={`tabular-nums font-semibold ${almostOver ? "text-danger" : "text-content"}`}
+      aria-live={almostOver ? "polite" : "off"}
     >
-      {phut}:{String(giay).padStart(2, "0")}
+      {minutes}:{String(seconds).padStart(2, "0")}
     </span>
   );
 }

@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { definePublicAction } from "@/lib/define-action";
 import { DomainError } from "@/lib/errors";
-import { tuKhoaNgay } from "@/lib/ngay";
+import { fromDateKey } from "@/lib/date";
 import { bookingService } from "@/services/booking.service";
 
 /**
@@ -27,7 +27,7 @@ import { bookingService } from "@/services/booking.service";
 const schema = z.object({
   venueId: z.string().min(1),
   courtId: z.string().min(1),
-  ngay: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày không hợp lệ"),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày không hợp lệ"),
   startMinute: z.coerce
     .number()
     .int()
@@ -46,12 +46,12 @@ const schema = z.object({
   customerNote: z.string().trim().max(300).optional(),
 });
 
-export type DatSanState = { error?: string; fields?: Record<string, string[]> };
+export type HoldBookingState = { error?: string; fields?: Record<string, string[]> };
 
-export const datSanAction = definePublicAction(
+export const holdBookingAction = definePublicAction(
   "Khách vãng lai phải đặt được sân mà không cần tài khoản",
-  { key: "dat-san", limit: 10, windowSeconds: 60 },
-  async (ctx, _state: DatSanState, formData: FormData): Promise<DatSanState> => {
+  { key: "hold-booking", limit: 10, windowSeconds: 60 },
+  async (ctx, _state: HoldBookingState, formData: FormData): Promise<HoldBookingState> => {
     const parsed = schema.safeParse(Object.fromEntries(formData));
 
     if (!parsed.success) {
@@ -69,7 +69,7 @@ export const datSanAction = definePublicAction(
       const booking = await bookingService.hold({
         venueId: input.venueId,
         courtId: input.courtId,
-        date: tuKhoaNgay(input.ngay),
+        date: fromDateKey(input.date),
         startMinute: input.startMinute,
         endMinute: input.endMinute,
         customerName: input.customerName,
@@ -90,6 +90,6 @@ export const datSanAction = definePublicAction(
 
     // `redirect` ném một ngoại lệ đặc biệt của Next, nên phải nằm NGOÀI khối
     // try — bắt nhầm nó là trang đứng im mà không ai hiểu vì sao.
-    redirect(`/dat-san/${code}`);
+    redirect(`/bookings/${code}`);
   },
 );

@@ -22,7 +22,7 @@ import { BANK_BINS, buildVietQrPayload, transferNoteForBooking } from "@/lib/vie
  * BA THỨ Ở TẦNG NÀY KHÔNG ĐƯỢC PHÉP SAI
  *
  * 1. **Một lượt đặt chỉ có một giao dịch đang sống.** Chặn ở database bằng chỉ
- *    số `payments_mot_giao_dich_song_cho_moi_booking`. `start()` bắt lỗi trùng
+ *    số `payments_mot_giao_dich_song_cho_moi_booking`. `ngay()` bắt lỗi trùng
  *    và TRẢ VỀ giao dịch đang có thay vì tạo cái thứ hai — khách bấm hai lần
  *    khi mạng chậm là chuyện xảy ra hằng ngày.
  *

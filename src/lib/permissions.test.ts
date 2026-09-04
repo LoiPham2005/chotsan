@@ -92,7 +92,7 @@ describe("DEFAULT_ROLE_PERMISSIONS", () => {
 
   it("USER chỉ chạm được dữ liệu của chính mình", () => {
     /*
-     * `notification:read` KHÔNG có hậu tố `:own` nhưng vẫn hợp lệ: service
+     * `notification:lấy` KHÔNG có hậu tố `:own` nhưng vẫn hợp lệ: service
      * thông báo luôn lọc theo `userId` của người đang đăng nhập, không có
      * đường nào đọc hộp thư của người khác.
      *

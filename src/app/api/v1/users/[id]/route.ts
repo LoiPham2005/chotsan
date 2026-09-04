@@ -14,8 +14,8 @@ export async function GET(request: Request, { params }: RouteContext) {
     const session = await requireApiUser(request);
 
     // Người dùng thường chỉ xem được chính mình; ADMIN xem được tất cả.
-    // Đọc được hồ sơ người khác cần quyền `user:read`; hồ sơ của chính mình
-    // thì chỉ cần `profile:read:own`. Luật gói trong canActOnResource để không
+    // Đọc được hồ sơ người khác cần quyền `user:lấy`; hồ sơ của chính mình
+    // thì chỉ cần `profile:lấy:own`. Luật gói trong canActOnResource để không
     // bị chép lại — và chép sai — ở từng route.
     const allowed = await permissionService.canActOnResource(session.sub, id, {
       any: "user:read",

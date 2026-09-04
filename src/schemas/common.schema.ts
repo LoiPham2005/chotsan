@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /**
  * Mảnh ghép dùng lại ở mọi schema. Gom về một chỗ để luật không bị chép lệch —
- * ví dụ `page` mặc định 1 ở chỗ này nhưng 0 ở chỗ kia là một lớp lỗi rất khó
+ * ví dụ `trang` mặc định 1 ở chỗ này nhưng 0 ở chỗ kia là một lớp lỗi rất khó
  * nhìn ra khi đọc từng file riêng lẻ.
  */
 
@@ -11,7 +11,7 @@ export const cuidSchema = z.string().cuid("Định danh không hợp lệ");
 /**
  * Phân trang theo trang/số dòng.
  *
- * `coerce` vì query string luôn là chuỗi: `?page=2` cho ra `"2"`, và `z.number()`
+ * `coerce` vì query string luôn là chuỗi: `?trang=2` cho ra `"2"`, và `z.number()`
  * thuần sẽ từ chối nó.
  *
  * `limit` chặn trần 100 — không phải để làm khó client, mà vì `?limit=1000000`

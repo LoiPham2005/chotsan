@@ -12,32 +12,32 @@
  * nên máy chủ và trình duyệt luôn ra cùng kết quả.
  */
 
-export const MUI_GIO = "Asia/Ho_Chi_Minh";
+export const TIME_ZONE = "Asia/Ho_Chi_Minh";
 
-const KHOA_NGAY = new Intl.DateTimeFormat("en-CA", {
-  timeZone: MUI_GIO,
+const DATE_KEY_FORMAT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: TIME_ZONE,
   year: "numeric",
   month: "2-digit",
   day: "2-digit",
 });
 
 /** `"2026-09-04"` theo giờ Việt Nam. Đây là dạng dùng trên URL. */
-export function khoaNgay(date: Date): string {
-  return KHOA_NGAY.format(date);
+export function dateKey(date: Date): string {
+  return DATE_KEY_FORMAT.format(date);
 }
 
 /**
- * Đọc `?ngay=2026-09-04` từ URL.
+ * Đọc `?date=2026-09-04` từ URL.
  *
  * Sai định dạng hoặc ngày không tồn tại (31/02) thì trả về hôm nay — người dùng
  * sửa URL bằng tay không được thấy trang lỗi.
  */
-export function docKhoaNgay(value: string | undefined, now = new Date()): Date {
-  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return tuKhoaNgay(khoaNgay(now));
+export function parseDateKey(value: string | undefined, now = new Date()): Date {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return fromDateKey(dateKey(now));
 
   const parsed = new Date(`${value}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime())) return tuKhoaNgay(khoaNgay(now));
-  if (khoaNgay(parsed) !== value) return tuKhoaNgay(khoaNgay(now));
+  if (Number.isNaN(parsed.getTime())) return fromDateKey(dateKey(now));
+  if (dateKey(parsed) !== value) return fromDateKey(dateKey(now));
 
   return parsed;
 }
@@ -49,52 +49,52 @@ export function docKhoaNgay(value: string | undefined, now = new Date()): Date {
  * quan tâm "ngày nào", và giữa trưa thì cộng/trừ vài giờ vẫn không rơi sang
  * ngày khác — nửa đêm thì rơi ngay.
  */
-export function tuKhoaNgay(key: string): Date {
+export function fromDateKey(key: string): Date {
   return new Date(`${key}T05:00:00Z`); // 12:00 giờ VN
 }
 
-/** Cộng thêm `soNgay` ngày, giữ nguyên khoá ngày theo giờ VN. */
-export function themNgay(date: Date, soNgay: number): Date {
-  return tuKhoaNgay(khoaNgay(new Date(date.getTime() + soNgay * 24 * 60 * 60_000)));
+/** Cộng thêm `days` ngày, giữ nguyên khoá ngày theo giờ VN. */
+export function addDays(date: Date, days: number): Date {
+  return fromDateKey(dateKey(new Date(date.getTime() + days * 24 * 60 * 60_000)));
 }
 
-const THU = ["Chủ nhật", "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7"];
+const WEEKDAY_NAMES = ["Chủ nhật", "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5", "Thứ 6", "Thứ 7"];
 
-/** `{ thu: "Thứ 6", ngay: "04/09" }` — dùng cho dải chọn ngày. */
-export function nhanNgay(date: Date): { thu: string; ngay: string } {
+/** `{ weekday: "Thứ 6", dayMonth: "04/09" }` — dùng cho dải chọn ngày. */
+export function dayLabel(date: Date): { weekday: string; dayMonth: string } {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: MUI_GIO,
+    timeZone: TIME_ZONE,
     weekday: "short",
     day: "2-digit",
     month: "2-digit",
   }).formatToParts(date);
 
-  const lay = (type: Intl.DateTimeFormatPartTypes) =>
+  const read = (type: Intl.DateTimeFormatPartTypes) =>
     parts.find((part) => part.type === type)?.value ?? "";
 
-  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(lay("weekday"));
+  const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(read("weekday"));
 
-  return { thu: THU[weekday] ?? "", ngay: `${lay("day")}/${lay("month")}` };
+  return { weekday: WEEKDAY_NAMES[weekday] ?? "", dayMonth: `${read("day")}/${read("month")}` };
 }
 
 /** `"Thứ 6, 04/09/2026"` — dùng ở chỗ cần nói rõ ngày nào. */
-export function nhanNgayDay(date: Date): string {
-  const { thu } = nhanNgay(date);
-  const [nam, thang, ngay] = khoaNgay(date).split("-");
-  return `${thu}, ${ngay}/${thang}/${nam}`;
+export function fullDateLabel(date: Date): string {
+  const { weekday } = dayLabel(date);
+  const [year, month, day] = dateKey(date).split("-");
+  return `${weekday}, ${day}/${month}/${year}`;
 }
 
 /** `"19:00 – 21:00"` từ hai mốc phút trong ngày. */
-export function nhanKhungGio(startMinute: number, endMinute: number): string {
+export function timeRangeLabel(startMinute: number, endMinute: number): string {
   const hhmm = (m: number) =>
     `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
   return `${hhmm(startMinute)} – ${hhmm(endMinute)}`;
 }
 
 /** Giờ:phút của một mốc tuyệt đối, theo giờ VN. */
-export function gioPhut(date: Date): string {
+export function timeOfDay(date: Date): string {
   return new Intl.DateTimeFormat("vi-VN", {
-    timeZone: MUI_GIO,
+    timeZone: TIME_ZONE,
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,

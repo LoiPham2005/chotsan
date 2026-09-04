@@ -174,7 +174,7 @@ describe("venuesWithPermission", () => {
     ]);
 
     expect(await service.venuesWithPermission("u1", "report:read")).toEqual(["v1", "v3"]);
-    // `booking:read` nằm trong bộ mặc định của STAFF nên cả ba sân đều được.
+    // `booking:lấy` nằm trong bộ mặc định của STAFF nên cả ba sân đều được.
     expect(await service.venuesWithPermission("u1", "booking:read")).toEqual(["v1", "v2", "v3"]);
   });
 

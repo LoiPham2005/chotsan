@@ -48,7 +48,7 @@ export async function Header() {
             đường đi chính.
           */}
           <nav className="flex items-center gap-1">
-            <NavLink href="/san">Tìm sân</NavLink>
+            <NavLink href="/venues">Tìm sân</NavLink>
 
             {/*
               MỘT lối vào khu quản trị, không liệt kê từng trang ở đây — việc đó
@@ -103,7 +103,7 @@ function NavLink({
   href,
   children,
 }: {
-  href: "/" | "/san" | "/users" | "/roles";
+  href: "/" | "/venues" | "/users" | "/roles";
   children: React.ReactNode;
 }) {
   return (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { formatHhMm, formatVndShort, SLOT_MINUTES } from "@/lib/slots";
 import type { DayAvailability, SlotStatus } from "@/services/availability.service";
@@ -39,7 +39,7 @@ type Props = {
 };
 
 const STATUS_CLASS: Record<SlotStatus, string> = {
-  FREE: "border-brand-line bg-brand-tint hover:bg-emerald-100",
+  FREE: "border-brand-line bg-brand-tint hover:bg-emerald-100 hover:shadow-nang-1",
   TAKEN: "border-taken-line bg-taken cursor-not-allowed",
   CLOSED:
     "border-line bg-[repeating-linear-gradient(45deg,#f8fafc,#f8fafc_4px,#e9eef4_4px,#e9eef4_8px)] cursor-not-allowed",
@@ -79,7 +79,7 @@ export function SlotGrid({ day, onSelect, hoursPerPage = 7, className }: Props) 
    * không đọc `Date.now()` — làm vậy là máy chủ và trình duyệt tính ra hai
    * trang khác nhau, và React báo lỗi hydration.
    */
-  const trangDau = useMemo(() => {
+  const firstBookablePage = useMemo(() => {
     const conBan = hours.findIndex((group) =>
       group.minutes.some((minute) =>
         day.courts.some(
@@ -93,7 +93,54 @@ export function SlotGrid({ day, onSelect, hoursPerPage = 7, className }: Props) 
     return Math.min(Math.max(0, conBan - 1), Math.max(0, hours.length - hoursPerPage));
   }, [hours, day.courts, hoursPerPage]);
 
-  const [pageStart, setPageStart] = useState(trangDau);
+  const [pageStart, setPageStart] = useState(firstBookablePage);
+
+  /*
+   * Còn cuộn được sang trái/phải bao nhiêu.
+   *
+   * Không suy ra từ số cột: khung chứa co giãn theo màn hình và theo cả thanh
+   * bên cạnh, nên chỉ có chính phần tử DOM mới biết nó có tràn hay không.
+   */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [canScroll, setCanScroll] = useState({ left: false, right: false });
+
+  function refreshScrollState() {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const next = {
+      left: el.scrollLeft > 4,
+      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4,
+    };
+
+    // So trước khi ghi: `onScroll` bắn liên tục lúc cuộn, mà gần như lần nào
+    // hai giá trị này cũng không đổi. Ghi vô điều kiện là dựng lại cả lưới 320
+    // ô mỗi khung hình chỉ để đặt lại đúng thứ đang có.
+    setCanScroll((prev) => (prev.left === next.left && prev.right === next.right ? prev : next));
+  }
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    /*
+     * KHÔNG đo ngay trong thân effect.
+     *
+     * Gọi `setState` đồng bộ ở đây khiến React dựng lại trước khi trình duyệt
+     * kịp vẽ — render dây chuyền, và với lưới 320 ô thì thấy được bằng mắt.
+     * `ResizeObserver` tự bắn một lần ngay khi `observe()`, nên phép đo đầu
+     * tiên vẫn có, chỉ là ở nhịp sau.
+     */
+    if (typeof ResizeObserver === "undefined") {
+      const id = requestAnimationFrame(refreshScrollState);
+      return () => cancelAnimationFrame(id);
+    }
+
+    // Đổi khổ cửa sổ hoặc đổi trang giờ đều làm thay đổi độ tràn.
+    const observer = new ResizeObserver(refreshScrollState);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [pageStart, day.courts.length]);
 
   const visible = hours.slice(pageStart, pageStart + hoursPerPage);
   const canPrev = pageStart > 0;
@@ -153,12 +200,12 @@ export function SlotGrid({ day, onSelect, hoursPerPage = 7, className }: Props) 
           type="button"
           onClick={() => setPageStart((value) => Math.max(0, value - hoursPerPage))}
           disabled={!canPrev}
-          className="h-11 rounded-token-sm border border-line-strong bg-surface px-3 text-sm font-semibold disabled:opacity-40"
+          className="inline-flex h-10 items-center gap-1.5 rounded-token-md border border-line bg-surface px-3 text-sm font-semibold text-content shadow-nang-1 transition-all hover:border-brand-line hover:text-brand disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none"
         >
-          ← Sớm hơn
+          <span aria-hidden>←</span> Sớm hơn
         </button>
 
-        <p className="text-sm font-bold text-content">
+        <p className="rounded-full bg-elevated px-3 py-1 text-sm font-bold tabular-nums text-content">
           {visible.length > 0
             ? `${formatHhMm(visible[0]!.minutes[0]!)} – ${formatHhMm(
                 visible.at(-1)!.minutes.at(-1)! + SLOT_MINUTES,
@@ -172,105 +219,134 @@ export function SlotGrid({ day, onSelect, hoursPerPage = 7, className }: Props) 
             setPageStart((value) => Math.min(hours.length - hoursPerPage, value + hoursPerPage))
           }
           disabled={!canNext}
-          className="h-11 rounded-token-sm border border-line-strong bg-surface px-3 text-sm font-semibold disabled:opacity-40"
+          className="inline-flex h-10 items-center gap-1.5 rounded-token-md border border-line bg-surface px-3 text-sm font-semibold text-content shadow-nang-1 transition-all hover:border-brand-line hover:text-brand disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none"
         >
-          Muộn hơn →
+          Muộn hơn <span aria-hidden>→</span>
         </button>
       </div>
 
-      <div className="min-w-0 overflow-x-auto">
-        <div className="min-w-max">
-          {/* Tiêu đề: giờ + giá. Giá ở đây chứ không ở trong ô. */}
-          <div className="mb-1.5 flex gap-2">
-            <div className="w-[72px] shrink-0" aria-hidden />
-            {visible.map(({ hour, minutes }) => {
-              const peak = minutes.some((minute) =>
-                day.courts.some(
-                  (court) => court.slots.find((slot) => slot.minute === minute)?.isPeak,
-                ),
-              );
-              const price = day.courts[0]?.slots.find((slot) => slot.minute === minutes[0])?.price;
+      {/*
+        Lưới rộng hơn khung là chuyện bình thường (7 giờ × 2 ô = 856px). Nhưng
+        một mép bị cắt phẳng lì trông y hệt lỗi hiển thị — người dùng không biết
+        bên phải còn gì, nên không nghĩ tới việc cuộn. Vệt mờ ở mép nói điều đó
+        mà không tốn một dòng chữ hướng dẫn nào.
+      */}
+      <div className="relative min-w-0">
+        <div ref={scrollRef} onScroll={refreshScrollState} className="min-w-0 overflow-x-auto">
+          <div className="min-w-max">
+            {/* Tiêu đề: giờ + giá. Giá ở đây chứ không ở trong ô. */}
+            <div className="mb-1.5 flex gap-2">
+              <div className="w-[72px] shrink-0" aria-hidden />
+              {visible.map(({ hour, minutes }) => {
+                const peak = minutes.some((minute) =>
+                  day.courts.some(
+                    (court) => court.slots.find((slot) => slot.minute === minute)?.isPeak,
+                  ),
+                );
+                const price = day.courts[0]?.slots.find(
+                  (slot) => slot.minute === minutes[0],
+                )?.price;
 
-              return (
-                <div key={hour} className="w-[104px] shrink-0 text-center">
-                  <div
-                    className={cn(
-                      "text-[13px] font-extrabold",
-                      peak ? "text-peak-text" : "text-content",
-                    )}
-                  >
-                    {formatHhMm(hour * 60)}
-                  </div>
-                  {price !== undefined && price > 0 && (
+                return (
+                  <div key={hour} className="w-[104px] shrink-0 text-center">
                     <div
                       className={cn(
-                        "text-[10px] font-bold",
-                        peak ? "text-peak-text" : "text-brand-hover",
+                        "text-[13px] font-extrabold tabular-nums",
+                        peak ? "text-peak-text" : "text-content",
                       )}
                     >
-                      {formatVndShort(price)}/30p
+                      {formatHhMm(hour * 60)}
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {day.courts.map((court) => (
-            <div key={court.courtId} className="mb-1.5 flex gap-2">
-              <div className="flex w-[72px] shrink-0 items-center text-[13px] font-bold">
-                {court.courtName}
-              </div>
-
-              {visible.map(({ hour, minutes }) => (
-                <div key={hour} className="grid w-[104px] shrink-0 grid-cols-2 gap-[3px]">
-                  {minutes.map((minute) => {
-                    const slot = court.slots.find((item) => item.minute === minute);
-                    if (!slot) return <div key={minute} />;
-
-                    const selected = isSelected(court.courtId, minute);
-                    const clickable = Boolean(onSelect) && slot.status === "FREE";
-
-                    return (
-                      <button
-                        key={minute}
-                        type="button"
-                        disabled={!clickable}
-                        onClick={() => handleClick(court.courtId, minute, slot.status)}
-                        /* 44px là ngưỡng chạm, không phải gợi ý — chủ sân bấm
-                           trên máy tính bảng, một tay còn cầm điện thoại. */
+                    {price !== undefined && price > 0 && (
+                      <div
                         className={cn(
-                          "h-11 rounded-token-sm border-[1.5px] transition-colors",
-                          selected
-                            ? "border-brand bg-brand"
-                            : slot.isPeak && slot.status === "FREE"
-                              ? "border-peak-line bg-peak-tint hover:bg-orange-100"
-                              : STATUS_CLASS[slot.status],
+                          "mx-auto mt-0.5 inline-block rounded-full px-1.5 py-px text-[10px] font-bold tabular-nums",
+                          peak
+                            ? "bg-peak-tint text-peak-text ring-1 ring-peak-line"
+                            : "bg-brand-tint text-brand-hover ring-1 ring-brand-line",
                         )}
-                        aria-label={`${court.courtName} ${formatHhMm(minute)} — ${
-                          selected ? "đang chọn" : STATUS_LABEL[slot.status]
-                        }`}
-                        aria-pressed={selected}
                       >
-                        {selected && (
-                          <svg
-                            viewBox="0 0 24 24"
-                            className="mx-auto h-3.5 w-3.5"
-                            fill="none"
-                            stroke="#fff"
-                            strokeWidth={3.4}
-                          >
-                            <path d="M20 6L9 17l-5-5" />
-                          </svg>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              ))}
+                        {formatVndShort(price)}/30p
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          ))}
+
+            {day.courts.map((court) => (
+              <div key={court.courtId} className="mb-1.5 flex gap-2">
+                <div className="flex w-[72px] shrink-0 items-center justify-end pr-1 text-[13px] font-semibold text-muted">
+                  {court.courtName}
+                </div>
+
+                {visible.map(({ hour, minutes }) => (
+                  <div key={hour} className="grid w-[104px] shrink-0 grid-cols-2 gap-[3px]">
+                    {minutes.map((minute) => {
+                      const slot = court.slots.find((item) => item.minute === minute);
+                      if (!slot) return <div key={minute} />;
+
+                      const selected = isSelected(court.courtId, minute);
+                      const clickable = Boolean(onSelect) && slot.status === "FREE";
+
+                      return (
+                        <button
+                          key={minute}
+                          type="button"
+                          disabled={!clickable}
+                          onClick={() => handleClick(court.courtId, minute, slot.status)}
+                          /* 44px là ngưỡng chạm, không phải gợi ý — chủ sân bấm
+                           trên máy tính bảng, một tay còn cầm điện thoại. */
+                          className={cn(
+                            "h-11 rounded-token-md border-[1.5px] transition-all duration-150",
+                            clickable && "hover:scale-[1.06] active:scale-95",
+                            selected
+                              ? "scale-[1.06] border-brand bg-gradient-to-br from-brand to-emerald-600 shadow-selection"
+                              : slot.isPeak && slot.status === "FREE"
+                                ? "border-peak-line bg-peak-tint hover:bg-orange-100 hover:shadow-nang-1"
+                                : STATUS_CLASS[slot.status],
+                          )}
+                          aria-label={`${court.courtName} ${formatHhMm(minute)} — ${
+                            selected ? "đang chọn" : STATUS_LABEL[slot.status]
+                          }`}
+                          aria-pressed={selected}
+                        >
+                          {selected && (
+                            <svg
+                              viewBox="0 0 24 24"
+                              className="mx-auto h-3.5 w-3.5"
+                              fill="none"
+                              stroke="#fff"
+                              strokeWidth={3.4}
+                            >
+                              <path d="M20 6L9 17l-5-5" />
+                            </svg>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
         </div>
+
+        {/* Vệt mờ ở mép: chỉ hiện khi thật sự còn nội dung ở phía đó. */}
+        <div
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-canvas to-transparent transition-opacity",
+            canScroll.left ? "opacity-100" : "opacity-0",
+          )}
+        />
+        <div
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-canvas to-transparent transition-opacity",
+            canScroll.right ? "opacity-100" : "opacity-0",
+          )}
+        />
       </div>
 
       {/* Chú giải: mỗi trạng thái khác nhau ở CẢ màu LẪN chữ — in đen trắng vẫn đọc được */}
@@ -319,7 +395,9 @@ export function DaySummaryStrip({
   const max = Math.max(1, ...day.summary);
 
   return (
-    <div className={cn("rounded-token-md border border-line bg-surface p-3", className)}>
+    <div
+      className={cn("rounded-token-lg border border-line bg-surface p-3 shadow-nang-1", className)}
+    >
       <div className="mb-2 flex items-baseline justify-between">
         <p className="text-xs font-bold text-muted">Cả ngày · số sân trống mỗi 30 phút</p>
         <p className="text-[11px] text-subtle">

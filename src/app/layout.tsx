@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Be_Vietnam_Pro } from "next/font/google";
+import { Suspense } from "react";
 import { Header } from "@/components/layout/header";
+import { TopProgressBar } from "@/components/layout/top-progress-bar";
 import { Footer } from "@/components/layout/footer";
 import "./globals.css";
 
@@ -31,6 +33,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="vi" className={beVietnamPro.variable} suppressHydrationWarning>
       <body className="flex min-h-screen flex-col justify-between">
+        {/*
+          `useSearchParams()` bắt buộc phải nằm trong Suspense, nếu không toàn
+          bộ trang bị đẩy sang dựng-lúc-chạy và mất hết lợi ích tĩnh.
+        */}
+        <Suspense fallback={null}>
+          <TopProgressBar />
+        </Suspense>
         <Header />
         <div className="flex-1">{children}</div>
         <Footer />

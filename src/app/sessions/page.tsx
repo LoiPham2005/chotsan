@@ -43,7 +43,7 @@ export default async function SessionsPage() {
 
   return (
     <main className="container" style={{ maxWidth: 720 }}>
-      <h1 className="page-title">Thiết bị đang đăng nhập</h1>
+      <h1 className="trang-title">Thiết bị đang đăng nhập</h1>
       <p className="page-subtitle">
         Danh sách các thiết bị đã đăng nhập qua <strong>ứng dụng di động</strong>. Thấy thiết bị lạ
         thì đăng xuất nó ngay, rồi đổi mật khẩu.

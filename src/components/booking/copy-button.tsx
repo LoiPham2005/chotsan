@@ -9,8 +9,8 @@ import { useState } from "react";
  * vào app ngân hàng, và gõ sai nội dung là tiền vào tài khoản mà không ai biết
  * của lượt đặt nào.
  */
-export function NutSaoChep({ giaTri, nhan }: { giaTri: string; nhan: string }) {
-  const [daChep, setDaChep] = useState(false);
+export function CopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setDaChep] = useState(false);
 
   return (
     <button
@@ -19,7 +19,7 @@ export function NutSaoChep({ giaTri, nhan }: { giaTri: string; nhan: string }) {
         // `navigator.clipboard` không tồn tại trên HTTP không phải localhost.
         // Không có nó thì nút im lặng không làm gì, nên phải bắt lỗi tử tế.
         navigator.clipboard
-          ?.writeText(giaTri)
+          ?.writeText(value)
           .then(() => {
             setDaChep(true);
             setTimeout(() => setDaChep(false), 2000);
@@ -27,9 +27,9 @@ export function NutSaoChep({ giaTri, nhan }: { giaTri: string; nhan: string }) {
           .catch(() => setDaChep(false));
       }}
       className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-brand transition hover:bg-brand-tint focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
-      aria-label={`Sao chép ${nhan}`}
+      aria-label={`Sao chép ${label}`}
     >
-      {daChep ? "Đã chép ✓" : "Chép"}
+      {copied ? "Đã chép ✓" : "Chép"}
     </button>
   );
 }

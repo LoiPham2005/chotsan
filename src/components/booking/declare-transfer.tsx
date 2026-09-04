@@ -3,9 +3,9 @@
 import { useActionState } from "react";
 import { useFormStatus } from "react-dom";
 import {
-  khaiDaChuyenKhoanAction,
-  type KhaiChuyenKhoanState,
-} from "@/app/(khach)/dat-san/[code]/actions";
+  declareTransferAction,
+  type DeclareTransferState,
+} from "@/app/(public)/bookings/[code]/actions";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -14,9 +14,9 @@ import { Button } from "@/components/ui/button";
  * Câu chữ nói rõ điều gì XẢY RA TIẾP THEO, không chỉ nói đã bấm: khách vừa
  * chuyển tiền thật, và im lặng ở bước này là lúc họ gọi điện cho sân.
  */
-export function KhaiDaChuyen({ code }: { code: string }) {
-  const [state, formAction] = useActionState<KhaiChuyenKhoanState, FormData>(
-    khaiDaChuyenKhoanAction,
+export function DeclareTransfer({ code }: { code: string }) {
+  const [state, formAction] = useActionState<DeclareTransferState, FormData>(
+    declareTransferAction,
     {},
   );
 

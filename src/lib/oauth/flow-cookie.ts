@@ -4,7 +4,7 @@ import { isProduction } from "@/lib/env";
 import type { OAuthProviderId } from "./types";
 
 /**
- * Trạng thái tạm giữa bước `start` (redirect sang provider) và `callback`
+ * Trạng thái tạm giữa bước `ngay` (redirect sang provider) và `callback`
  * (provider redirect ngược lại): provider nào, `state` để đối chiếu chống
  * CSRF, `codeVerifier` cho PKCE (không phải provider nào cũng cần), và
  * `next` — trang muốn quay lại sau khi đăng nhập xong.

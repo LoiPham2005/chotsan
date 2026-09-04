@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { DemNguocGiuCho } from "@/components/booking/dem-nguoc-giu-cho";
-import { KhaiDaChuyen } from "@/components/booking/khai-da-chuyen";
-import { MaQr } from "@/components/booking/ma-qr";
-import { NutSaoChep } from "@/components/booking/nut-sao-chep";
+import { HoldCountdown } from "@/components/booking/hold-countdown";
+import { DeclareTransfer } from "@/components/booking/declare-transfer";
+import { QrCode } from "@/components/booking/qr-code";
+import { CopyButton } from "@/components/booking/copy-button";
 import { Button } from "@/components/ui/button";
-import { gioPhut, nhanNgayDay } from "@/lib/ngay";
+import { timeOfDay, fullDateLabel } from "@/lib/date";
 import { formatVnd } from "@/lib/slots";
 import { bookingService } from "@/services/booking.service";
 import { paymentService } from "@/services/payment.service";
@@ -24,12 +24,12 @@ export const metadata: Metadata = {
  * ---
  * MỞ TRANG NÀY LÀ TẠO GIAO DỊCH, VÀ ĐIỀU ĐÓ AN TOÀN
  *
- * `paymentService.start()` chạy mỗi lần tải trang. Gọi lại khi đã có giao dịch
+ * `paymentService.ngay()` chạy mỗi lần tải trang. Gọi lại khi đã có giao dịch
  * sống thì nó TRẢ VỀ cái đang có chứ không tạo cái thứ hai — chốt chặn nằm ở
  * database (`payments_mot_giao_dich_song_cho_moi_booking`), không phải ở đây.
  * Nhờ vậy khách bấm F5 mười lần vẫn chỉ có một giao dịch.
  */
-export default async function ThanhToanPage({ params }: { params: Promise<{ code: string }> }) {
+export default async function CheckoutPage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
   const booking = await bookingService.findByCode(code);
 
@@ -37,7 +37,7 @@ export default async function ThanhToanPage({ params }: { params: Promise<{ code
 
   // Trạng thái đã xong thì không còn gì để thanh toán — hiện kết quả luôn.
   if (booking.status !== "HOLDING") {
-    return <KetQua booking={booking} />;
+    return <BookingOutcome booking={booking} />;
   }
 
   const payment = await paymentService.start({
@@ -46,14 +46,14 @@ export default async function ThanhToanPage({ params }: { params: Promise<{ code
     receivedBy: "VENUE",
   });
 
-  const daKhai = payment.status === "AWAITING_CONFIRMATION";
-  const chiDan = await paymentService.transferInstruction(payment.id).catch(() => null);
+  const declared = payment.status === "AWAITING_CONFIRMATION";
+  const instruction = await paymentService.transferInstruction(payment.id).catch(() => null);
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 sm:px-6 sm:py-10">
-      <ThongTinLuotDat booking={booking} />
+      <BookingSummary booking={booking} />
 
-      {daKhai ? (
+      {declared ? (
         <div className="alert alert-info mt-5" role="status">
           <strong>Đã gửi cho sân.</strong> Sân đang đối chiếu với ngân hàng. Bạn nhận được thông báo
           ngay khi xác nhận xong — thường trong vài phút giờ hành chính.
@@ -62,12 +62,12 @@ export default async function ThanhToanPage({ params }: { params: Promise<{ code
         <>
           {booking.holdExpiresAt && (
             <p className="mt-5 rounded-token-md border border-line bg-surface px-4 py-3 text-sm">
-              Chỗ được giữ thêm <DemNguocGiuCho hetHanIso={booking.holdExpiresAt.toISOString()} />.
-              Hết giờ mà chưa chuyển khoản thì chỗ được nhả cho người khác.
+              Chỗ được giữ thêm <HoldCountdown expiresAtIso={booking.holdExpiresAt.toISOString()} />
+              . Hết giờ mà chưa chuyển khoản thì chỗ được nhả cho người khác.
             </p>
           )}
 
-          {chiDan === null ? (
+          {instruction === null ? (
             <div className="alert alert-warning mt-5">
               Sân chưa khai tài khoản ngân hàng nên chưa nhận chuyển khoản online được. Gọi trực
               tiếp cho sân{booking.venue.phone ? ` theo số ${booking.venue.phone}` : ""} để thanh
@@ -75,9 +75,9 @@ export default async function ThanhToanPage({ params }: { params: Promise<{ code
             </div>
           ) : (
             <>
-              <ChuyenKhoan chiDan={chiDan} />
+              <TransferPanel instruction={instruction} />
               <div className="mt-5">
-                <KhaiDaChuyen code={booking.code} />
+                <DeclareTransfer code={booking.code} />
               </div>
             </>
           )}
@@ -89,7 +89,7 @@ export default async function ThanhToanPage({ params }: { params: Promise<{ code
 
 type Booking = NonNullable<Awaited<ReturnType<typeof bookingService.findByCode>>>;
 
-function ThongTinLuotDat({ booking }: { booking: Booking }) {
+function BookingSummary({ booking }: { booking: Booking }) {
   return (
     <section className="rounded-token-lg border border-line bg-surface p-4 sm:p-5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -100,10 +100,10 @@ function ThongTinLuotDat({ booking }: { booking: Booking }) {
       </div>
 
       <dl className="mt-3 space-y-1.5 text-sm">
-        <Dong nhan="Sân" giaTri={booking.court.name} />
-        <Dong nhan="Ngày" giaTri={nhanNgayDay(booking.startAt)} />
-        <Dong nhan="Giờ" giaTri={`${gioPhut(booking.startAt)} – ${gioPhut(booking.endAt)}`} />
-        <Dong nhan="Người đặt" giaTri={`${booking.customerName} · ${booking.customerPhone}`} />
+        <Dong label="Sân" value={booking.court.name} />
+        <Dong label="Ngày" value={fullDateLabel(booking.startAt)} />
+        <Dong label="Giờ" value={`${timeOfDay(booking.startAt)} – ${timeOfDay(booking.endAt)}`} />
+        <Dong label="Người đặt" value={`${booking.customerName} · ${booking.customerPhone}`} />
       </dl>
 
       <p className="mt-4 flex items-baseline justify-between border-t border-line pt-3">
@@ -114,11 +114,11 @@ function ThongTinLuotDat({ booking }: { booking: Booking }) {
   );
 }
 
-function Dong({ nhan, giaTri }: { nhan: string; giaTri: string }) {
+function Dong({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-4">
-      <dt className="shrink-0 text-muted">{nhan}</dt>
-      <dd className="text-right font-medium text-content">{giaTri}</dd>
+      <dt className="shrink-0 text-muted">{label}</dt>
+      <dd className="text-right font-medium text-content">{value}</dd>
     </div>
   );
 }
@@ -130,10 +130,10 @@ function Dong({ nhan, giaTri }: { nhan: string; giaTri: string }) {
  * dung là tiền vào tài khoản mà không ai biết của lượt nào, và đó là loại sự
  * cố tốn nhiều thời gian nhất để gỡ.
  */
-function ChuyenKhoan({
-  chiDan,
+function TransferPanel({
+  instruction,
 }: {
-  chiDan: {
+  instruction: {
     bankName: string;
     accountNumber: string;
     accountName: string;
@@ -147,18 +147,18 @@ function ChuyenKhoan({
       <h2 className="font-semibold text-content">Chuyển khoản</h2>
 
       <div className="mt-4 flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-        {chiDan.qrPayload && (
+        {instruction.qrPayload && (
           <div className="shrink-0 text-center">
-            <MaQr payload={chiDan.qrPayload} />
+            <QrCode payload={instruction.qrPayload} />
             <p className="mt-1.5 text-xs text-muted">Quét bằng app ngân hàng</p>
           </div>
         )}
 
         <dl className="w-full space-y-2 text-sm">
-          <DongChep nhan="Ngân hàng" giaTri={chiDan.bankName} chep={false} />
-          <DongChep nhan="Số tài khoản" giaTri={chiDan.accountNumber} chep />
-          <DongChep nhan="Chủ tài khoản" giaTri={chiDan.accountName} chep={false} />
-          <DongChep nhan="Số tiền" giaTri={formatVnd(chiDan.amount)} chep={false} />
+          <CopyRow label="Ngân hàng" value={instruction.bankName} chep={false} />
+          <CopyRow label="Số tài khoản" value={instruction.accountNumber} chep />
+          <CopyRow label="Chủ tài khoản" value={instruction.accountName} chep={false} />
+          <CopyRow label="Số tiền" value={formatVnd(instruction.amount)} chep={false} />
         </dl>
       </div>
 
@@ -168,9 +168,9 @@ function ChuyenKhoan({
         </p>
         <div className="mt-1 flex items-center justify-between gap-2">
           <p className="font-mono text-lg font-bold tracking-wider text-content">
-            {chiDan.transferNote}
+            {instruction.transferNote}
           </p>
-          <NutSaoChep giaTri={chiDan.transferNote} nhan="nội dung chuyển khoản" />
+          <CopyButton value={instruction.transferNote} label="nội dung chuyển khoản" />
         </div>
         <p className="mt-1 text-xs text-muted">
           Ghi sai nội dung thì sân không đối chiếu được và phải xử lý thủ công.
@@ -180,21 +180,21 @@ function ChuyenKhoan({
   );
 }
 
-function DongChep({ nhan, giaTri, chep }: { nhan: string; giaTri: string; chep: boolean }) {
+function CopyRow({ label, value, chep }: { label: string; value: string; chep: boolean }) {
   return (
     <div className="flex items-center justify-between gap-2 border-b border-line pb-2 last:border-0">
-      <dt className="shrink-0 text-muted">{nhan}</dt>
+      <dt className="shrink-0 text-muted">{label}</dt>
       <dd className="flex min-w-0 items-center gap-1">
-        <span className="truncate font-medium text-content">{giaTri}</span>
-        {chep && <NutSaoChep giaTri={giaTri} nhan={nhan.toLowerCase()} />}
+        <span className="truncate font-medium text-content">{value}</span>
+        {chep && <CopyButton value={value} label={label.toLowerCase()} />}
       </dd>
     </div>
   );
 }
 
 /** Lượt đặt không còn ở trạng thái chờ thanh toán. */
-function KetQua({ booking }: { booking: Booking }) {
-  const noiDung: Record<string, { tieuDe: string; mo: string; vui: boolean }> = {
+function BookingOutcome({ booking }: { booking: Booking }) {
+  const labels: Record<string, { tieuDe: string; mo: string; vui: boolean }> = {
     CONFIRMED: {
       tieuDe: "Đặt sân thành công",
       mo: "Sân đã xác nhận. Đọc mã đặt sân khi tới nơi là được.",
@@ -211,7 +211,7 @@ function KetQua({ booking }: { booking: Booking }) {
     NO_SHOW: { tieuDe: "Không tới sân", mo: "Lượt đặt được ghi nhận là không tới.", vui: false },
   };
 
-  const item = noiDung[booking.status] ?? {
+  const item = labels[booking.status] ?? {
     tieuDe: "Lượt đặt sân",
     mo: "",
     vui: false,
@@ -228,15 +228,15 @@ function KetQua({ booking }: { booking: Booking }) {
       </div>
 
       <div className="mt-6">
-        <ThongTinLuotDat booking={booking} />
+        <BookingSummary booking={booking} />
       </div>
 
       <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-center">
         <Button asChild variant="outline">
-          <Link href={`/san/${booking.venue.slug}`}>Xem sân này</Link>
+          <Link href={`/venues/${booking.venue.slug}`}>Xem sân này</Link>
         </Button>
         <Button asChild>
-          <Link href="/san">Đặt sân khác</Link>
+          <Link href="/venues">Đặt sân khác</Link>
         </Button>
       </div>
     </div>

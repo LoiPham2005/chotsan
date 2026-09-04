@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { khoaNgay, nhanNgay, themNgay } from "@/lib/ngay";
+import { dateKey, dayLabel, addDays } from "@/lib/date";
 
 /**
  * Dải 14 ngày để chọn.
@@ -11,21 +11,21 @@ import { khoaNgay, nhanNgay, themNgay } from "@/lib/ngay";
  * Cuộn ngang trên điện thoại. KHÔNG rút xuống 7 ngày ở khổ nhỏ: người đặt sân
  * hay đặt cho cuối tuần sau, mà 7 ngày thì không với tới.
  */
-export function DaiChonNgay({
+export function DateStrip({
   basePath,
-  ngayDangChon,
-  soNgay = 14,
-  homNay = new Date(),
+  selected,
+  dayCount = 14,
+  today = new Date(),
 }: {
   basePath: string;
-  ngayDangChon: Date;
-  soNgay?: number;
-  homNay?: Date;
+  selected: Date;
+  dayCount?: number;
+  today?: Date;
 }) {
-  const dangChon = khoaNgay(ngayDangChon);
-  const khoaHomNay = khoaNgay(homNay);
+  const selectedKey = dateKey(selected);
+  const todayKey = dateKey(today);
 
-  const ngay = Array.from({ length: soNgay }, (_, index) => themNgay(homNay, index));
+  const days = Array.from({ length: dayCount }, (_, index) => addDays(today, index));
 
   return (
     <div
@@ -33,28 +33,28 @@ export function DaiChonNgay({
       role="group"
       aria-label="Chọn ngày"
     >
-      {ngay.map((item) => {
-        const khoa = khoaNgay(item);
-        const nhan = nhanNgay(item);
-        const laHomNay = khoa === khoaHomNay;
-        const duocChon = khoa === dangChon;
+      {days.map((item) => {
+        const key = dateKey(item);
+        const label = dayLabel(item);
+        const isToday = key === todayKey;
+        const isSelected = key === selectedKey;
 
         return (
           <Link
-            key={khoa}
-            href={`${basePath}?ngay=${khoa}`}
+            key={key}
+            href={`${basePath}?date=${key}`}
             scroll={false}
-            aria-current={duocChon ? "date" : undefined}
+            aria-current={isSelected ? "date" : undefined}
             className={`flex min-w-[4.25rem] shrink-0 snap-start flex-col items-center rounded-token-md border px-3 py-2 text-center transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand ${
-              duocChon
+              isSelected
                 ? "border-brand bg-brand text-white"
                 : "border-line bg-surface text-content hover:border-brand-line hover:bg-brand-tint"
             }`}
           >
-            <span className={`text-xs ${duocChon ? "text-white/80" : "text-muted"}`}>
-              {laHomNay ? "Hôm nay" : nhan.thu}
+            <span className={`text-xs ${isSelected ? "text-white/80" : "text-muted"}`}>
+              {isToday ? "Hôm nay" : label.weekday}
             </span>
-            <span className="text-sm font-semibold">{nhan.ngay}</span>
+            <span className="text-sm font-semibold">{label.dayMonth}</span>
           </Link>
         );
       })}

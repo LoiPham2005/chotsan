@@ -27,7 +27,7 @@ export default async function SecurityPage() {
       <Link href="/" style={{ fontSize: "0.9rem", color: "var(--text-muted)" }}>
         ← Quay lại trang chủ
       </Link>
-      <h1 className="page-title">Bảo mật tài khoản</h1>
+      <h1 className="trang-title">Bảo mật tài khoản</h1>
       <p className="page-subtitle">
         Thêm một lớp nữa ngoài mật khẩu. Bật ít nhất một trong hai cách dưới đây thì mật khẩu bị lộ
         cũng chưa đủ để đăng nhập.

@@ -46,7 +46,7 @@ export const PROVIDER_CONFIG: Record<OAuthProviderId, ProviderConfig> = {
 };
 
 /**
- * Provider có đủ credential để dùng chưa. Route `start`/`callback` gọi hàm
+ * Provider có đủ credential để dùng chưa. Route `ngay`/`callback` gọi hàm
  * này trước tiên — thiếu cấu hình phải báo lỗi rõ ràng, không được 500 mù mờ.
  */
 export function isProviderConfigured(provider: OAuthProviderId): boolean {

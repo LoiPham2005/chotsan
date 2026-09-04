@@ -14,7 +14,7 @@ import { VenueService } from "./venue.service";
  * lệch khung 30 phút (mọi khung giờ lệch theo, không có gì báo lỗi).
  */
 
-const VENUE = { id: "v1", slug: "san-abc", name: "Sân ABC" };
+const VENUE = { id: "v1", slug: "sân-abc", name: "Sân ABC" };
 
 type Options = {
   venue?: { id: string; status?: string } | null;
@@ -162,7 +162,7 @@ describe("create — tạo cơ sở", () => {
       ownerId: "u1",
     });
 
-    expect(mock.venue.create.mock.calls[0]![0].data.slug).toBe("san");
+    expect(mock.venue.create.mock.calls[0]![0].data.slug).toBe("court");
   });
 });
 

@@ -162,7 +162,7 @@ describe("reorder — sắp xếp cột trong lưới", () => {
     await expect(service.reorder("v1", ["c1", "c2", "c3"])).rejects.toBeInstanceOf(
       VenueConfigError,
     );
-    await expect(service.reorder("v1", ["c1", "cua-san-khac"])).rejects.toBeInstanceOf(
+    await expect(service.reorder("v1", ["c1", "cua-court-khac"])).rejects.toBeInstanceOf(
       VenueConfigError,
     );
   });

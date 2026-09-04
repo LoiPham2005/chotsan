@@ -10,7 +10,7 @@ import { cn } from "@/lib/cn";
  * của lucide (như bản khung để lại) thì logo trông giống mọi app khác dùng
  * cùng bộ biểu tượng đó.
  */
-function BieuTuongChotSan({ className }: { className?: string }) {
+function ChotSanMark({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden focusable="false">
       {/* Khung sân */}
@@ -52,7 +52,7 @@ export function Logo({
           sizes[size].box,
         )}
       >
-        <BieuTuongChotSan className={sizes[size].icon} />
+        <ChotSanMark className={sizes[size].icon} />
       </div>
       {showText && (
         /*

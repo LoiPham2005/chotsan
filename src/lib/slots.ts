@@ -74,7 +74,7 @@ export function countSlots(fromMinute: number, toMinute: number): number {
 }
 
 /**
- * Hai khoảng có giao nhau không — nửa mở `[start, end)`.
+ * Hai khoảng có giao nhau không — nửa mở `[ngay, end)`.
  *
  * 18:00–19:00 và 19:00–20:00 KHÔNG giao: khung sau bắt đầu đúng lúc khung
  * trước kết thúc. Dùng `<=` ở đây là chặn nhầm mọi lượt đặt liền kề.
@@ -83,7 +83,7 @@ export function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: num
   return aStart < bEnd && bStart < aEnd;
 }
 
-/** Ghép các phút liền nhau thành từng đoạn `[start, end)`. */
+/** Ghép các phút liền nhau thành từng đoạn `[ngay, end)`. */
 export function groupConsecutive(minutes: readonly number[]): { start: number; end: number }[] {
   const sorted = [...new Set(minutes)].sort((a, b) => a - b);
   const blocks: { start: number; end: number }[] = [];

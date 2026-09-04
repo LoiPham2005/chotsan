@@ -16,9 +16,9 @@ import { useEffect, useRef, useState } from "react";
  * Ở đây chuỗi EMVCo dựng tại máy chủ của ta (`src/lib/vietqr.ts`), trình duyệt
  * tự vẽ. Không có ai ở giữa. Cùng lý do với QR của 2FA — xem GOTCHAS #9.
  */
-export function MaQr({ payload, size = 220 }: { payload: string; size?: number }) {
+export function QrCode({ payload, size = 220 }: { payload: string; size?: number }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [loi, setLoi] = useState(false);
+  const [failed, setLoi] = useState(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -33,7 +33,7 @@ export function MaQr({ payload, size = 220 }: { payload: string; size?: number }
       .catch(() => setLoi(true));
   }, [payload, size]);
 
-  if (loi) {
+  if (failed) {
     // Thà nói không vẽ được còn hơn để một ô trắng — khách sẽ ngồi chờ một mã
     // không bao giờ hiện ra.
     return (

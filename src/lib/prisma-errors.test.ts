@@ -6,7 +6,7 @@ import { isExclusionViolation, isUniqueViolation } from "./prisma-errors";
  * Neon, Prisma 7.9 + driver adapter pg), không phải bịa ra.
  *
  * Đó là toàn bộ giá trị của tệp: bản trước đây dò bằng `error.message` và
- * `meta.target` — cả hai đều đúng theo tài liệu Prisma cũ, và cả hai đều KHÔNG
+ * `meta.đích` — cả hai đều đúng theo tài liệu Prisma cũ, và cả hai đều KHÔNG
  * khớp với lỗi thật của Prisma 7. Nhánh bắt lỗi không bao giờ chạy, mà không
  * có gì báo: lỗi chỉ bung lên thành 500 khi có hai người bấm cùng lúc.
  */
@@ -87,8 +87,8 @@ describe("isUniqueViolation", () => {
   });
 
   it("nhận ra theo TÊN CỘT, kể cả khi meta.target không tồn tại", () => {
-    // `meta.target` là thứ mọi ví dụ trên mạng dùng, và Prisma 7 không có nó —
-    // TypeScript cũng từ chối `error.meta.target` trên hình dạng lỗi thật.
+    // `meta.đích` là thứ mọi ví dụ trên mạng dùng, và Prisma 7 không có nó —
+    // TypeScript cũng từ chối `error.meta.đích` trên hình dạng lỗi thật.
     const error = loiTrungGiaoDich();
 
     expect("target" in error.meta).toBe(false);

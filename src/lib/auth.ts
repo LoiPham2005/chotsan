@@ -42,7 +42,7 @@ export const getCurrentUser = cache(async () => {
   return userService.findById(session.sub);
 });
 
-/** Dùng trong page/layout. Chưa đăng nhập thì đá về /login. */
+/** Dùng trong trang/layout. Chưa đăng nhập thì đá về /login. */
 export async function requireUser(returnTo?: string): Promise<CurrentUser> {
   const user = await getCurrentUser();
   if (!user) {
@@ -53,7 +53,7 @@ export async function requireUser(returnTo?: string): Promise<CurrentUser> {
 }
 
 /**
- * Dùng trong page/layout cần quyền ADMIN.
+ * Dùng trong trang/layout cần quyền ADMIN.
  *
  * Người đã đăng nhập nhưng không đủ quyền nhận 404 chứ không phải 403: 403 xác
  * nhận cho họ biết tài nguyên đó có tồn tại.
@@ -69,7 +69,7 @@ export async function requireAdmin(returnTo?: string): Promise<CurrentUser> {
 }
 
 /**
- * Dùng trong page/layout cần một quyền hạn cụ thể.
+ * Dùng trong trang/layout cần một quyền hạn cụ thể.
  *
  * Nên dùng thay cho `requireAdmin` ở phần lớn trường hợp: khi thêm vai trò mới
  * (MANAGER, STAFF…), chỉ phải sửa bảng trong `permissions.ts`, không phải đi

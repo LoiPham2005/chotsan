@@ -9,7 +9,7 @@ import type { DayAvailability, SlotStatus } from "@/services/availability.servic
  * được. Đây là phép tính quyết định chuyện đó, tách ra để kiểm được mà không
  * phải dựng cả React.
  */
-function trangDau(day: DayAvailability, hoursPerPage: number): number {
+function firstBookablePage(day: DayAvailability, hoursPerPage: number): number {
   const grouped = new Map<number, number[]>();
   for (const minute of day.minutes) {
     const hour = Math.floor(minute / 60);
@@ -57,26 +57,26 @@ function dungNgay(tuPhut: number, status: SlotStatus = "PAST"): DayAvailability 
 
 describe("lưới mở ở giờ nào", () => {
   it("ngày tương lai còn trống từ đầu thì mở ở giờ mở cửa", () => {
-    expect(trangDau(dungNgay(0), 7)).toBe(0);
+    expect(firstBookablePage(dungNgay(0), 7)).toBe(0);
   });
 
   it("hôm nay đã qua nửa ngày thì nhảy tới gần giờ còn bán được", () => {
     // Đã qua tới 15:00. Giờ đầu còn bán là 15 (chỉ số 9 tính từ 06:00).
     // Lùi một giờ để thấy bối cảnh → 8.
-    expect(trangDau(dungNgay(15 * 60), 7)).toBe(8);
+    expect(firstBookablePage(dungNgay(15 * 60), 7)).toBe(8);
   });
 
   it("không nhảy quá cuối dải — trang cuối vẫn đủ số cột", () => {
     // Chỉ còn khung 21:30. 16 giờ tổng cộng, 7 giờ mỗi trang → trần là 9.
-    expect(trangDau(dungNgay(21 * 60 + 30), 7)).toBe(9);
+    expect(firstBookablePage(dungNgay(21 * 60 + 30), 7)).toBe(9);
   });
 
   it("hết sạch chỗ thì về đầu chứ không nhảy lung tung", () => {
     // `findIndex` trả -1 khi không còn ô FREE nào.
-    expect(trangDau(dungNgay(24 * 60), 7)).toBe(0);
+    expect(firstBookablePage(dungNgay(24 * 60), 7)).toBe(0);
   });
 
   it("sân bảo trì cả buổi sáng cũng nhảy qua, không chỉ giờ đã trôi qua", () => {
-    expect(trangDau(dungNgay(14 * 60, "CLOSED"), 7)).toBe(7);
+    expect(firstBookablePage(dungNgay(14 * 60, "CLOSED"), 7)).toBe(7);
   });
 });

@@ -34,6 +34,22 @@ Bản vẽ giao diện: [design/chotsan-giao-dien.html](design/chotsan-giao-dien
    booking ở tầng database) và `@@unique([provider, externalEventId])` (idempotency webhook
    thanh toán) — hai thứ này là lưới cuối cùng chặn trùng chỗ và trùng tiền.
 
+## Quy ước đặt tên: MÃ tiếng Anh, CHỮ tiếng Việt
+
+**Tiếng Anh**: tên tệp, tên thư mục, route (`/venues`, `/bookings`), biến, hàm, component, kiểu,
+tên trường form, tham số URL, tên cột và ràng buộc trong database.
+
+**Tiếng Việt**: chú thích, chuỗi hiển thị cho người dùng, tài liệu trong `docs/`.
+
+Lý do rất thực dụng: tên tiếng Việt không dấu (`the-san`, `dai-chon-ngay`, `nut-sao-chep`) đọc
+chậm hơn hẳn khi lướt cây thư mục, và trộn hai ngôn ngữ trong cùng một định danh thì không ai
+đoán được nên gõ gì.
+
+⚠️ **Đừng đổi tên hàng loạt bằng regex trên toàn cây.** Đã thử một lần và hỏng nặng: `\bsan\b`
+đổi cả `"dat-san"` trong URL lẫn chữ "san" trong `"Dat san CS8F3K2"` của một test, `\btrang\b`
+biến "trang chủ" thành "page chủ" trong 71 tệp không liên quan. Đổi tên thì sửa từng tệp, hoặc
+dùng chức năng rename của IDE (nó hiểu phạm vi định danh, regex thì không).
+
 ## Ba quyền KHÔNG BAO GIỜ tick được cho STAFF
 
 `payout:manage` (rút tiền) · `venue:delete` · `venue:transfer`. Giao diện phải **không có ô để

@@ -98,7 +98,7 @@ export class AuditService {
   }
 
   /**
-   * Xoá nhật ký cũ hơn `days` ngày.
+   * Xoá nhật ký cũ hơn `ngay` ngày.
    *
    * Bảng này chỉ tăng. Giữ bao lâu là quyết định của từng dự án — mặc định 365
    * ngày là mức thường gặp trong các yêu cầu kiểm toán, nhưng hãy đối chiếu với

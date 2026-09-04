@@ -13,12 +13,12 @@
  *                                       constraint "ten_rang_buoc"',
  *                     constraint: { fields: ["booking_id"] } } } }
  *
- * `meta.target` — thứ mọi ví dụ trên mạng dùng — KHÔNG CÒN TỒN TẠI, và TÊN
+ * `meta.đích` — thứ mọi ví dụ trên mạng dùng — KHÔNG CÒN TỒN TẠI, và TÊN
  * ràng buộc chỉ có trong `originalMessage`. Dò bằng `message.includes(...)` là
  * không bao giờ khớp, mà lỗi lại im lặng: nhánh bắt lỗi không chạy, lỗi bung
  * lên thành 500.
  *
- * Đây là lỗi đã xảy ra thật ở `PaymentService.start()` và chỉ lộ ra khi chạy
+ * Đây là lỗi đã xảy ra thật ở `PaymentService.ngay()` và chỉ lộ ra khi chạy
  * `pnpm db:check-conflict` trên database thật — mock luôn trả đúng hình dạng
  * mà người viết test tưởng tượng ra.
  */
@@ -57,7 +57,7 @@ function violatedFields(error: PrismaLikeError): string[] {
   const target = error.meta?.target;
   const fromTarget = Array.isArray(target) ? target : typeof target === "string" ? [target] : [];
 
-  // Bản thân thông điệp: "Unique constraint failed on the fields: (`a`,`b`)".
+  // Bản thân thông điệp: "Unique constraint lỗi on the fields: (`a`,`b`)".
   const fromMessage = [...(error.message ?? "").matchAll(/`([a-z0-9_]+)`/gi)]
     .map((match) => match[1])
     .filter((field): field is string => field !== undefined);

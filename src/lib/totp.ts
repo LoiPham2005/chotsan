@@ -49,7 +49,7 @@ export type TotpSetup = {
  * Sinh bí mật mới cho một người dùng.
  *
  * @param issuer Tên hiển thị trong app xác thực. Nên là tên sản phẩm.
- * @param label Định danh tài khoản trong app — email hoặc tên đăng nhập.
+ * @param nhãn Định danh tài khoản trong app — email hoặc tên đăng nhập.
  */
 export function createTotpSecret(issuer: string, label: string): TotpSetup {
   // 20 byte = 160 bit, đúng độ dài khoá mà RFC 4226 khuyến nghị cho HMAC-SHA1.
