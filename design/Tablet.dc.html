@@ -12,6 +12,12 @@
     body { margin: 0; font-family: 'Be Vietnam Pro', system-ui, sans-serif; color: #0F172A; }
     a { color: #047857; } a:hover { color: #065f46; }
     .cell { height: 60px; border-radius: 7px; display: flex; flex-direction: column; justify-content: center; padding: 0 8px; overflow: hidden; }
+    .row { display: grid; grid-template-columns: 62px repeat(5, minmax(0, 1fr)); gap: 7px; }
+    .hg { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; }
+    .c { height: 56px; border-radius: 5px; }
+    .fr { border: 1.5px dashed #CBD5E1; background: #fff; }
+    .fx { border: 1.5px solid #E2E8F0; background: repeating-linear-gradient(45deg,#F8FAFC,#F8FAFC 4px,#E9EEF4 4px,#E9EEF4 8px); }
+    .blk { height: 56px; border-radius: 6px; padding: 0 8px; display: flex; flex-direction: column; justify-content: center; overflow: hidden; }
     .free { border: 1.5px dashed #CBD5E1; background: #fff; }
     .bk { background: #ECFDF5; border: 1.5px solid #6EE7B7; }
     .gold { background: #FFF7ED; border: 1.5px solid #FDBA74; }
@@ -63,55 +69,46 @@
     <div style="flex-grow: 1; padding: 16px 18px; overflow: hidden;">
       <div style="background: #fff; border: 1px solid #E2E8F0; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 7px;">
 
-        <div style="display: grid; grid-template-columns: 76px repeat(7, minmax(0, 1fr)); gap: 6px; align-items: center;">
-          <div></div>
-          <div class="hr">15:00</div><div class="hr">16:00</div>
-          <div class="hr" style="color: #EA580C;">17:00</div><div class="hr" style="color: #EA580C;">18:00</div>
-          <div class="hr" style="color: #EA580C;">19:00</div><div class="hr" style="color: #EA580C;">20:00</div><div class="hr" style="color: #EA580C;">21:00</div>
+        <div class="row" style="margin-bottom: 3px;">
+          <div style="font-size: 10px; color: #94A3B8; font-weight: 700; display: flex; align-items: flex-end;">30 phút</div>
+          <div style="text-align: center;"><div style="font-size: 13px; font-weight: 800;">16:00</div><div style="font-size: 10px; color: #64748B;">50k</div></div>
+          <div style="text-align: center;"><div style="font-size: 13px; font-weight: 800; color: #C2410C;">17:00</div><div style="font-size: 10px; color: #C2410C; font-weight: 700;">75k</div></div>
+          <div style="text-align: center;"><div style="font-size: 13px; font-weight: 800; color: #C2410C;">18:00</div><div style="font-size: 10px; color: #C2410C; font-weight: 700;">90k</div></div>
+          <div style="text-align: center;"><div style="font-size: 13px; font-weight: 800; color: #C2410C;">19:00</div><div style="font-size: 10px; color: #C2410C; font-weight: 700;">90k</div></div>
+          <div style="text-align: center;"><div style="font-size: 13px; font-weight: 800; color: #C2410C;">20:00</div><div style="font-size: 10px; color: #C2410C; font-weight: 700;">90k</div></div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 76px repeat(7, minmax(0, 1fr)); gap: 6px; align-items: center;">
-          <div style="font-size: 14px; font-weight: 700;">Sân 1</div>
-          <div class="cell bk"><div class="nm">Trần B</div><div class="sub">Đã trả</div></div>
-          <div class="cell free"></div>
-          <div class="cell bk"><div class="nm">Lê C</div><div class="sub">Đã trả</div></div>
-          <div class="cell gold"><div class="nm">Phạm D</div><div class="sub" style="color: #C2410C; font-weight: 600;">Chờ trả</div></div>
-          <div class="cell gold"><div class="nm">Phạm D</div><div class="sub" style="color: #C2410C; font-weight: 600;">Chờ trả</div></div>
-          <div class="cell free"></div>
-          <div class="cell gold"><div class="nm">Vũ F</div><div class="sub">Đã trả</div></div>
+        <div class="row">
+          <div style="font-size: 14px; font-weight: 700; display: flex; align-items: center;">Sân 1</div>
+          <div class="hg"><div class="c fr"></div><div class="c fr"></div></div>
+          <div class="blk gold" style="grid-column: span 2;"><div class="nm">Lê C · 4 người</div><div class="sub">17:00–19:00 · đã trả</div></div>
+          <div class="blk" style="background: #FEF2F2; border: 1.5px solid #FCA5A5;"><div class="nm">Phạm D</div><div class="sub" style="color: #B91C1C; font-weight: 600;">chờ trả · 6 phút</div></div>
+          <div class="hg"><div class="c fr"></div><div class="c fr"></div></div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 76px repeat(7, minmax(0, 1fr)); gap: 6px; align-items: center;">
-          <div style="font-size: 14px; font-weight: 700;">Sân 2</div>
-          <div class="cell free"></div>
-          <div class="cell bk"><div class="nm">Bùi H</div><div class="sub">Tại quầy</div></div>
-          <div class="cell gold"><div class="nm">Ngô I</div><div class="sub">Đã trả</div></div>
-          <div class="cell gold"><div class="nm">Ngô I</div><div class="sub">Đã trả</div></div>
-          <div class="cell gold"><div class="nm">Đỗ K</div><div class="sub">Đã trả</div></div>
-          <div class="cell gold"><div class="nm">Đỗ K</div><div class="sub">Đã trả</div></div>
-          <div class="cell free"></div>
+        <div class="row">
+          <div style="font-size: 14px; font-weight: 700; display: flex; align-items: center;">Sân 2</div>
+          <div class="blk bk"><div class="nm">Bùi H</div><div class="sub">tại quầy</div></div>
+          <div class="blk gold" style="grid-column: span 3;"><div class="nm">Ngô I · CLB Sao Mai</div><div class="sub">17:00–20:00 · đã trả · 510k</div></div>
+          <div class="blk gold"><div class="nm">Đỗ K</div><div class="sub">20:00–21:00</div></div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 76px repeat(7, minmax(0, 1fr)); gap: 6px; align-items: center;">
-          <div style="font-size: 14px; font-weight: 700;">Sân 3</div>
-          <div class="cell free"></div>
-          <div class="cell bk"><div class="nm">Chu M</div><div class="sub">Đã trả</div></div>
-          <div class="cell free"></div>
-          <div class="cell free"></div>
-          <div class="cell gold"><div class="nm">Lý N</div><div class="sub">Đã trả</div></div>
-          <div class="cell gold"><div class="nm">Lý N</div><div class="sub">Đã trả</div></div>
-          <div class="cell free"></div>
+        <div class="row">
+          <div style="font-size: 14px; font-weight: 700; display: flex; align-items: center;">Sân 3</div>
+          <div class="blk bk"><div class="nm">Chu M</div><div class="sub">16:00–17:00</div></div>
+          <div class="hg"><div class="c fr"></div><div class="c fr"></div></div>
+          <div class="hg"><div class="c fr"></div>
+            <div class="c" style="border: 2px solid #F97316; background: #FFEDD5; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #C2410C;">18:30</div>
+          </div>
+          <div class="blk gold" style="grid-column: span 2;"><div class="nm">Lý N</div><div class="sub">19:00–21:00 · đã trả</div></div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 76px repeat(7, minmax(0, 1fr)); gap: 6px; align-items: center;">
-          <div style="font-size: 14px; font-weight: 700;">Sân 4</div>
-          <div class="cell" style="background: #F1F5F9; border: 1.5px solid #E2E8F0;"><div class="nm" style="color: #64748B;">Bảo trì</div></div>
-          <div class="cell free"></div>
-          <div class="cell gold"><div class="nm">Tạ P</div><div class="sub">Đã trả</div></div>
-          <div class="cell gold"><div class="nm">Tạ P</div><div class="sub">Đã trả</div></div>
-          <div class="cell free"></div>
-          <div class="cell gold"><div class="nm">Hồ Q</div><div class="sub">Đã trả</div></div>
-          <div class="cell gold"><div class="nm">Hồ Q</div><div class="sub">Đã trả</div></div>
+        <div class="row">
+          <div style="font-size: 14px; font-weight: 700; display: flex; align-items: center; color: #94A3B8;">Sân 4</div>
+          <div class="hg"><div class="c fx"></div><div class="c fx"></div></div>
+          <div class="hg"><div class="c fr"></div><div class="c fr"></div></div>
+          <div class="blk gold" style="grid-column: span 2;"><div class="nm">Tạ P</div><div class="sub">18:00–20:00 · đã trả</div></div>
+          <div class="blk gold"><div class="nm">Hồ Q</div><div class="sub">20:00–21:00</div></div>
         </div>
 
       </div>
@@ -134,8 +131,8 @@
       <div style="background: #fff; border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 16px; margin-top: 12px; font-size: 12px; line-height: 1.65; color: #475569;">
         <strong style="color: #0F172A;">Ba thứ đổi so với desktop:</strong>
         điều hướng trái biến thành <strong>hai tab trên đầu</strong> — quầy chỉ dùng hai màn, không cần cả menu ·
-        lưới thu từ 12 cột giờ xuống <strong>7 cột quanh giờ cao điểm</strong>, vuốt ngang để xem giờ sáng ·
-        ô cao <strong>60px</strong> thay vì 54px, vì đây là màn hình cảm ứng và người bấm đang đứng.
+        khung 30 phút nhưng chỉ hiện <strong>5 giờ quanh cao điểm</strong>, vuốt ngang để xem giờ sáng ·
+        ô cao <strong>56px</strong>, vì đây là màn hình cảm ứng và người bấm đang đứng.
       </div>
     </div>
 
