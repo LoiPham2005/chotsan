@@ -87,9 +87,6 @@ enum UserStatus {
   BANNED
 }
 
-/// ⚠️ email/phone/username KHÔNG có @unique — ràng buộc bằng partial unique index
-/// (WHERE deleted_at IS NULL) trong migration. Hệ quả: findUnique({where:{email}})
-/// không biên dịch được, phải dùng findFirst kèm deletedAt: null.
 model User {
   id                  String                  @id @default(cuid())
   email               String?
@@ -254,8 +251,6 @@ enum DevicePlatform {
   WEB
 }
 
-/// ⚠️ fcmToken unique TOÀN CỤC, không theo user: nó định danh một lần cài app trên
-/// một máy. Người khác đăng nhập cùng máy thì CHUYỂN CHỦ dòng này.
 model UserDevice {
   id            String         @id @default(cuid())
   userId        String
@@ -423,9 +418,6 @@ model VenueHour {
   @@map("venue_hours")
 }
 
-/// Quan hệ CẤU TRÚC, không phải gói quyền cấu hình được — vì vậy là enum chứ không
-/// phải dòng trong bảng Role. OWNER = sở hữu sân này; STAFF = làm việc tại sân này.
-/// Quyền cụ thể của STAFF nằm ở VenueMember.permissions.
 enum VenueRole {
   OWNER
   STAFF
@@ -445,8 +437,6 @@ model VenueMember {
   user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   role        VenueRole
   status      VenueMemberStatus @default(ACTIVE)
-  /// ⚠️ Ba quyền KHÔNG BAO GIỜ hợp lệ ở đây, kể cả khi ghi thẳng vào DB:
-  /// payout:manage, venue:delete, venue:transfer. canOnVenue() chặn ở tầng logic.
   permissions String[]          @default([])
   invitedBy   String?           @map("invited_by")
   createdAt   DateTime          @default(now()) @db.Timestamptz(3)
@@ -511,8 +501,6 @@ model PriceRule {
   weekdays     Int[]    @default([])
   startMinute  Int      @map("start_minute")
   endMinute    Int      @map("end_minute")
-  /// Giá cho MỘT khung 30 phút. Lưu theo giờ rồi chia đôi lúc chạy là chỗ sinh
-  /// lệch tròn số mà chủ sân phát hiện lúc đối soát cuối tháng.
   pricePerSlot Int      @map("price_per_slot")
   isPeak       Boolean  @default(false) @map("is_peak")
   priority     Int      @default(0)
@@ -556,9 +544,6 @@ enum BookingSource {
   COUNTER
 }
 
-/// ⚠️ Chống trùng khung giờ bằng EXCLUDE USING gist ở tầng DATABASE — xem migration
-/// 20260904041600_chong_trung_booking. Prisma không diễn đạt được. Đừng thay bằng
-/// kiểm tra trong service: hai request đồng thời sẽ cùng thấy trống và cùng ghi.
 model Booking {
   id            String              @id @default(cuid())
   code          String              @unique
@@ -644,16 +629,23 @@ model VoucherRedemption {
   @@map("voucher_redemptions")
 }
 
+enum PaymentReceiver {
+  PLATFORM
+  VENUE
+}
+
 enum PaymentProvider {
   VNPAY
   MOMO
   ZALOPAY
   SEPAY
+  BANK_TRANSFER
   CASH
 }
 
 enum PaymentStatus {
   PENDING
+  AWAITING_CONFIRMATION
   SUCCEEDED
   FAILED
   CANCELLED
@@ -662,31 +654,53 @@ enum PaymentStatus {
 }
 
 model Payment {
-  id            String          @id @default(cuid())
-  bookingId     String          @map("booking_id")
-  booking       Booking         @relation(fields: [bookingId], references: [id])
-  provider      PaymentProvider
-  status        PaymentStatus   @default(PENDING)
-  amount        Int
-  providerTxnId String?         @map("provider_txn_id")
-  transferNote  String?         @map("transfer_note")
-  paidAt        DateTime?       @map("paid_at") @db.Timestamptz(3)
-  failedAt      DateTime?       @map("failed_at") @db.Timestamptz(3)
-  failReason    String?         @map("fail_reason")
-  createdAt     DateTime        @default(now()) @db.Timestamptz(3)
-  updatedAt     DateTime        @updatedAt @db.Timestamptz(3)
-  events        PaymentEvent[]
-  refunds       Refund[]
+  id             String          @id @default(cuid())
+  bookingId      String          @map("booking_id")
+  booking        Booking         @relation(fields: [bookingId], references: [id])
+  provider       PaymentProvider
+  status         PaymentStatus   @default(PENDING)
+  amount         Int
+  merchantRef    String          @unique @map("merchant_ref")
+  requestId      String?         @map("request_id")
+  providerTxnId  String?         @map("provider_txn_id")
+  checkoutUrl    String?         @map("checkout_url")
+  qrCodeUrl      String?         @map("qr_code_url")
+  deeplink       String?
+  transferNote   String?         @map("transfer_note")
+  expiresAt      DateTime?       @map("expires_at") @db.Timestamptz(3)
+  bankCode       String?         @map("bank_code")
+  cardType       String?         @map("card_type")
+  responseCode   String?         @map("response_code")
+  providerPaidAt DateTime?       @map("provider_paid_at") @db.Timestamptz(3)
+  refundedAmount Int             @default(0) @map("refunded_amount")
+
+  receivedBy PaymentReceiver @default(PLATFORM) @map("received_by")
+
+  declaredAt    DateTime? @map("declared_at") @db.Timestamptz(3)
+  declaredNote  String?   @map("declared_note")
+  proofImageUrl String?   @map("proof_image_url")
+
+  reviewedBy   String?   @map("reviewed_by")
+  reviewedAt   DateTime? @map("reviewed_at") @db.Timestamptz(3)
+  rejectReason String?   @map("reject_reason")
+
+  paidAt     DateTime? @map("paid_at") @db.Timestamptz(3)
+  failedAt   DateTime? @map("failed_at") @db.Timestamptz(3)
+  failReason String?   @map("fail_reason")
+
+  createdAt DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime       @updatedAt @db.Timestamptz(3)
+  events    PaymentEvent[]
+  refunds   Refund[]
 
   @@index([bookingId])
   @@index([status, createdAt])
   @@index([provider, providerTxnId])
+  @@index([status, expiresAt])
+  @@index([status, declaredAt])
   @@map("payments")
 }
 
-/// ⚠️ @@unique([provider, externalEventId]) là thứ chặn ghi nhận tiền HAI LẦN khi
-/// cổng thanh toán gửi lại webhook. Chặn bằng if trong service thì hai request
-/// song song vẫn lọt cả hai.
 model PaymentEvent {
   id              String          @id @default(cuid())
   paymentId       String?         @map("payment_id")
@@ -710,16 +724,21 @@ enum RefundStatus {
 }
 
 model Refund {
-  id          String       @id @default(cuid())
-  paymentId   String       @map("payment_id")
-  payment     Payment      @relation(fields: [paymentId], references: [id])
-  amount      Int
-  reason      String
-  status      RefundStatus @default(PENDING)
-  requestedBy String?      @map("requested_by")
-  approvedBy  String?      @map("approved_by")
-  refundedAt  DateTime?    @map("refunded_at") @db.Timestamptz(3)
-  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+  id               String       @id @default(cuid())
+  paymentId        String       @map("payment_id")
+  payment          Payment      @relation(fields: [paymentId], references: [id])
+  amount           Int
+  reason           String
+  status           RefundStatus @default(PENDING)
+  merchantRef      String       @unique @map("merchant_ref")
+  providerRefundId String?      @map("provider_refund_id")
+  responseCode     String?      @map("response_code")
+  failReason       String?      @map("fail_reason")
+
+  requestedBy String?   @map("requested_by")
+  approvedBy  String?   @map("approved_by")
+  refundedAt  DateTime? @map("refunded_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
 
   @@index([paymentId])
   @@index([status, createdAt])

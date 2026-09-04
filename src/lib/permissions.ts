@@ -79,6 +79,7 @@ export const PERMISSIONS = [
   "booking:cancel",
   "booking:reschedule",
   "payment:refund",
+  "payment:confirm",
   "report:read",
   "member:manage",
   "payout:manage",
@@ -124,6 +125,7 @@ export const VENUE_STAFF_DEFAULT: readonly Permission[] = [
  */
 export const VENUE_STAFF_GRANTABLE: readonly Permission[] = [
   "booking:cancel",
+  "payment:confirm",
   "booking:reschedule",
   "payment:refund",
   "pricing:update",
@@ -247,6 +249,7 @@ export const DEFAULT_ROLE_PERMISSIONS: readonly RoleSeed[] = [
       "booking:read",
       "booking:cancel",
       "payment:refund",
+      "payment:confirm",
       "report:read",
       "dispute:resolve",
     ],
@@ -410,6 +413,11 @@ export const PERMISSION_METADATA: Record<Permission, PermissionMeta> = {
     description: "Đổi khung giờ hoặc sân con của lượt đặt",
   },
   "payment:refund": { name: "Hoàn tiền", category: "Tiền", description: "Hoàn tiền cho khách" },
+  "payment:confirm": {
+    name: "Duyệt chuyển khoản",
+    category: "Tiền",
+    description: "⚠️ Xác nhận khách đã chuyển khoản tay. Duyệt nhầm là mất một lượt sân",
+  },
   "report:read": {
     name: "Xem doanh thu",
     category: "Tiền",
