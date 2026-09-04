@@ -44,7 +44,7 @@ jobs:
 
       # Không ghim version ở đây: action đọc trường `packageManager` trong
       # package.json, nên CI và máy dev không thể lệch nhau.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v4
         with:
@@ -116,7 +116,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -157,7 +157,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
       # Không cache pnpm ở đây: job này không chạy `pnpm install`, nên store
       # của pnpm không tồn tại — `cache: pnpm` sẽ làm bước "Post Run" thất bại
       # vì "path does not exist", kéo cả job đỏ dù `pnpm audit` đã chạy đúng.
