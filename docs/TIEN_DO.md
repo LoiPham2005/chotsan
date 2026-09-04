@@ -3,7 +3,7 @@
 Cập nhật: **04/09/2026**. Kế hoạch đầy đủ ở [KE_HOACH_REFACTOR.md](KE_HOACH_REFACTOR.md); tệp này
 chỉ nói **đã làm được gì, còn gì**, để mở ra là biết đứng ở đâu.
 
-Số liệu hiện tại: **532 test / 47 tệp xanh**, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
+Số liệu hiện tại: **555 unit test / 49 tệp** + **28 bài e2e Playwright** — tất cả xanh, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
 trên database thật.
 
 ## Bảng tổng
@@ -118,8 +118,13 @@ Chọn thế vì nền tảng không giữ tiền của người khác — giữ
 thanh toán, kèm ràng buộc pháp lý và vốn. Đổi lại phải đi ĐÒI hoa hồng, nhưng có sẵn đòn bẩy: quá
 hạn thì khoá sân. Đây cũng là cách bản cũ (`PlatformInvoice`) đã làm.
 
-Hệ quả đã có trong schema: `Payment.receivedBy = VENUE`, `Venue.commissionRate`, `OwnerEarning`
-ghi nhận từng lượt. Còn thiếu bảng `PlatformInvoice` và màn đối soát.
+**Đã làm xong**: bảng `PlatformInvoice` (`@@unique([venueId, periodStart])` chống xuất trùng),
+`InvoiceService`, cron xuất hoá đơn 02:00 mùng 1 hằng tháng và đánh dấu quá hạn 04:00 mỗi ngày,
+màn đối soát `/invoices`, màn doanh thu của chủ sân.
+
+Quyền `invoice:manage` TÁCH RIÊNG khỏi `payout:approve`: một bên là tiền THU VÀO từ chủ sân, một
+bên là tiền CHI RA cho chủ sân. Dùng chung một quyền là mở đường chi tiền cho người chỉ được giao
+việc đi thu.
 
 ## (cũ) Một quyết định còn chờ
 

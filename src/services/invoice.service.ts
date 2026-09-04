@@ -70,6 +70,10 @@ export class InvoiceService {
       }
 
       const periodStart = dateOnly(start);
+      // Cộng từ NGÀY CUỐI KỲ, không cộng từ `end` — `end` là 00:00 ngày đầu
+      // tháng sau, nên cộng từ đó ra hạn trả lệch đúng một ngày.
+      const periodEnd = dateOnly(new Date(end.getTime() - 86_400_000));
+      const dueDate = new Date(periodEnd.getTime() + DUE_DAYS * 86_400_000);
 
       try {
         await this.db.platformInvoice.create({
@@ -77,13 +81,13 @@ export class InvoiceService {
             number: invoiceNumber(periodStart, row.venueId),
             venueId: row.venueId,
             periodStart,
-            periodEnd: dateOnly(new Date(end.getTime() - 86_400_000)),
+            periodEnd,
             bookingCount: row._count._all,
             grossRevenue: gross,
             commissionRate: rate,
             commissionAmount: Math.round((gross * rate) / 100),
             status: "DUE",
-            dueDate: dateOnly(new Date(end.getTime() + DUE_DAYS * 86_400_000)),
+            dueDate,
           },
         });
         created += 1;
@@ -110,9 +114,20 @@ export class InvoiceService {
     });
   }
 
-  /** Toàn bộ hoá đơn theo trạng thái — màn đối soát của nền tảng. */
-  async listByStatus(status: "DUE" | "OVERDUE" | "PAID" | "WAIVED", limit = 100) {
-    return this.db.platformInvoice.findMany({
+  /**
+   * Toàn bộ hoá đơn theo trạng thái — màn đối soát của nền tảng.
+   *
+   * Trả kèm `overdueDays` tính sẵn. Để giao diện tự trừ ngày là gọi `Date.now()`
+   * trong lúc render — không thuần khiết, React cảnh báo, và mỗi màn lại tính
+   * một kiểu.
+   */
+  async listByStatus(
+    status: "DUE" | "OVERDUE" | "PAID" | "WAIVED",
+    options: { limit?: number; now?: Date } = {},
+  ) {
+    const { limit = 100, now = new Date() } = options;
+
+    const rows = await this.db.platformInvoice.findMany({
       where: { status },
       orderBy: { dueDate: "asc" },
       take: limit,
@@ -130,6 +145,11 @@ export class InvoiceService {
         venue: { select: { id: true, name: true, ward: true, province: true } },
       },
     });
+
+    return rows.map((row) => ({
+      ...row,
+      overdueDays: Math.max(0, Math.floor((now.getTime() - row.dueDate.getTime()) / 86_400_000)),
+    }));
   }
 
   /** Đánh dấu đã thu được tiền. */
@@ -192,15 +212,26 @@ function monthRangeVN(anyDayInMonth: Date): { start: Date; end: Date } {
   const [year, month] = key.split("-").map(Number);
   // 00:00 giờ VN = 17:00 UTC ngày hôm trước.
   const start = new Date(Date.UTC(year!, month! - 1, 1) - 7 * 3_600_000);
-  const end = new Date(Date.UTC(year!, month!, 1) - 7 * 3_600_000);
+  const end = new Date(Date.UTC(year!, month, 1) - 7 * 3_600_000);
   return { start, end };
 }
 
-/** Cột `@db.Date` chỉ giữ phần ngày; chuẩn hoá về nửa đêm UTC cho nhất quán. */
+/**
+ * Cột `@db.Date` chỉ giữ phần ngày — lấy NGÀY THEO GIỜ VN của một mốc tuyệt
+ * đối, trả về nửa đêm UTC của ngày đó.
+ *
+ * Đi qua `Intl` thay vì cộng trừ giờ bằng tay: 22:00 UTC là 05:00 hôm sau ở
+ * Việt Nam, và tự tính bằng `getUTCDate() + 1` thì sai ngay ở ngày cuối tháng.
+ */
 function dateOnly(date: Date): Date {
-  return new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + (date.getUTCHours() >= 17 ? 1 : 0)),
-  );
+  const key = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+
+  return new Date(`${key}T00:00:00Z`);
 }
 
 /** `CS-202609-a1b2c3` — đọc được kỳ và sân ngay trên số hoá đơn. */
@@ -209,9 +240,17 @@ function invoiceNumber(periodStart: Date, venueId: string): string {
   return `CS-${ym}-${venueId.slice(-6)}`;
 }
 
+/**
+ * Đây có phải lỗi "đã xuất hoá đơn cho kỳ này rồi" không.
+ *
+ * Prisma để mã ở thuộc tính `code`, KHÔNG để trong thông điệp — dò bằng
+ * `message.includes("P2002")` là không bao giờ khớp, và cron chạy lại sẽ ném
+ * lỗi thay vì bỏ qua êm.
+ */
 function isDuplicatePeriod(error: unknown): boolean {
-  const text = error instanceof Error ? error.message : String(error);
-  return text.includes("P2002") || text.includes("platform_invoices_venue_id_period_start_key");
+  if (!(error instanceof Error)) return false;
+  if ((error as { code?: string }).code === "P2002") return true;
+  return error.message.includes("platform_invoices_venue_id_period_start_key");
 }
 
 export class InvoiceNotFoundError extends DomainError {

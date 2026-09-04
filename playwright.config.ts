@@ -31,7 +31,28 @@ export default defineConfig({
   // nên chạy song song được. Riêng trên CI thì tắt: một runner chia sẻ CPU với
   // Postgres và server Next, chạy song song chỉ làm test chập chờn.
   fullyParallel: !process.env.CI,
-  workers: process.env.CI ? 1 : undefined,
+  /*
+   * MỘT worker, kể cả ở máy cá nhân.
+   *
+   * `loginAction` có rate limit theo ĐỊA CHỈ IP, mà mọi bài e2e đều đến từ
+   * 127.0.0.1. Chạy song song bốn worker là bốn bài cùng đăng nhập trong vài
+   * giây và tự đâm vào ngưỡng của chính mình — đỏ ngẫu nhiên, mỗi lần một bài
+   * khác nhau, và không liên quan gì tới thứ đang kiểm.
+   *
+   * Đánh đổi: bộ e2e chạy ~4 phút thay vì ~1 phút. Đáng, vì một bộ test đỏ
+   * ngẫu nhiên là một bộ test không ai tin nữa.
+   */
+  /*
+   * 60 giây mỗi bài, thay vì 30 mặc định.
+   *
+   * Một bài như "đặt sân đầu-cuối" gồm ba lượt điều hướng và hai Server Action
+   * chạm database; ở lần đầu của mỗi tiến trình, riêng bắt tay TLS với Neon đã
+   * vài giây. 30 giây đủ cho máy nhanh và mạng tốt, và đỏ ngẫu nhiên ở mọi
+   * hoàn cảnh khác.
+   */
+  timeout: 60_000,
+
+  workers: 1,
 
   // Cấm `test.only` lọt lên nhánh chính — nó làm CI xanh trong khi hầu hết
   // test không hề chạy.
@@ -39,6 +60,17 @@ export default defineConfig({
 
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
+
+  /*
+   * 15 giây cho mỗi phép chờ, thay vì 5 giây mặc định.
+   *
+   * Ứng dụng nói chuyện với database ở xa (Neon), và lần chạm đầu tiên của mỗi
+   * tiến trình phải mở kết nối + bắt tay TLS. Một Server Action đăng nhập mất
+   * 6–8 giây ở lần đầu là bình thường, không phải hỏng — đã đo và ghi ở
+   * GOTCHAS #12. Để 5 giây thì bộ e2e đỏ vì đồng hồ chứ không vì lỗi thật, và
+   * đó là cách nhanh nhất khiến người ta thôi tin nó.
+   */
+  expect: { timeout: 15_000 },
 
   use: {
     baseURL,

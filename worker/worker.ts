@@ -96,6 +96,16 @@ async function registerSchedules(queue: Queue): Promise<void> {
       cron: workerEnv.CRON_PURGE_EXPIRED,
       name: "maintenance:purge-expired",
     },
+    {
+      id: "invoice-generate-monthly",
+      cron: workerEnv.CRON_INVOICE_MONTHLY,
+      name: "invoice:generate-monthly",
+    },
+    {
+      id: "invoice-mark-overdue",
+      cron: workerEnv.CRON_INVOICE_OVERDUE,
+      name: "invoice:mark-overdue",
+    },
   ] as const;
 
   try {

@@ -8,6 +8,7 @@ import { VerificationService } from "@/services/verification.service";
 import { AuditService } from "@/services/audit.service";
 import { DeviceService } from "@/services/device.service";
 import { BookingService } from "@/services/booking.service";
+import { InvoiceService } from "@/services/invoice.service";
 import { PaymentService } from "@/services/payment.service";
 import type { JobHandlers } from "@/jobs/types";
 
@@ -116,5 +117,18 @@ export const jobHandlers: JobHandlers = {
   async "payment:expire-pending"() {
     const count = await new PaymentService(prisma).expirePending();
     if (count > 0) logger.info("Đã huỷ giao dịch quá hạn", { count });
+  },
+
+  async "invoice:generate-monthly"() {
+    // Chạy ngày mùng 1 → chốt THÁNG TRƯỚC. Lùi lại 5 ngày để chắc chắn rơi vào
+    // tháng cũ dù lệch múi giờ hay job chạy trễ vài tiếng.
+    const truoc = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+    const result = await new InvoiceService(prisma).generateForMonth(truoc);
+    logger.info("Đã xuất hoá đơn hoa hồng", result);
+  },
+
+  async "invoice:mark-overdue"() {
+    const count = await new InvoiceService(prisma).markOverdue();
+    if (count > 0) logger.info("Đã đánh dấu hoá đơn quá hạn", { count });
   },
 };

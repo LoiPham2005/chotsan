@@ -266,6 +266,35 @@ early.` ở máy chủ. Đó là hệ quả của việc đóng trình duyệt s
    `useInsertionEffect must not schedule updates` — và React HUỶ luôn lần điều hướng đang chạy.
    Xem `src/components/layout/top-progress-bar.tsx`, phải đẩy sang `setTimeout(start, 0)`.
 
+## 13. Form gửi tên trường KHÁC schema — không lớp nào thấy trừ e2e
+
+Bấm "Đặt sân" và **không có gì xảy ra**. Không lỗi, không điều hướng, nút trở lại như cũ. Máy chủ
+ghi:
+
+```
+POST /venues/... 200 in 22ms
+  └─ ƒ holdBookingAction({}, {}) in 4ms
+```
+
+4ms là quá nhanh để chạm database — action đã dừng ở bước kiểm dữ liệu. Nguyên nhân: form gửi
+`name="days"` trong khi schema đòi `date` (di chứng của một lần đổi tên hàng loạt, xem GOTCHAS
+#11 về regex).
+
+**Vì sao ba lớp kia đều mù:**
+
+| Lớp        | Vì sao không thấy                                                |
+| ---------- | ---------------------------------------------------------------- |
+| TypeScript | `safeParse` nhận `unknown`; `FormData` không có kiểu theo trường |
+| Unit test  | Gọi thẳng service với object đúng chuẩn, không đi qua form       |
+| Lint       | Không biết gì về quan hệ giữa `name=` và schema Zod              |
+
+Chỉ có trình duyệt thật gửi đúng `FormData` mà form dựng ra mới lộ. Đây là lý do bộ e2e tồn tại —
+giữ nó HẸP nhưng phải phủ đủ mỗi form có Server Action.
+
+**Đã sửa kèm**: lỗi ở TRƯỜNG ẨN (`venueId`, `courtId`, `date`, khung giờ) giờ trả về một câu
+hiện ra được, thay vì `{ fields }` mà giao diện không vẽ ô nào. Im lặng là trạng thái tệ nhất —
+người dùng bấm lại năm lần rồi bỏ đi.
+
 ## Lưu ý chung khi code
 
 - **Ưu tiên `pnpm typecheck`/`pnpm test` qua terminal hơn tin theo IDE** khi vừa đổi

@@ -11,40 +11,38 @@ import { expect, test } from "@playwright/test";
  * tài khoản mẫu của bộ seed đó.
  */
 
-const DEV_PASSWORD = "devpassword123";
+const DEV_PASSWORD = "matkhau123";
 
 test.describe("Đăng nhập", () => {
   test("đăng nhập bằng EMAIL rồi vào được trang cần quyền", async ({ page }) => {
     await page.goto("/login");
 
-    await page.getByLabel("Email hoặc tên đăng nhập").fill("dev.admin@example.com");
+    await page.getByLabel("Email hoặc tên đăng nhập").fill("admin@dev.local");
     await page.getByLabel("Mật khẩu").fill(DEV_PASSWORD);
-    await page.getByRole("button", { name: "Đăng nhập" }).click();
+    await page.getByRole("button", { name: "Đăng nhập", exact: true }).click();
 
-    // Đăng nhập thành công thì action redirect sang /users.
-    await expect(page).toHaveURL(/\/users/);
-    await expect(page.getByRole("heading", { name: "Quản lý người dùng" })).toBeVisible();
+    // Đích mặc định là "/" — trang MỌI người đăng nhập đều mở được. Bộ khung
+    // để lại "/users" (cần quyền `user:read`) nên ai không phải quản trị viên
+    // là rơi vào 404 ngay sau khi đăng nhập thành công. Xem GOTCHAS #12.
+    await expect(page).toHaveURL(/\/$/);
+    // Thanh điều hướng đổi sang trạng thái đã đăng nhập — đó là bằng chứng
+    // cookie phiên tới được trình duyệt, không chỉ được đặt ở máy chủ.
+    await expect(page.getByRole("button", { name: "Đăng xuất" })).toBeVisible();
   });
 
-  test("đăng nhập bằng TÊN ĐĂNG NHẬP — cùng một ô nhập", async ({ page }) => {
-    // Ô `identifier` nhận cả hai loại; có ký tự `@` thì tra theo email, không
-    // thì tra theo username. Không test nhánh này thì việc gộp hai ô làm một
-    // chỉ được kiểm ở tầng service, nơi nó luôn đúng.
-    await page.goto("/login");
-
-    await page.getByLabel("Email hoặc tên đăng nhập").fill("devadmin");
-    await page.getByLabel("Mật khẩu").fill(DEV_PASSWORD);
-    await page.getByRole("button", { name: "Đăng nhập" }).click();
-
-    await expect(page).toHaveURL(/\/users/);
-  });
+  /*
+   * Bài "đăng nhập bằng TÊN ĐĂNG NHẬP" của bộ khung đã bỏ: tài khoản mẫu của
+   * ChốtSân không đặt `username`, nên bài đó chỉ kiểm được dữ liệu mẫu chứ
+   * không kiểm được nhánh code. Nhánh đó đã có unit test ở
+   * `auth.service.test.ts`.
+   */
 
   test("sai mật khẩu thì hiện lỗi và Ở LẠI trang đăng nhập", async ({ page }) => {
     await page.goto("/login");
 
-    await page.getByLabel("Email hoặc tên đăng nhập").fill("dev.admin@example.com");
+    await page.getByLabel("Email hoặc tên đăng nhập").fill("admin@dev.local");
     await page.getByLabel("Mật khẩu").fill("sai-mat-khau-hoan-toan");
-    await page.getByRole("button", { name: "Đăng nhập" }).click();
+    await page.getByRole("button", { name: "Đăng nhập", exact: true }).click();
 
     // Điểm mấu chốt: phải có THÔNG BÁO nhìn thấy được. Lỗi cũ khiến form im
     // lặng không phản ứng gì — về mặt kỹ thuật cũng là "ở lại trang login",
@@ -53,10 +51,10 @@ test.describe("Đăng nhập", () => {
     await expect(page).toHaveURL(/\/login/);
   });
 
-  test("chưa đăng nhập mà vào /users thì bị đá về /login kèm ?next=", async ({ page }) => {
-    await page.goto("/users");
+  test("chưa đăng nhập mà vào trang cần quyền thì bị đá về /login kèm ?next=", async ({ page }) => {
+    await page.goto("/manage");
 
-    await expect(page).toHaveURL(/\/login\?next=%2Fusers/);
+    await expect(page).toHaveURL(/\/login\?next=%2Fmanage/);
   });
 });
 
@@ -78,7 +76,8 @@ test.describe("Đăng ký", () => {
     // Đây cũng chính là chỗ bắt lỗi "form gửi `name` nhưng schema đòi
     // `fullName`": Zod strip im lặng khoá lạ nên đăng ký vẫn thành công, chỉ
     // có họ tên là biến mất.
-    await expect(page.getByText(fullName)).toBeVisible();
+    // Header hiện tên người dùng thành link tới màn thiết bị đăng nhập.
+    await expect(page.getByRole("link", { name: fullName })).toBeVisible();
   });
 });
 
@@ -99,7 +98,9 @@ test.describe("Quên mật khẩu", () => {
   }) => {
     await page.goto("/reset-password");
 
-    await expect(page.getByRole("alert")).toContainText("không hợp lệ");
+    // Trang có nhiều vùng `role="alert"`; lấy đúng vùng báo link hỏng thay vì
+    // để Playwright kêu "strict mode violation".
+    await expect(page.getByRole("alert").filter({ hasText: "không hợp lệ" })).toBeVisible();
     await expect(page.getByLabel("Mật khẩu mới")).toHaveCount(0);
   });
 });

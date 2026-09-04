@@ -55,7 +55,23 @@ export const holdBookingAction = definePublicAction(
     const parsed = schema.safeParse(Object.fromEntries(formData));
 
     if (!parsed.success) {
-      return { fields: z.flattenError(parsed.error).fieldErrors };
+      const fields = z.flattenError(parsed.error).fieldErrors;
+
+      /*
+       * Lỗi ở TRƯỜNG ẨN phải hiện ra thành một câu, không được im lặng.
+       *
+       * Giao diện chỉ vẽ lỗi dưới ô tên và ô số điện thoại. Nếu `venueId`,
+       * `courtId`, `date` hay khung giờ sai, người dùng bấm "Đặt sân" và
+       * KHÔNG CÓ GÌ XẢY RA — không lỗi, không điều hướng, nút trở lại như cũ.
+       * Đã xảy ra thật: form gửi `days` trong khi schema đòi `date`, và chỉ có
+       * bộ e2e phát hiện ra.
+       */
+      const hidden = ["venueId", "courtId", "date", "startMinute", "endMinute"] as const;
+      if (hidden.some((key) => fields[key]?.length)) {
+        return { error: "Chọn lại khung giờ giúp bạn nhé — dữ liệu gửi lên không hợp lệ." };
+      }
+
+      return { fields };
     }
 
     const input = parsed.data;

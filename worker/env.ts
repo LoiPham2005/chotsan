@@ -61,6 +61,10 @@ const schema = z
 
     /** Dọn token/nhật ký cũ. Mặc định 3 giờ sáng, lúc ít người dùng nhất. */
     CRON_PURGE_EXPIRED: z.string().default("0 3 * * *"),
+    /** Xuất hoá đơn hoa hồng: 02:00 ngày mùng 1 hằng tháng, giờ máy chủ. */
+    CRON_INVOICE_MONTHLY: z.string().default("0 2 1 * *"),
+    /** Đánh dấu hoá đơn quá hạn: 04:00 mỗi ngày. */
+    CRON_INVOICE_OVERDUE: z.string().default("0 4 * * *"),
   })
   .superRefine((value, ctx) => {
     if (value.QUEUE_ENABLED && !value.REDIS_URL) {

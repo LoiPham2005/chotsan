@@ -129,7 +129,7 @@ export default async function VenueDetailPage({ params, searchParams }: Props) {
                 Sân nghỉ ngày này. Chọn ngày khác giúp bạn nhé.
               </p>
             ) : (
-              <SelectAndBook day={lich} venueId={venue.id} days={key} />
+              <SelectAndBook day={lich} venueId={venue.id} date={key} />
             )}
           </div>
         </section>

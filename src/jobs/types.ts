@@ -67,6 +67,18 @@ export type JobPayloads = {
    * KHÔNG đụng giao dịch đang chờ chủ sân duyệt — xem `PaymentService.expirePending`.
    */
   "payment:expire-pending": Record<string, never>;
+
+  /**
+   * Xuất hoá đơn hoa hồng cho THÁNG TRƯỚC. Chạy ngày mùng 1 hằng tháng.
+   *
+   * Chạy lại nhiều lần không sinh hoá đơn trùng — chốt chặn là
+   * `@@unique([venueId, periodStart])` ở database, không phải phép kiểm trong
+   * job.
+   */
+  "invoice:generate-monthly": Record<string, never>;
+
+  /** Đánh dấu hoá đơn quá hạn. Chạy mỗi ngày. */
+  "invoice:mark-overdue": Record<string, never>;
 };
 
 export type JobName = keyof JobPayloads;

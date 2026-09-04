@@ -87,6 +87,7 @@ export const PERMISSIONS = [
   // Quyền toàn nền tảng, KHÔNG gắn sân
   "venue:approve",
   "payout:approve",
+  "invoice:manage",
   "dispute:resolve",
   "setting:update",
 ] as const;
@@ -252,6 +253,15 @@ export const DEFAULT_ROLE_PERMISSIONS: readonly RoleSeed[] = [
       "payment:confirm",
       "report:read",
       "dispute:resolve",
+      /*
+       * Đối soát hoá đơn hoa hồng — KHÔNG PHẢI `payout:approve`.
+       *
+       * Hai việc khác hẳn nhau: `payout:approve` là duyệt tiền CHI RA cho chủ
+       * sân, `invoice:manage` là ghi nhận tiền THU VÀO từ chủ sân. Dùng chung
+       * một quyền cho cả hai là mở đường chi tiền cho người chỉ được giao việc
+       * đi thu.
+       */
+      "invoice:manage",
     ],
   },
   {
@@ -444,6 +454,11 @@ export const PERMISSION_METADATA: Record<Permission, PermissionMeta> = {
     name: "Duyệt chi trả",
     category: "Vận hành nền tảng",
     description: "⚠️ Tiền rời khỏi hệ thống. Chỉ quản trị tối cao",
+  },
+  "invoice:manage": {
+    name: "Đối soát hoá đơn hoa hồng",
+    category: "Vận hành nền tảng",
+    description: "Ghi nhận đã thu, miễn hoá đơn. KHÁC `payout:approve` — đây là tiền THU VÀO",
   },
   "dispute:resolve": {
     name: "Xử lý khiếu nại",

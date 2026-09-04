@@ -30,7 +30,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // không phải lặp lại. Kiểm tra QUYỀN vẫn nằm ở từng trang.
   const user = await requireUser("/users");
 
-  const [canSeeUsers, canSeeRoles, canApproveVenues] = await Promise.all([
+  const [canSeeUsers, canSeeRoles, canApproveVenues, canSeeInvoices] = await Promise.all([
     // `can()` nhận USER ID, không phải tên vai trò. Truyền `user.roles.join()`
     // là hỏi quyền của một id không tồn tại — luôn trả false, nên sidebar quản
     // trị KHÔNG BAO GIỜ hiện mục nào, kể cả với SUPER_ADMIN. Cùng lỗi đã có ở
@@ -38,15 +38,17 @@ export default async function AdminLayout({ children }: { children: React.ReactN
     permissionService.can(user.id, "user:read"),
     permissionService.can(user.id, "role:read"),
     permissionService.can(user.id, "venue:approve"),
+    permissionService.can(user.id, "invoice:manage"),
   ]);
 
   // Người chỉ có quyền duyệt cơ sở vẫn phải vào được khu này.
-  if (!canSeeUsers && !canSeeRoles && !canApproveVenues) {
+  if (!canSeeUsers && !canSeeRoles && !canApproveVenues && !canSeeInvoices) {
     notFound();
   }
 
   const items = [
     { href: "/venue-approvals", label: "Duyệt cơ sở", visible: canApproveVenues },
+    { href: "/invoices", label: "Hoá đơn hoa hồng", visible: canSeeInvoices },
     { href: "/users", label: "Người dùng", visible: canSeeUsers },
     { href: "/roles", label: "Vai trò & phân quyền", visible: canSeeRoles },
   ] as const;

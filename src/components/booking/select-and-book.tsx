@@ -31,11 +31,11 @@ import type { DayAvailability } from "@/services/availability.service";
 export function SelectAndBook({
   day,
   venueId,
-  days,
+  date,
 }: {
   day: DayAvailability;
   venueId: string;
-  days: string;
+  date: string;
 }) {
   const [selection, setSelection] = useState<SlotSelection | null>(null);
   const [state, formAction] = useActionState<HoldBookingState, FormData>(holdBookingAction, {});
@@ -69,7 +69,7 @@ export function SelectAndBook({
         >
           <input type="hidden" name="venueId" value={venueId} />
           <input type="hidden" name="courtId" value={selection.courtId} />
-          <input type="hidden" name="days" value={days} />
+          <input type="hidden" name="date" value={date} />
           <input type="hidden" name="startMinute" value={selection.startMinute} />
           <input type="hidden" name="endMinute" value={selection.endMinute} />
 
