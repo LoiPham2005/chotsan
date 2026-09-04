@@ -1,71 +1,40 @@
-// Schema của ứng dụng.
-// CHỈ `src/services/*` được gọi Prisma — route và Server Action đi qua service.
-//
-// QUY ƯỚC: mọi cột thời gian là `Timestamptz`. Mặc định của Prisma là
-// `timestamp(3)` không có múi giờ — một câu SQL viết tay hay `DEFAULT now()`
-// phía database sẽ lệch vài tiếng mà không có gì báo.
+// ChốtSân — schema.
+// Quy ước: mọi cột thời gian dùng @db.Timestamptz(3).
+// Chi tiết vì sao 21 bảng nghiệp vụ: docs/THIET_KE_LAI.md §3
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  // Đổi provider ở đây — không file nào khác phụ thuộc vào nó.
-  // ⚠️ Trừ các partial unique index trong migration init: đó là cú pháp Postgres.
-  //
-  // Prisma 7 bỏ `url` khỏi khối này: chuỗi kết nối nằm ở `prisma.config.ts`
-  // (cho CLI/Migrate) và ở driver adapter trong `src/lib/prisma.ts` (cho runtime).
   provider = "postgresql"
 }
 
-// ============================================================
-// 1. PHÂN QUYỀN (RBAC)
-// ============================================================
-
-/// DANH SÁCH vai trò nằm trong database (admin tạo thêm lúc chạy).
-/// DANH MỤC quyền nằm trong code — xem `src/lib/permissions.ts`.
 model Role {
-  id          String  @id @default(cuid())
-  /// Mã cố định, viết HOA. Đây là thứ code so sánh; `name` chỉ để hiển thị.
-  key         String  @unique
+  id          String           @id @default(cuid())
+  key         String           @unique
   name        String
   description String?
-
-  /// Bậc quyền lực, cao hơn = mạnh hơn. Chặn leo thang đặc quyền: chỉ gán được
-  /// vai trò có `level` THẤP HƠN HẲN bậc của mình, và không đụng được vào người
-  /// có bậc bằng hoặc cao hơn. Luật áp trong `UserService`.
-  /// Seed: USER 0 · STAFF 10 · MANAGER 20 · ADMIN 50 · SUPER_ADMIN 100.
-  level       Int     @default(0)
-
-  /// Vai trò cốt lõi — không cho xoá, không đổi key.
-  isSystem    Boolean @default(false)
-
+  level       Int              @default(0)
+  isSystem    Boolean          @default(false)
   permissions RolePermission[]
   userRoles   UserRole[]
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime         @updatedAt @db.Timestamptz(3)
 
   @@index([level])
   @@map("roles")
 }
 
-/// Đồng bộ TỪ CODE bằng `pnpm db:seed` — đừng thêm dòng bằng tay. Một quyền
-/// không có dòng mã nào kiểm tra thì tick vào cũng không đổi gì.
 model Permission {
-  id          String  @id @default(cuid())
-  /// `<tài-nguyên>:<hành-động>`, thêm `:own` khi chỉ áp cho dữ liệu của chính
-  /// người đó. Ví dụ: `user:read`, `profile:update:own`.
-  key         String  @unique
-  name        String
-  /// Nhóm hiển thị trên màn phân quyền.
-  category    String
-  description String?
-
+  id              String           @id @default(cuid())
+  key             String           @unique
+  name            String
+  category        String
+  description     String?
   roles           RolePermission[]
   userPermissions UserPermission[]
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  createdAt       DateTime         @default(now()) @db.Timestamptz(3)
 
   @@index([category])
   @@map("permissions")
@@ -74,47 +43,37 @@ model Permission {
 model RolePermission {
   roleId       String
   permissionId String
-
-  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
 
   @@id([roleId, permissionId])
   @@index([permissionId])
   @@map("role_permissions")
 }
 
-/// Một người mang NHIỀU vai trò. Quyền cuối cùng là HỢP của mọi vai trò, rồi
-/// mới áp `UserPermission` — xem `src/services/permission.service.ts`.
 model UserRole {
-  userId String
-  roleId String
-  /// Chuỗi trần, không khoá ngoại — dấu vết phải sống lâu hơn người để lại nó.
+  userId     String
+  roleId     String
   assignedBy String?
   createdAt  DateTime @default(now()) @db.Timestamptz(3)
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@id([userId, roleId])
   @@index([roleId])
   @@map("user_roles")
 }
 
-/// Ngoại lệ cho từng cá nhân, đè lên quyền đến từ vai trò.
-/// `isGranted = false` (TƯỚC quyền) luôn THẮNG mọi vai trò.
 model UserPermission {
   userId       String
   permissionId String
-  isGranted    Boolean   @default(true)
+  isGranted    Boolean    @default(true)
   grantedBy    String?
-  /// `null` = vĩnh viễn. Có hạn thì quyền tự mất, không ai phải nhớ gỡ.
-  expiresAt    DateTime? @db.Timestamptz(3)
-  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
-
-  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  expiresAt    DateTime?  @db.Timestamptz(3)
+  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@id([userId, permissionId])
   @@index([permissionId])
@@ -122,103 +81,52 @@ model UserPermission {
   @@map("user_permissions")
 }
 
-// ============================================================
-// 2. NGƯỜI DÙNG
-// ============================================================
-
 enum UserStatus {
   ACTIVE
-  /// Tạm ngưng. CHẶN đăng nhập, nhưng thông điệp khác BANNED (không phải hình phạt).
-  /// Cần "chưa xác thực email thì chưa cho vào"? Dùng `emailVerifiedAt`, đừng
-  /// dùng trạng thái này — một cột một ý nghĩa.
   INACTIVE
-  /// Khoá do vi phạm. Chặn MỌI đường đăng nhập: mật khẩu, OAuth, passkey.
   BANNED
 }
 
-/// Bảng User cố tình giữ mỏng: CHỈ phục vụ xác thực. Thông tin cá nhân nằm ở
-/// `UserProfile` — bảng này bị đọc ở gần như mọi request xác thực.
-///
-/// ⚠️ `email` / `phone` / `username` KHÔNG dùng `@unique` của Prisma. Chúng được
-/// ràng buộc bằng **partial unique index** viết tay trong migration:
-///
-///     CREATE UNIQUE INDEX users_email_active_key ON users (email)
-///       WHERE deleted_at IS NULL;
-///
-/// Vì `@unique` thường áp cho cả dòng đã xoá mềm — xoá một tài khoản là email
-/// đó vĩnh viễn không ai đăng ký lại được.
-///
-/// HỆ QUẢ: `findUnique({ where: { email } })` KHÔNG biên dịch được. Dùng
-/// `findFirst` kèm `deletedAt: null`. Database vẫn ném P2002 như thường.
+/// ⚠️ email/phone/username KHÔNG có @unique — ràng buộc bằng partial unique index
+/// (WHERE deleted_at IS NULL) trong migration. Hệ quả: findUnique({where:{email}})
+/// không biên dịch được, phải dùng findFirst kèm deletedAt: null.
 model User {
-  id       String  @id @default(cuid())
-  email    String?
-  phone    String?
-  username String?
-  /// Hash Argon2id. `null` = chưa đặt mật khẩu (admin tạo hộ, hoặc chỉ OAuth) —
-  /// khác hẳn chuỗi rỗng, vốn là một mật khẩu "hợp lệ" nhìn từ tầng dữ liệu.
-  password String?
-
-  status          UserStatus @default(ACTIVE)
-  emailVerifiedAt DateTime?  @db.Timestamptz(3)
-  phoneVerifiedAt DateTime?  @db.Timestamptz(3)
-
-  /// Email MỚI đang chờ xác thực. Không bao giờ ghi thẳng vào `email`: địa chỉ
-  /// mới phải tự chứng minh quyền sở hữu trước, và địa chỉ cũ được báo.
-  pendingEmail String?
-
-  /// Mốc đổi mật khẩu gần nhất.
-  ///
-  /// Cho phép thu hồi TỨC THÌ mọi access token cấp trước mốc này: `JwtAuthGuard`
-  /// đối chiếu `iat` của token với giá trị ở đây. Không có nó thì kẻ đã chiếm
-  /// tài khoản còn thao tác được 15 phút SAU KHI chủ thật đổi mật khẩu — vì JWT
-  /// đã ký thì không thu hồi được.
-  passwordChangedAt   DateTime? @db.Timestamptz(3)
-
-  /// Sai mật khẩu LIÊN TIẾP; reset về 0 khi đăng nhập thành công.
-  failedLoginAttempts Int       @default(0)
-  /// Khoá tạm do brute-force, tự hết hạn. Khác `status = BANNED` (khoá tay).
-  lockedUntil         DateTime? @db.Timestamptz(3)
-  /// Xoá mềm. Mọi truy vấn xác thực phải lọc `deletedAt: null`.
-  deletedAt           DateTime? @db.Timestamptz(3)
-
-  /// Khoá TOTP, **đã mã hoá AES-256-GCM** (khoá giải mã ở `ENCRYPTION_KEY`,
-  /// tức là ngoài database). Lưu thô thì rò database là mất luôn 2FA.
-  twoFactorSecret    String?
-  /// `null` = chưa bật. Có secret mà cột này null = đang cài dở.
-  twoFactorEnabledAt DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  profile UserProfile?
-
-  userRoles       UserRole[]
-  userPermissions UserPermission[]
-
-  refreshTokens      RefreshToken[]
-  verificationTokens VerificationToken[]
-  oauthAccounts      OAuthAccount[]
-  recoveryCodes      RecoveryCode[]
-  passkeys           WebAuthnCredential[]
-
-  devices       UserDevice[]
-  notifications NotificationRecipient[]
-
-  // Index thường cho TRA CỨU; ràng buộc duy nhất do partial unique index lo.
-  // Nghiệp vụ ChốtSân
-  venueMembers VenueMember[]
-  bookings     Booking[]
-  reviews      Review[]
-  favorites    Favorite[]
+  id                  String                  @id @default(cuid())
+  email               String?
+  phone               String?
+  username            String?
+  password            String?
+  status              UserStatus              @default(ACTIVE)
+  emailVerifiedAt     DateTime?               @db.Timestamptz(3)
+  phoneVerifiedAt     DateTime?               @db.Timestamptz(3)
+  pendingEmail        String?
+  passwordChangedAt   DateTime?               @db.Timestamptz(3)
+  failedLoginAttempts Int                     @default(0)
+  lockedUntil         DateTime?               @db.Timestamptz(3)
+  deletedAt           DateTime?               @db.Timestamptz(3)
+  twoFactorSecret     String?
+  twoFactorEnabledAt  DateTime?               @db.Timestamptz(3)
+  createdAt           DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime                @updatedAt @db.Timestamptz(3)
+  profile             UserProfile?
+  userRoles           UserRole[]
+  userPermissions     UserPermission[]
+  refreshTokens       RefreshToken[]
+  verificationTokens  VerificationToken[]
+  oauthAccounts       OAuthAccount[]
+  recoveryCodes       RecoveryCode[]
+  passkeys            WebAuthnCredential[]
+  devices             UserDevice[]
+  notifications       NotificationRecipient[]
+  venueMembers        VenueMember[]
+  bookings            Booking[]
+  reviews             Review[]
+  favorites           Favorite[]
 
   @@index([email])
   @@index([phone])
   @@index([username])
   @@index([status])
-  /// Phục vụ truy vấn danh sách: lọc `deletedAt: null` rồi sắp theo `createdAt`
-  /// giảm dần. Hai index rời bắt Postgres chọn một cái rồi lọc phần còn lại;
-  /// index ghép này đọc thẳng đúng thứ tự cần.
   @@index([deletedAt, createdAt])
   @@map("users")
 }
@@ -230,10 +138,9 @@ enum Gender {
 }
 
 model UserProfile {
-  id     String @id @default(cuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
+  id        String    @id @default(cuid())
+  userId    String    @unique
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   fullName  String?
   avatarUrl String?
   gender    Gender?
@@ -243,81 +150,50 @@ model UserProfile {
   city      String?
   district  String?
   country   String?   @default("VN")
-  /// Field riêng của từng dự án. Thứ gì cần lọc/sắp xếp thì phải là cột thật.
   metadata  Json?
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
 
   @@map("user_profiles")
 }
 
-/// Mã khôi phục 2FA, dùng khi mất điện thoại. Mỗi mã dùng ĐÚNG MỘT LẦN.
-/// `codeHash` băm kèm `userId` (`hashScopedToken`) vì mã ngắn, có khả năng trùng.
 model RecoveryCode {
-  id     String @id @default(cuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  codeHash String
-  usedAt   DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String
+  usedAt    DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
 
   @@unique([userId, codeHash])
   @@index([userId])
   @@map("recovery_codes")
 }
 
-/// Passkey (WebAuthn). Khoá riêng không rời khỏi thiết bị và trình duyệt chỉ ký
-/// cho đúng tên miền đã đăng ký → chống phishing tuyệt đối.
-///
-/// Đăng nhập bằng passkey với `userVerification: required` ĐÃ là hai yếu tố
-/// (thiết bị + sinh trắc), nên hệ thống không hỏi thêm TOTP.
 model WebAuthnCredential {
-  id     String @id @default(cuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  /// base64url, ngẫu nhiên và duy nhất toàn cầu.
-  credentialId String @unique
-  /// Khoá CÔNG KHAI (COSE), base64url. Không cần mã hoá — biết nó không ký được gì.
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  credentialId String    @unique
   publicKey    String
-
-  /// Chống phát lại: counter nhận về thấp hơn giá trị đã lưu = authenticator bị
-  /// nhân bản. `BigInt` vì đặc tả định nghĩa uint32, vượt trần của `Int`.
-  counter BigInt @default(0)
-
-  /// `singleDevice` = khoá cứng · `multiDevice` = passkey đồng bộ được.
-  deviceType String
-  /// Đã đồng bộ lên iCloud/Google chưa. `singleDevice` chưa sao lưu mà mất là mất hẳn.
-  backedUp   Boolean @default(false)
-  /// usb · nfc · ble · internal · hybrid
-  transports String[]
-  /// Định danh model authenticator, dùng hiện tên/biểu tượng.
-  aaguid     String?
-
-  name       String?
-  lastUsedAt DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  counter      BigInt    @default(0)
+  deviceType   String
+  backedUp     Boolean   @default(false)
+  transports   String[]
+  aaguid       String?
+  name         String?
+  lastUsedAt   DateTime? @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
 
   @@index([userId])
   @@map("webauthn_credentials")
 }
 
-// ============================================================
-// 3. OAUTH, TOKEN & PHIÊN ĐĂNG NHẬP
-// ============================================================
-
-/// ⚠️ Cố ý KHÔNG lưu access/refresh token của nhà cung cấp — chúng chỉ cần khi
-/// gọi API của họ thay mặt người dùng. Cần thì thêm sau, nhớ mã hoá.
 model OAuthAccount {
   id                String   @id @default(cuid())
   userId            String
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  /// google | github | facebook | apple
   provider          String
   providerAccountId String
   createdAt         DateTime @default(now()) @db.Timestamptz(3)
@@ -327,31 +203,20 @@ model OAuthAccount {
   @@map("oauth_accounts")
 }
 
-/// Chỉ lưu SHA-256 — rò database không đồng nghĩa với rò phiên đăng nhập.
 model RefreshToken {
-  id String @id @default(cuid())
-
-  /// ĐỊNH DANH PHIÊN, không đổi qua các lần xoay vòng. Client dùng nó để nhận
-  /// ra "thiết bị này"; khi phát hiện token bị dùng lại thì thu hồi đúng MỘT họ
-  /// thay vì đá người dùng khỏi mọi thiết bị.
-  familyId String
-
-  tokenHash String  @unique
-  userId    String
-  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  deviceId  String?
-  userAgent String?
-  ip        String?
-
-  /// Phiên này đã vượt qua 2FA chưa.
-  twoFactorAt DateTime? @db.Timestamptz(3)
-
-  expiresAt DateTime  @db.Timestamptz(3)
-  /// Đặt khi đăng xuất hoặc khi token bị xoay vòng.
-  revokedAt DateTime? @db.Timestamptz(3)
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-
-  device UserDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  id          String      @id @default(cuid())
+  familyId    String
+  tokenHash   String      @unique
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId    String?
+  userAgent   String?
+  ip          String?
+  twoFactorAt DateTime?   @db.Timestamptz(3)
+  expiresAt   DateTime    @db.Timestamptz(3)
+  revokedAt   DateTime?   @db.Timestamptz(3)
+  createdAt   DateTime    @default(now()) @db.Timestamptz(3)
+  device      UserDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([familyId])
@@ -361,42 +226,27 @@ model RefreshToken {
 
 enum VerificationTokenType {
   EMAIL_VERIFICATION
-  /// Xác thực địa chỉ email MỚI trước khi thay thế địa chỉ cũ.
   EMAIL_CHANGE
   PHONE_OTP
   PASSWORD_RESET
 }
 
-/// Token dùng MỘT LẦN. Chỉ lưu bản băm, và có HAI kiểu băm:
-///   • Token trong link (256 bit) → băm trần, tra cứu được bằng chính nó.
-///   • OTP 6 số → băm KÈM `userId`. Băm trần thì `SHA-256("123456")` là hằng số,
-///     và tra cứu sẽ ra bản ghi của NGƯỜI KHÁC — đăng nhập nhầm tài khoản.
 model VerificationToken {
-  id        String                @id @default(cuid())
-  tokenHash String                @unique
-  type      VerificationTokenType
-  userId    String
-  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  /// Nơi mã được gửi tới. Với `EMAIL_CHANGE` là địa chỉ MỚI.
+  id          String                @id @default(cuid())
+  tokenHash   String                @unique
+  type        VerificationTokenType
+  userId      String
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   destination String?
-
-  /// Số lần nhập SAI. Bắt buộc với OTP: rate limit theo IP không cản được kẻ
-  /// xoay vòng IP. Chạm ngưỡng thì token bị huỷ.
-  attempts Int @default(0)
-
-  expiresAt DateTime  @db.Timestamptz(3)
-  usedAt    DateTime? @db.Timestamptz(3)
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  attempts    Int                   @default(0)
+  expiresAt   DateTime              @db.Timestamptz(3)
+  usedAt      DateTime?             @db.Timestamptz(3)
+  createdAt   DateTime              @default(now()) @db.Timestamptz(3)
 
   @@index([userId, type])
   @@index([expiresAt])
   @@map("verification_tokens")
 }
-
-// ============================================================
-// 4. THIẾT BỊ & THÔNG BÁO
-// ============================================================
 
 enum DevicePlatform {
   IOS
@@ -404,25 +254,20 @@ enum DevicePlatform {
   WEB
 }
 
-/// ⚠️ `fcmToken` UNIQUE TOÀN CỤC, không phải theo từng người dùng. Nó định danh
-/// một lần cài app trên một máy. Ràng buộc theo `(userId, fcmToken)` cho phép
-/// hai dòng cùng token tồn tại khi hai tài khoản lần lượt đăng nhập trên cùng
-/// điện thoại — và thông báo của người này hiện trên màn hình người kia.
-/// Đăng ký dưới tài khoản khác thì CHUYỂN CHỦ dòng đó (xem `DeviceService`).
+/// ⚠️ fcmToken unique TOÀN CỤC, không theo user: nó định danh một lần cài app trên
+/// một máy. Người khác đăng nhập cùng máy thì CHUYỂN CHỦ dòng này.
 model UserDevice {
-  id         String         @id @default(cuid())
-  userId     String
-  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  platform   DevicePlatform
-  fcmToken   String         @unique
-  /// UUID phần cứng do client sinh, ổn định qua các lần cài lại app.
-  deviceId   String?
-  deviceName String?
-  isActive   Boolean        @default(true)
-  lastSeenAt DateTime       @default(now()) @db.Timestamptz(3)
-  createdAt  DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt  DateTime       @updatedAt @db.Timestamptz(3)
-
+  id            String         @id @default(cuid())
+  userId        String
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform      DevicePlatform
+  fcmToken      String         @unique
+  deviceId      String?
+  deviceName    String?
+  isActive      Boolean        @default(true)
+  lastSeenAt    DateTime       @default(now()) @db.Timestamptz(3)
+  createdAt     DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime       @updatedAt @db.Timestamptz(3)
   refreshTokens RefreshToken[]
 
   @@index([userId])
@@ -435,41 +280,33 @@ enum NotificationType {
   BROADCAST
 }
 
-/// Nội dung gốc: MỘT bản ghi dù gửi cho một triệu người.
 model Notification {
-  id        String           @id @default(cuid())
-  title     String
-  body      String
-  imageUrl  String?
-  type      NotificationType @default(DIRECT)
-  /// Điều hướng khi bấm: "/orders/123" hoặc URL tuyệt đối.
-  actionUrl String?
-  data      Json?
-  /// Chuỗi trần, không khoá ngoại — như `AuditLog.actorId`.
-  senderId  String?
-  createdAt DateTime         @default(now()) @db.Timestamptz(3)
-
+  id         String                  @id @default(cuid())
+  title      String
+  body       String
+  imageUrl   String?
+  type       NotificationType        @default(DIRECT)
+  actionUrl  String?
+  data       Json?
+  senderId   String?
+  createdAt  DateTime                @default(now()) @db.Timestamptz(3)
   recipients NotificationRecipient[]
 
   @@index([type, createdAt])
   @@map("notifications")
 }
 
-/// Trạng thái nhận/đọc của từng người — bảng bị query liên tục (đếm chuông).
 model NotificationRecipient {
-  id             String @id @default(cuid())
+  id             String       @id @default(cuid())
   notificationId String
   userId         String
-
-  isRead   Boolean   @default(false)
-  readAt   DateTime? @db.Timestamptz(3)
-  isPushed Boolean   @default(false)
-  pushedAt DateTime? @db.Timestamptz(3)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-
-  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isRead         Boolean      @default(false)
+  readAt         DateTime?    @db.Timestamptz(3)
+  isPushed       Boolean      @default(false)
+  pushedAt       DateTime?    @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([notificationId, userId])
   @@index([userId, isRead])
@@ -477,21 +314,10 @@ model NotificationRecipient {
   @@map("notification_recipients")
 }
 
-// ============================================================
-// 5. NHẬT KÝ KIỂM TOÁN
-// ============================================================
-
-/// Ghi HÀNH ĐỘNG NHẠY CẢM, không phải mọi request — ghi tất cả thì bảng phình
-/// tới mức không ai tra nổi.
-///
-/// ⚠️ KHÔNG có khoá ngoại tới `users`: nhật ký phải sống lâu hơn đối tượng nó
-/// ghi lại. `actorEmail` được chép tại thời điểm ghi.
 model AuditLog {
   id         String   @id @default(cuid())
-  /// null = hệ thống tự làm (cron, webhook).
   actorId    String?
   actorEmail String?
-  /// `<thực-thể>.<hành-động>` — "user.banned", "role.updated".
   action     String
   entity     String
   entityId   String?
@@ -507,89 +333,63 @@ model AuditLog {
   @@map("audit_logs")
 }
 
-// ============================================================
-// NGHIỆP VỤ CHỐTSÂN — 21 bảng
-// Xem docs/THIET_KE_LAI.md §3 để biết vì sao là 21 chứ không phải 46.
-// ============================================================
-
-// ---------- Sân bãi ----------
-
 model Sport {
   id        String   @id @default(cuid())
-  key       String   @unique // "cau-long", "bong-da", "tennis", "pickleball", "bong-ro"
+  key       String   @unique
   name      String
-  /// Thứ tự hiển thị trên trang chủ. Nhỏ hơn = lên trước.
   sortOrder Int      @default(0) @map("sort_order")
   isActive  Boolean  @default(true) @map("is_active")
   createdAt DateTime @default(now()) @db.Timestamptz(3)
-
-  venues Venue[]
-  courts Court[]
+  venues    Venue[]
+  courts    Court[]
 
   @@map("sports")
 }
 
 enum VenueStatus {
-  DRAFT // chủ sân đang điền, chưa gửi duyệt
-  PENDING // chờ quản trị duyệt
+  DRAFT
+  PENDING
   ACTIVE
-  SUSPENDED // quản trị tạm ngưng
+  SUSPENDED
 }
 
 model Venue {
-  id          String      @id @default(cuid())
-  slug        String      @unique
-  name        String
-  description String?
-  status      VenueStatus @default(DRAFT)
-
-  address  String
-  ward     String?
-  district String
-  city     String
-  /// Toạ độ để tính khoảng cách và vẽ bản đồ. Thiếu thì sân không lên map.
-  lat      Float?
-  lng      Float?
-
-  phone String?
-  email String?
-
-  /// Tiện ích dạng mảng chuỗi thay cho hai bảng `Amenity` + `VenueAmenity` của
-  /// bản cũ — hai bảng đó có 0 lần được dùng trong 18k dòng code.
-  amenities String[] @default([])
-
-  /// Tài khoản nhận tiền. Gộp bảng `BankAccount` cũ thành cột: mỗi sân đúng
-  /// một tài khoản, tách bảng chỉ thêm một lần join.
-  bankName          String? @map("bank_name")
-  bankAccountNumber String? @map("bank_account_number")
-  bankAccountName   String? @map("bank_account_name")
-
-  /// Phần trăm hoa hồng nền tảng giữ lại. Null = theo mặc định trong `Setting`.
-  commissionRate Decimal? @map("commission_rate") @db.Decimal(5, 2)
-
-  /// Số phút giữ chỗ trước khi huỷ nếu chưa thanh toán. Null = theo `Setting`.
-  holdMinutes Int? @map("hold_minutes")
-
-  ratingAvg   Decimal @default(0) @map("rating_avg") @db.Decimal(3, 2)
-  ratingCount Int     @default(0) @map("rating_count")
-
-  sportId String @map("sport_id")
-  sport   Sport  @relation(fields: [sportId], references: [id])
-
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
-
-  images    VenueImage[]
-  hours     VenueHour[]
-  members   VenueMember[]
-  courts    Court[]
-  priceRules PriceRule[]
-  bookings  Booking[]
-  reviews   Review[]
-  favorites Favorite[]
-  payouts   Payout[]
-  earnings  OwnerEarning[]
+  id                String         @id @default(cuid())
+  slug              String         @unique
+  name              String
+  description       String?
+  status            VenueStatus    @default(DRAFT)
+  address           String
+  ward              String?
+  district          String
+  city              String
+  lat               Float?
+  lng               Float?
+  phone             String?
+  email             String?
+  amenities         String[]       @default([])
+  bankName          String?        @map("bank_name")
+  bankAccountNumber String?        @map("bank_account_number")
+  bankAccountName   String?        @map("bank_account_name")
+  commissionRate    Decimal?       @map("commission_rate") @db.Decimal(5, 2)
+  holdMinutes       Int?           @map("hold_minutes")
+  ratingAvg         Decimal        @default(0) @map("rating_avg") @db.Decimal(3, 2)
+  ratingCount       Int            @default(0) @map("rating_count")
+  sportId           String         @map("sport_id")
+  sport             Sport          @relation(fields: [sportId], references: [id])
+  createdAt         DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime       @updatedAt @db.Timestamptz(3)
+  deletedAt         DateTime?      @map("deleted_at") @db.Timestamptz(3)
+  images            VenueImage[]
+  hours             VenueHour[]
+  members           VenueMember[]
+  courts            Court[]
+  priceRules        PriceRule[]
+  bookings          Booking[]
+  reviews           Review[]
+  favorites         Favorite[]
+  payouts           Payout[]
+  earnings          OwnerEarning[]
 
   @@index([status, city, district])
   @@index([sportId, status])
@@ -602,7 +402,6 @@ model VenueImage {
   venueId   String   @map("venue_id")
   venue     Venue    @relation(fields: [venueId], references: [id], onDelete: Cascade)
   url       String
-  /// Ảnh bìa hiện ở thẻ kết quả tìm kiếm. Mỗi sân nên có đúng một.
   isPrimary Boolean  @default(false) @map("is_primary")
   sortOrder Int      @default(0) @map("sort_order")
   createdAt DateTime @default(now()) @db.Timestamptz(3)
@@ -612,21 +411,21 @@ model VenueImage {
 }
 
 model VenueHour {
-  id      String @id @default(cuid())
-  venueId String @map("venue_id")
-  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
-
-  /// 0 = Chủ nhật … 6 = Thứ bảy. Theo `Date.getDay()` của JS để khỏi phải quy đổi.
-  weekday   Int
-  /// Số phút từ 00:00. 06:00 = 360. Bội số của 30 vì hệ chạy bước 30 phút.
-  openMinute  Int  @map("open_minute")
-  closeMinute Int  @map("close_minute")
+  id          String  @id @default(cuid())
+  venueId     String  @map("venue_id")
+  venue       Venue   @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  weekday     Int
+  openMinute  Int     @map("open_minute")
+  closeMinute Int     @map("close_minute")
   isClosed    Boolean @default(false) @map("is_closed")
 
   @@unique([venueId, weekday])
   @@map("venue_hours")
 }
 
+/// Quan hệ CẤU TRÚC, không phải gói quyền cấu hình được — vì vậy là enum chứ không
+/// phải dòng trong bảng Role. OWNER = sở hữu sân này; STAFF = làm việc tại sân này.
+/// Quyền cụ thể của STAFF nằm ở VenueMember.permissions.
 enum VenueRole {
   OWNER
   STAFF
@@ -638,30 +437,20 @@ enum VenueMemberStatus {
   DISABLED
 }
 
-/// TRỤC CỦA TOÀN BỘ PHÂN QUYỀN THEO SÂN.
-///
-/// "Chủ sân" không phải vai trò nền tảng — nó là một dòng ở đây. Nhờ vậy một
-/// người sở hữu sân A và làm nhân viên sân B diễn đạt được, và mọi câu hỏi
-/// phân quyền quy về đúng một dạng: `canOnVenue(userId, permission, venueId)`.
 model VenueMember {
-  id      String @id @default(cuid())
-  venueId String @map("venue_id")
-  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  userId  String @map("user_id")
-  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  role   VenueRole
-  status VenueMemberStatus @default(ACTIVE)
-
-  /// Quyền chủ sân tick THÊM cho người này, ngoài bộ mặc định của vai trò.
-  /// Đối chiếu với danh mục trong `src/lib/permissions.ts` lúc ghi.
-  /// ⚠️ Ba quyền không bao giờ được nằm ở đây, kể cả khi ghi thẳng vào DB:
-  /// `payout:manage`, `venue:delete`, `venue:transfer`.
-  permissions String[] @default([])
-
-  invitedBy String?   @map("invited_by")
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  id          String            @id @default(cuid())
+  venueId     String            @map("venue_id")
+  venue       Venue             @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  userId      String            @map("user_id")
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        VenueRole
+  status      VenueMemberStatus @default(ACTIVE)
+  /// ⚠️ Ba quyền KHÔNG BAO GIỜ hợp lệ ở đây, kể cả khi ghi thẳng vào DB:
+  /// payout:manage, venue:delete, venue:transfer. canOnVenue() chặn ở tầng logic.
+  permissions String[]          @default([])
+  invitedBy   String?           @map("invited_by")
+  createdAt   DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime          @updatedAt @db.Timestamptz(3)
 
   @@unique([venueId, userId])
   @@index([userId, status])
@@ -679,24 +468,21 @@ enum CourtSurface {
 }
 
 model Court {
-  id      String @id @default(cuid())
-  venueId String @map("venue_id")
-  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  sportId String @map("sport_id")
-  sport   Sport  @relation(fields: [sportId], references: [id])
-
-  name      String // "Sân 1", "Sân VIP"
-  surface   CourtSurface @default(INDOOR)
-  note      String? // "có điều hoà", "gần lối vào"
-  isActive  Boolean      @default(true) @map("is_active")
-  sortOrder Int          @default(0) @map("sort_order")
-
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
-
-  closures CourtClosure[]
-  bookings Booking[]
+  id        String          @id @default(cuid())
+  venueId   String          @map("venue_id")
+  venue     Venue           @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  sportId   String          @map("sport_id")
+  sport     Sport           @relation(fields: [sportId], references: [id])
+  name      String
+  surface   CourtSurface    @default(INDOOR)
+  note      String?
+  isActive  Boolean         @default(true) @map("is_active")
+  sortOrder Int             @default(0) @map("sort_order")
+  createdAt DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime        @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime?       @map("deleted_at") @db.Timestamptz(3)
+  closures  CourtClosure[]
+  bookings  Booking[]
   overrides PriceOverride[]
 
   @@index([venueId, sortOrder])
@@ -704,14 +490,12 @@ model Court {
 }
 
 model CourtClosure {
-  id      String @id @default(cuid())
-  courtId String @map("court_id")
-  court   Court  @relation(fields: [courtId], references: [id], onDelete: Cascade)
-
-  startAt DateTime @map("start_at") @db.Timestamptz(3)
-  endAt   DateTime @map("end_at") @db.Timestamptz(3)
-  reason  String? // "bảo trì mặt sân", "thay lưới"
-
+  id        String   @id @default(cuid())
+  courtId   String   @map("court_id")
+  court     Court    @relation(fields: [courtId], references: [id], onDelete: Cascade)
+  startAt   DateTime @map("start_at") @db.Timestamptz(3)
+  endAt     DateTime @map("end_at") @db.Timestamptz(3)
+  reason    String?
   createdBy String?  @map("created_by")
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
@@ -719,136 +503,95 @@ model CourtClosure {
   @@map("court_closures")
 }
 
-// ---------- Giá ----------
-
-/// Giá theo khung giờ trong tuần. Đơn vị tính là NỬA GIỜ vì toàn hệ thống chạy
-/// bước 30 phút — lưu giá theo giờ rồi chia đôi lúc chạy là chỗ sinh lệch tròn số.
 model PriceRule {
-  id      String @id @default(cuid())
-  venueId String @map("venue_id")
-  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
-
-  /// Null = áp cho MỌI sân con của cơ sở này. Có giá trị = chỉ sân đó.
-  courtId String? @map("court_id")
-
-  /// Mảng thứ áp dụng: [1,2,3,4,5] = thứ 2–6. Rỗng = mọi ngày.
-  weekdays Int[] @default([])
-
-  startMinute Int @map("start_minute")
-  endMinute   Int @map("end_minute")
-
-  /// Giá cho MỘT khung 30 phút, đơn vị đồng.
-  pricePerSlot Int @map("price_per_slot")
-
-  /// Đánh dấu khung giờ vàng — giao diện tô cam. Không ảnh hưởng tính tiền,
-  /// chỉ là nhãn để người dùng hiểu vì sao đắt hơn.
-  isPeak Boolean @default(false) @map("is_peak")
-
-  /// Luật cụ thể hơn thắng luật chung. Cao hơn = ưu tiên hơn.
-  priority Int @default(0)
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  id           String   @id @default(cuid())
+  venueId      String   @map("venue_id")
+  venue        Venue    @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  courtId      String?  @map("court_id")
+  weekdays     Int[]    @default([])
+  startMinute  Int      @map("start_minute")
+  endMinute    Int      @map("end_minute")
+  /// Giá cho MỘT khung 30 phút. Lưu theo giờ rồi chia đôi lúc chạy là chỗ sinh
+  /// lệch tròn số mà chủ sân phát hiện lúc đối soát cuối tháng.
+  pricePerSlot Int      @map("price_per_slot")
+  isPeak       Boolean  @default(false) @map("is_peak")
+  priority     Int      @default(0)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
 
   @@index([venueId, priority])
   @@map("price_rules")
 }
 
-/// Đè giá cho một NGÀY cụ thể — lễ tết, sự kiện. Thắng mọi `PriceRule`.
 model PriceOverride {
-  id      String  @id @default(cuid())
-  courtId String? @map("court_id")
-  court   Court?  @relation(fields: [courtId], references: [id], onDelete: Cascade)
-  venueId String  @map("venue_id")
-
-  date        DateTime @db.Date
-  startMinute Int      @map("start_minute")
-  endMinute   Int      @map("end_minute")
-
-  pricePerSlot Int     @map("price_per_slot")
-  isPeak       Boolean @default(false) @map("is_peak")
+  id           String   @id @default(cuid())
+  courtId      String?  @map("court_id")
+  court        Court?   @relation(fields: [courtId], references: [id], onDelete: Cascade)
+  venueId      String   @map("venue_id")
+  date         DateTime @db.Date
+  startMinute  Int      @map("start_minute")
+  endMinute    Int      @map("end_minute")
+  pricePerSlot Int      @map("price_per_slot")
+  isPeak       Boolean  @default(false) @map("is_peak")
   reason       String?
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([venueId, date])
   @@map("price_overrides")
 }
 
-// ---------- Đặt sân ----------
-
 enum BookingStatus {
-  HOLDING // đang giữ chỗ, chờ thanh toán
+  HOLDING
   CONFIRMED
   CHECKED_IN
   COMPLETED
   CANCELLED
-  EXPIRED // hết hạn giữ chỗ mà không trả tiền
+  EXPIRED
   NO_SHOW
 }
 
 enum BookingSource {
   WEB
   MOBILE
-  COUNTER // nhân viên tạo tại quầy
+  COUNTER
 }
 
-/// ⚠️ BẢNG QUAN TRỌNG NHẤT.
-///
-/// Chống trùng khung giờ bằng ràng buộc `EXCLUDE USING gist` ở tầng DATABASE,
-/// viết tay trong migration `000_init_extensions.sql` — Prisma không diễn đạt
-/// được. Hai request đồng thời không thể cùng thắng một khung, kể cả khi code
-/// sai. Đừng bao giờ gỡ nó ra và thay bằng kiểm tra trong service.
+/// ⚠️ Chống trùng khung giờ bằng EXCLUDE USING gist ở tầng DATABASE — xem migration
+/// 20260904041600_chong_trung_booking. Prisma không diễn đạt được. Đừng thay bằng
+/// kiểm tra trong service: hai request đồng thời sẽ cùng thấy trống và cùng ghi.
 model Booking {
-  id   String @id @default(cuid())
-  /// Mã ngắn cho khách đọc qua điện thoại: "CS-8F3K2".
-  code String @unique
-
-  venueId String @map("venue_id")
-  venue   Venue  @relation(fields: [venueId], references: [id])
-  courtId String @map("court_id")
-  court   Court  @relation(fields: [courtId], references: [id])
-
-  /// Null với khách vãng lai do nhân viên tạo tại quầy.
-  userId String? @map("user_id")
-  user   User?   @relation(fields: [userId], references: [id])
-
-  /// Tên và số điện thoại chép lại tại thời điểm đặt: khách có thể đổi hồ sơ,
-  /// nhưng phiếu đặt phải giữ nguyên thông tin lúc đặt.
-  customerName  String  @map("customer_name")
-  customerPhone String  @map("customer_phone")
-  customerNote  String? @map("customer_note")
-
-  startAt DateTime @map("start_at") @db.Timestamptz(3)
-  endAt   DateTime @map("end_at") @db.Timestamptz(3)
-  /// Số khung 30 phút. Suy ra được từ start/end nhưng lưu sẵn để báo cáo khỏi tính lại.
-  slotCount Int @map("slot_count")
-
-  status BookingStatus @default(HOLDING)
-  source BookingSource @default(WEB)
-
-  /// Tiền, đơn vị đồng. Không dùng số thực cho tiền.
+  id            String              @id @default(cuid())
+  code          String              @unique
+  venueId       String              @map("venue_id")
+  venue         Venue               @relation(fields: [venueId], references: [id])
+  courtId       String              @map("court_id")
+  court         Court               @relation(fields: [courtId], references: [id])
+  userId        String?             @map("user_id")
+  user          User?               @relation(fields: [userId], references: [id])
+  customerName  String              @map("customer_name")
+  customerPhone String              @map("customer_phone")
+  customerNote  String?             @map("customer_note")
+  startAt       DateTime            @map("start_at") @db.Timestamptz(3)
+  endAt         DateTime            @map("end_at") @db.Timestamptz(3)
+  slotCount     Int                 @map("slot_count")
+  status        BookingStatus       @default(HOLDING)
+  source        BookingSource       @default(WEB)
   subtotal      Int
-  discountTotal Int @default(0) @map("discount_total")
+  discountTotal Int                 @default(0) @map("discount_total")
   total         Int
-
-  /// Hết hạn giữ chỗ. Cron `booking-expiry` chạy mỗi phút quét cột này.
-  holdExpiresAt DateTime? @map("hold_expires_at") @db.Timestamptz(3)
-
-  checkedInAt DateTime? @map("checked_in_at") @db.Timestamptz(3)
-  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(3)
-  cancelReason String?  @map("cancel_reason")
-  cancelledBy String?   @map("cancelled_by")
-
-  createdBy String?  @map("created_by")
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  payments    Payment[]
-  redemptions VoucherRedemption[]
-  earning     OwnerEarning?
-  review      Review?
-  disputes    Dispute[]
+  holdExpiresAt DateTime?           @map("hold_expires_at") @db.Timestamptz(3)
+  checkedInAt   DateTime?           @map("checked_in_at") @db.Timestamptz(3)
+  cancelledAt   DateTime?           @map("cancelled_at") @db.Timestamptz(3)
+  cancelReason  String?             @map("cancel_reason")
+  cancelledBy   String?             @map("cancelled_by")
+  createdBy     String?             @map("created_by")
+  createdAt     DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime            @updatedAt @db.Timestamptz(3)
+  payments      Payment[]
+  redemptions   VoucherRedemption[]
+  earning       OwnerEarning?
+  review        Review?
+  disputes      Dispute[]
 
   @@index([venueId, startAt])
   @@index([courtId, startAt])
@@ -863,65 +606,50 @@ enum VoucherType {
 }
 
 model Voucher {
-  id          String      @id @default(cuid())
-  code        String      @unique
-  name        String
-  description String?
-  type        VoucherType
-  /// PERCENT: 10 = giảm 10%. FIXED: 50000 = giảm 50.000đ.
-  value       Int
-  /// Trần giảm với loại PERCENT, đơn vị đồng. Null = không trần.
-  maxDiscount Int? @map("max_discount")
-  minTotal    Int  @default(0) @map("min_total")
-
-  /// Null = áp cho toàn nền tảng; có giá trị = chỉ sân đó.
-  venueId String? @map("venue_id")
-
-  startAt DateTime  @map("start_at") @db.Timestamptz(3)
-  endAt   DateTime  @map("end_at") @db.Timestamptz(3)
-
-  /// Null = không giới hạn.
-  usageLimit     Int? @map("usage_limit")
-  usagePerUser   Int  @default(1) @map("usage_per_user")
-  usedCount      Int  @default(0) @map("used_count")
-
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  redemptions VoucherRedemption[]
+  id           String              @id @default(cuid())
+  code         String              @unique
+  name         String
+  description  String?
+  type         VoucherType
+  value        Int
+  maxDiscount  Int?                @map("max_discount")
+  minTotal     Int                 @default(0) @map("min_total")
+  venueId      String?             @map("venue_id")
+  startAt      DateTime            @map("start_at") @db.Timestamptz(3)
+  endAt        DateTime            @map("end_at") @db.Timestamptz(3)
+  usageLimit   Int?                @map("usage_limit")
+  usagePerUser Int                 @default(1) @map("usage_per_user")
+  usedCount    Int                 @default(0) @map("used_count")
+  isActive     Boolean             @default(true) @map("is_active")
+  createdAt    DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime            @updatedAt @db.Timestamptz(3)
+  redemptions  VoucherRedemption[]
 
   @@index([isActive, startAt, endAt])
   @@map("vouchers")
 }
 
-/// Gộp `VoucherClaim` + `VoucherRedemption` của bản cũ. Bản cũ tách hai bảng
-/// nhưng `VoucherRedemption` có 0 lần được dùng.
 model VoucherRedemption {
-  id        String   @id @default(cuid())
-  voucherId String   @map("voucher_id")
-  voucher   Voucher  @relation(fields: [voucherId], references: [id])
-  bookingId String   @map("booking_id")
-  booking   Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
-  userId    String?  @map("user_id")
-
+  id             String   @id @default(cuid())
+  voucherId      String   @map("voucher_id")
+  voucher        Voucher  @relation(fields: [voucherId], references: [id])
+  bookingId      String   @map("booking_id")
+  booking        Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  userId         String?  @map("user_id")
   discountAmount Int      @map("discount_amount")
   createdAt      DateTime @default(now()) @db.Timestamptz(3)
 
-  /// Một lượt đặt dùng đúng một voucher.
   @@unique([bookingId])
   @@index([voucherId, userId])
   @@map("voucher_redemptions")
 }
 
-// ---------- Tiền ----------
-
 enum PaymentProvider {
   VNPAY
   MOMO
   ZALOPAY
-  SEPAY // theo dõi chuyển khoản ngân hàng
-  CASH // trả tại quầy
+  SEPAY
+  CASH
 }
 
 enum PaymentStatus {
@@ -934,28 +662,21 @@ enum PaymentStatus {
 }
 
 model Payment {
-  id        String  @id @default(cuid())
-  bookingId String  @map("booking_id")
-  booking   Booking @relation(fields: [bookingId], references: [id])
-
-  provider PaymentProvider
-  status   PaymentStatus   @default(PENDING)
-  amount   Int
-
-  /// Mã giao dịch phía cổng thanh toán. Có sau khi họ xác nhận.
-  providerTxnId String? @map("provider_txn_id")
-  /// Nội dung chuyển khoản khách phải ghi — dùng cho SePay đối soát.
-  transferNote  String? @map("transfer_note")
-
-  paidAt   DateTime? @map("paid_at") @db.Timestamptz(3)
-  failedAt DateTime? @map("failed_at") @db.Timestamptz(3)
-  failReason String? @map("fail_reason")
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  events  PaymentEvent[]
-  refunds Refund[]
+  id            String          @id @default(cuid())
+  bookingId     String          @map("booking_id")
+  booking       Booking         @relation(fields: [bookingId], references: [id])
+  provider      PaymentProvider
+  status        PaymentStatus   @default(PENDING)
+  amount        Int
+  providerTxnId String?         @map("provider_txn_id")
+  transferNote  String?         @map("transfer_note")
+  paidAt        DateTime?       @map("paid_at") @db.Timestamptz(3)
+  failedAt      DateTime?       @map("failed_at") @db.Timestamptz(3)
+  failReason    String?         @map("fail_reason")
+  createdAt     DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime        @updatedAt @db.Timestamptz(3)
+  events        PaymentEvent[]
+  refunds       Refund[]
 
   @@index([bookingId])
   @@index([status, createdAt])
@@ -963,26 +684,19 @@ model Payment {
   @@map("payments")
 }
 
-/// ⚠️ IDEMPOTENCY WEBHOOK, ĐỪNG BỎ RÀNG BUỘC DƯỚI ĐÂY.
-///
-/// Cổng thanh toán LUÔN gửi lại webhook khi không nhận được 200 — mất mạng một
-/// giây là nhận ba lần cùng một sự kiện. `@@unique([provider, externalEventId])`
-/// là thứ chặn ghi nhận tiền hai lần; chặn bằng `if` trong service thì hai
-/// request song song vẫn lọt cả hai.
+/// ⚠️ @@unique([provider, externalEventId]) là thứ chặn ghi nhận tiền HAI LẦN khi
+/// cổng thanh toán gửi lại webhook. Chặn bằng if trong service thì hai request
+/// song song vẫn lọt cả hai.
 model PaymentEvent {
-  id        String   @id @default(cuid())
-  paymentId String?  @map("payment_id")
-  payment   Payment? @relation(fields: [paymentId], references: [id])
-
+  id              String          @id @default(cuid())
+  paymentId       String?         @map("payment_id")
+  payment         Payment?        @relation(fields: [paymentId], references: [id])
   provider        PaymentProvider
   externalEventId String          @map("external_event_id")
-
-  /// Toàn bộ payload thô, giữ nguyên để đối soát và điều tra sau này.
-  payload   Json
-  /// Chữ ký HMAC đã verify chưa. Chưa verify thì KHÔNG được đụng vào tiền.
-  verified  Boolean  @default(false)
-  processedAt DateTime? @map("processed_at") @db.Timestamptz(3)
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  payload         Json
+  verified        Boolean         @default(false)
+  processedAt     DateTime?       @map("processed_at") @db.Timestamptz(3)
+  createdAt       DateTime        @default(now()) @db.Timestamptz(3)
 
   @@unique([provider, externalEventId])
   @@index([paymentId])
@@ -996,19 +710,16 @@ enum RefundStatus {
 }
 
 model Refund {
-  id        String  @id @default(cuid())
-  paymentId String  @map("payment_id")
-  payment   Payment @relation(fields: [paymentId], references: [id])
-
-  amount Int
-  reason String
-  status RefundStatus @default(PENDING)
-
-  /// Ai bấm hoàn tiền. Null = hệ thống tự hoàn (huỷ trong hạn miễn phí).
-  requestedBy String?   @map("requested_by")
-  approvedBy  String?   @map("approved_by")
-  refundedAt  DateTime? @map("refunded_at") @db.Timestamptz(3)
-  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  id          String       @id @default(cuid())
+  paymentId   String       @map("payment_id")
+  payment     Payment      @relation(fields: [paymentId], references: [id])
+  amount      Int
+  reason      String
+  status      RefundStatus @default(PENDING)
+  requestedBy String?      @map("requested_by")
+  approvedBy  String?      @map("approved_by")
+  refundedAt  DateTime?    @map("refunded_at") @db.Timestamptz(3)
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
 
   @@index([paymentId])
   @@index([status, createdAt])
@@ -1016,34 +727,28 @@ model Refund {
 }
 
 enum EarningStatus {
-  PENDING // chờ hết hạn huỷ
-  AVAILABLE // đủ điều kiện chi trả
+  PENDING
+  AVAILABLE
   PAID
-  REVERSED // booking bị huỷ/hoàn tiền sau khi đã ghi nhận
+  REVERSED
 }
 
-/// Chia tiền giữa nền tảng và chủ sân, ghi tại thời điểm thanh toán thành công.
-/// Tách bảng riêng thay vì tính lại từ `Booking` mỗi lần: tỉ lệ hoa hồng đổi
-/// được theo thời gian, và báo cáo tháng trước phải giữ nguyên con số cũ.
 model OwnerEarning {
-  id        String  @id @default(cuid())
-  bookingId String  @unique @map("booking_id")
-  booking   Booking @relation(fields: [bookingId], references: [id])
-  venueId   String  @map("venue_id")
-  venue     Venue   @relation(fields: [venueId], references: [id])
-
-  grossAmount    Int     @map("gross_amount")
-  commissionRate Decimal @map("commission_rate") @db.Decimal(5, 2)
-  commissionAmount Int   @map("commission_amount")
-  netAmount      Int     @map("net_amount")
-
-  status    EarningStatus @default(PENDING)
-  payoutId  String?       @map("payout_id")
-  payout    Payout?       @relation(fields: [payoutId], references: [id])
-
-  availableAt DateTime? @map("available_at") @db.Timestamptz(3)
-  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  id               String        @id @default(cuid())
+  bookingId        String        @unique @map("booking_id")
+  booking          Booking       @relation(fields: [bookingId], references: [id])
+  venueId          String        @map("venue_id")
+  venue            Venue         @relation(fields: [venueId], references: [id])
+  grossAmount      Int           @map("gross_amount")
+  commissionRate   Decimal       @map("commission_rate") @db.Decimal(5, 2)
+  commissionAmount Int           @map("commission_amount")
+  netAmount        Int           @map("net_amount")
+  status           EarningStatus @default(PENDING)
+  payoutId         String?       @map("payout_id")
+  payout           Payout?       @relation(fields: [payoutId], references: [id])
+  availableAt      DateTime?     @map("available_at") @db.Timestamptz(3)
+  createdAt        DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime      @updatedAt @db.Timestamptz(3)
 
   @@index([venueId, status])
   @@index([payoutId])
@@ -1057,69 +762,53 @@ enum PayoutStatus {
   REJECTED
 }
 
-/// Chi trả tiền cho chủ sân. Chỉ `OWNER` xin được, chỉ `SUPER_ADMIN` duyệt được
-/// (`payout:approve`) — đây là tiền rời khỏi hệ thống.
 model Payout {
-  id      String @id @default(cuid())
-  venueId String @map("venue_id")
-  venue   Venue  @relation(fields: [venueId], references: [id])
-
-  amount Int
-  status PayoutStatus @default(REQUESTED)
-
-  /// Chép lại tài khoản ngân hàng tại thời điểm chi trả: chủ sân đổi số tài
-  /// khoản sau đó thì lệnh chi cũ phải giữ nguyên nơi tiền đã đi.
-  bankName          String  @map("bank_name")
-  bankAccountNumber String  @map("bank_account_number")
-  bankAccountName   String  @map("bank_account_name")
-
-  requestedBy String    @map("requested_by")
-  approvedBy  String?   @map("approved_by")
-  paidAt      DateTime? @map("paid_at") @db.Timestamptz(3)
-  note        String?
-  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
-
-  earnings OwnerEarning[]
+  id                String         @id @default(cuid())
+  venueId           String         @map("venue_id")
+  venue             Venue          @relation(fields: [venueId], references: [id])
+  amount            Int
+  status            PayoutStatus   @default(REQUESTED)
+  bankName          String         @map("bank_name")
+  bankAccountNumber String         @map("bank_account_number")
+  bankAccountName   String         @map("bank_account_name")
+  requestedBy       String         @map("requested_by")
+  approvedBy        String?        @map("approved_by")
+  paidAt            DateTime?      @map("paid_at") @db.Timestamptz(3)
+  note              String?
+  createdAt         DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime       @updatedAt @db.Timestamptz(3)
+  earnings          OwnerEarning[]
 
   @@index([venueId, status])
   @@map("payouts")
 }
 
-// ---------- Còn lại ----------
-
 model Review {
-  id        String  @id @default(cuid())
-  venueId   String  @map("venue_id")
-  venue     Venue   @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  bookingId String  @unique @map("booking_id")
-  booking   Booking @relation(fields: [bookingId], references: [id])
-  userId    String  @map("user_id")
-  user      User    @relation(fields: [userId], references: [id])
-
-  rating  Int // 1–5
-  comment String?
-
-  /// Chủ sân trả lời công khai.
-  ownerReply   String?   @map("owner_reply")
+  id             String    @id @default(cuid())
+  venueId        String    @map("venue_id")
+  venue          Venue     @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  bookingId      String    @unique @map("booking_id")
+  booking        Booking   @relation(fields: [bookingId], references: [id])
+  userId         String    @map("user_id")
+  user           User      @relation(fields: [userId], references: [id])
+  rating         Int
+  comment        String?
+  ownerReply     String?   @map("owner_reply")
   ownerRepliedAt DateTime? @map("owner_replied_at") @db.Timestamptz(3)
-
-  /// Quản trị ẩn đánh giá vi phạm. Ẩn chứ không xoá — cần giữ để đối chiếu.
-  isHidden  Boolean  @default(false) @map("is_hidden")
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+  isHidden       Boolean   @default(false) @map("is_hidden")
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(3)
 
   @@index([venueId, isHidden, createdAt])
   @@map("reviews")
 }
 
 model Favorite {
-  id      String @id @default(cuid())
-  userId  String @map("user_id")
-  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  venueId String @map("venue_id")
-  venue   Venue  @relation(fields: [venueId], references: [id], onDelete: Cascade)
-
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  venueId   String   @map("venue_id")
+  venue     Venue    @relation(fields: [venueId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@unique([userId, venueId])
@@ -1132,30 +821,24 @@ enum DisputeStatus {
   REJECTED
 }
 
-/// Khiếu nại. Bản cũ nhét vào `Booking` nên không truy được lịch sử xử lý.
 model Dispute {
-  id        String  @id @default(cuid())
-  bookingId String  @map("booking_id")
-  booking   Booking @relation(fields: [bookingId], references: [id])
-  userId    String  @map("user_id")
-
+  id          String        @id @default(cuid())
+  bookingId   String        @map("booking_id")
+  booking     Booking       @relation(fields: [bookingId], references: [id])
+  userId      String        @map("user_id")
   reason      String
   description String?
   status      DisputeStatus @default(OPEN)
-
-  resolvedBy   String?   @map("resolved_by")
-  resolution   String?
-  resolvedAt   DateTime? @map("resolved_at") @db.Timestamptz(3)
-  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  resolvedBy  String?       @map("resolved_by")
+  resolution  String?
+  resolvedAt  DateTime?     @map("resolved_at") @db.Timestamptz(3)
+  createdAt   DateTime      @default(now()) @db.Timestamptz(3)
 
   @@index([status, createdAt])
   @@index([bookingId])
   @@map("disputes")
 }
 
-/// MỘT bảng key-value thay cho năm bảng cấu hình của bản cũ: `SystemSetting`,
-/// `FeatureFlag`, `AiFeatureFlag`, `RevenueStreamFlag`, `AppVersionConfig`.
-/// Năm bảng làm cùng một việc là năm chỗ phải nhớ khi thêm một tuỳ chọn.
 model Setting {
   key         String   @id
   value       Json
