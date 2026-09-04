@@ -1,0 +1,74 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 940,
+      "h": 1180,
+      "title": "Hệ thiết kế",
+      "print": "flow"
+    },
+    {
+      "file": "TimSan.dc.html",
+      "x": 1030,
+      "y": 0,
+      "w": 1440,
+      "h": 980,
+      "title": "Tìm sân · desktop 1440"
+    },
+    {
+      "file": "DatSan.dc.html",
+      "x": 2560,
+      "y": 0,
+      "w": 1440,
+      "h": 980,
+      "title": "Chi tiết sân + chốt giờ · desktop"
+    },
+    {
+      "file": "LichSan.dc.html",
+      "x": 1030,
+      "y": 1300,
+      "w": 1440,
+      "h": 900,
+      "title": "Lịch sân (chủ sân) · desktop"
+    },
+    {
+      "file": "Tablet.dc.html",
+      "x": 2560,
+      "y": 1300,
+      "w": 990,
+      "h": 1180,
+      "title": "Máy tính bảng 834 · quầy lễ tân",
+      "print": "flow"
+    },
+    {
+      "file": "Mobile.dc.html",
+      "x": -1450,
+      "y": 1300,
+      "w": 1330,
+      "h": 1100,
+      "title": "Điện thoại 390 · ba màn chính",
+      "print": "flow"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "brief",
+      "x": 0,
+      "y": -190,
+      "w": 620,
+      "text": "ChốtSân — thiết kế lại toàn bộ giao diện.\nƯu tiên: nhìn vào biết dùng ngay, không giấu gì sau menu, không hoa mĩ.\nBắt đầu từ artboard \"Hệ thiết kế\" bên trái — năm luật ở đó chi phối mọi màn còn lại."
+    },
+    {
+      "id": "resp",
+      "x": -1450,
+      "y": 2470,
+      "w": 520,
+      "text": "Ba khổ màn KHÔNG phải phóng to thu nhỏ của nhau. Mỗi khổ có một chỗ đổi hẳn cách bày — ghi rõ trong từng artboard."
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  }
+}

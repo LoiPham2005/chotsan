@@ -1,0 +1,182 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Be Vietnam Pro', system-ui, sans-serif; color: #0F172A; }
+    a { color: #047857; } a:hover { color: #065f46; }
+    .sec { font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: #94A3B8; }
+    .lbl { font-size: 12px; color: #64748B; }
+    .rule { font-size: 13px; line-height: 1.55; color: #475569; }
+  </style>
+</helmet>
+
+<div style="width: 940px; box-sizing: border-box; background: #FFFFFF; padding: 40px 44px; display: flex; flex-direction: column; gap: 34px;">
+
+  <div style="display: flex; align-items: center; gap: 14px;">
+    <svg width="52" height="52" viewBox="0 0 100 100" role="img" aria-label="ChốtSân">
+      <rect width="100" height="100" rx="24" fill="#10B981"/>
+      <rect x="14" y="35" width="72" height="30" rx="4" fill="none" stroke="#ffffff" stroke-width="4"/>
+      <path d="M50 35 V42 M50 58 V65" stroke="#ffffff" stroke-width="4" stroke-linecap="round"/>
+      <path d="M45 43 L59 50 L45 57 Z" fill="#ffffff"/>
+    </svg>
+    <div style="display: flex; flex-direction: column; gap: 2px;">
+      <div style="font-size: 27px; font-weight: 800; letter-spacing: -0.02em;">ChốtSân</div>
+      <div style="font-size: 13px; color: #64748B;">Hệ thiết kế · đơn giản, tự hiểu, không giấu gì</div>
+    </div>
+  </div>
+
+  <div>
+    <div class="sec" style="margin-bottom: 12px;">Năm luật chi phối mọi màn</div>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
+      <div style="border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 16px;">
+        <div style="font-weight: 700; font-size: 14px; margin-bottom: 4px;">1 · Mỗi màn một hành động chính</div>
+        <div class="rule">Đúng một nút đặc màu xanh. Mọi nút khác là viền hoặc chữ. Hai nút đặc cạnh nhau là bắt người dùng dừng lại suy nghĩ.</div>
+      </div>
+      <div style="border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 16px;">
+        <div style="font-weight: 700; font-size: 14px; margin-bottom: 4px;">2 · Không giấu sau dấu ba chấm</div>
+        <div class="rule">Việc làm hằng ngày phải nhìn thấy ngay. Menu ⋯ chỉ chứa việc hiếm và việc nguy hiểm (xoá, chuyển chủ).</div>
+      </div>
+      <div style="border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 16px;">
+        <div style="font-weight: 700; font-size: 14px; margin-bottom: 4px;">3 · Giá hiện sẵn, không phải bấm mới biết</div>
+        <div class="rule">Mỗi ô giờ mang luôn giá của nó. Người ta chọn sân bằng giá — bắt bấm từng ô để dò là bắt người làm việc của máy.</div>
+      </div>
+      <div style="border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 16px;">
+        <div style="font-weight: 700; font-size: 14px; margin-bottom: 4px;">4 · Trạng thái nói bằng cả màu lẫn chữ</div>
+        <div class="rule">Khoảng 8% nam giới khó phân biệt đỏ–xanh. Chấm màu luôn đi kèm nhãn chữ, không bao giờ đứng một mình.</div>
+      </div>
+      <div style="border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 16px; grid-column: span 2;">
+        <div style="font-weight: 700; font-size: 14px; margin-bottom: 4px;">5 · Ô bấm tối thiểu 44px, kể cả trên desktop</div>
+        <div class="rule">Chủ sân thao tác trên máy tính bảng ở quầy, một tay còn cầm điện thoại. Nút 32px là nút bấm trượt.</div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="sec" style="margin-bottom: 12px;">Màu — mỗi màu một việc, không dùng để trang trí</div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+      <div style="width: 132px;">
+        <div style="height: 56px; background: #10B981; border-radius: 8px;"></div>
+        <div style="font-weight: 700; font-size: 13px; margin-top: 6px;">#10B981</div>
+        <div class="lbl">Hành động chính, còn trống</div>
+      </div>
+      <div style="width: 132px;">
+        <div style="height: 56px; background: #F97316; border-radius: 8px;"></div>
+        <div style="font-weight: 700; font-size: 13px; margin-top: 6px;">#F97316</div>
+        <div class="lbl">CHỈ dùng cho giờ vàng</div>
+      </div>
+      <div style="width: 132px;">
+        <div style="height: 56px; background: #EF4444; border-radius: 8px;"></div>
+        <div style="font-weight: 700; font-size: 13px; margin-top: 6px;">#EF4444</div>
+        <div class="lbl">Huỷ, lỗi, hết chỗ</div>
+      </div>
+      <div style="width: 132px;">
+        <div style="height: 56px; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px;"></div>
+        <div style="font-weight: 700; font-size: 13px; margin-top: 6px;">#F8FAFC</div>
+        <div class="lbl">Nền phụ, ô đã kín</div>
+      </div>
+      <div style="width: 132px;">
+        <div style="height: 56px; background: #0F172A; border-radius: 8px;"></div>
+        <div style="font-weight: 700; font-size: 13px; margin-top: 6px;">#0F172A</div>
+        <div class="lbl">Chữ tiêu đề</div>
+      </div>
+      <div style="width: 132px;">
+        <div style="height: 56px; background: #475569; border-radius: 8px;"></div>
+        <div style="font-weight: 700; font-size: 13px; margin-top: 6px;">#475569</div>
+        <div class="lbl">Chữ nội dung</div>
+      </div>
+    </div>
+    <div class="rule" style="margin-top: 10px; background: #FFF7ED; border-left: 3px solid #F97316; padding: 10px 14px;">
+      <strong>Cam là màu đắt nhất trong hệ này.</strong> Nó chỉ nói một điều: <em>khung giờ vàng, giá cao hơn</em>. Dùng nó cho nút bấm hay biểu tượng là làm hỏng tín hiệu duy nhất người dùng đã học được.
+    </div>
+  </div>
+
+  <div>
+    <div class="sec" style="margin-bottom: 12px;">Chữ — Be Vietnam Pro, dựng riêng cho tiếng Việt có dấu</div>
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="display: flex; align-items: baseline; gap: 16px;"><div style="font-size: 30px; font-weight: 800; letter-spacing: -0.02em;">Sân cầu lông Quận 7</div><div class="lbl">30 / 800 · tiêu đề trang</div></div>
+      <div style="display: flex; align-items: baseline; gap: 16px;"><div style="font-size: 19px; font-weight: 700;">Chọn khung giờ</div><div class="lbl">19 / 700 · tiêu đề khối</div></div>
+      <div style="display: flex; align-items: baseline; gap: 16px;"><div style="font-size: 15px; font-weight: 400; color: #475569;">Giá đã gồm thuế, chưa gồm phí thuê vợt.</div><div class="lbl">15 / 400 · nội dung</div></div>
+      <div style="display: flex; align-items: baseline; gap: 16px;"><div style="font-size: 13px; font-weight: 600; color: #64748B;">CÒN 2 SÂN TRỐNG</div><div class="lbl">13 / 600 · nhãn</div></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="sec" style="margin-bottom: 12px;">Nút — cao 44px, chữ nói rõ việc sẽ xảy ra</div>
+    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+      <div style="height: 44px; padding: 0 22px; background: #10B981; color: #fff; border-radius: 8px; display: flex; align-items: center; font-weight: 700; font-size: 15px;">Chốt sân · 180.000đ</div>
+      <div style="height: 44px; padding: 0 22px; background: #fff; color: #0F172A; border: 1.5px solid #CBD5E1; border-radius: 8px; display: flex; align-items: center; font-weight: 600; font-size: 15px;">Chọn lại giờ</div>
+      <div style="height: 44px; padding: 0 22px; background: #fff; color: #DC2626; border: 1.5px solid #FCA5A5; border-radius: 8px; display: flex; align-items: center; font-weight: 600; font-size: 15px;">Huỷ đặt sân</div>
+      <div style="height: 44px; padding: 0 22px; background: #E2E8F0; color: #94A3B8; border-radius: 8px; display: flex; align-items: center; font-weight: 700; font-size: 15px;">Chọn giờ trước</div>
+    </div>
+    <div class="rule" style="margin-top: 10px;">
+      Nút chính <strong>mang theo số tiền</strong>. “Chốt sân · 180.000đ” trả lời trước câu hỏi ai cũng hỏi trước khi bấm. Nút mờ nói rõ <em>cần làm gì để bấm được</em>, không chỉ đơ ra.
+    </div>
+  </div>
+
+  <div>
+    <div class="sec" style="margin-bottom: 12px;">Ô khung giờ — thành phần quan trọng nhất của sản phẩm</div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+      <div style="width: 118px; border: 1.5px solid #A7F3D0; background: #ECFDF5; border-radius: 8px; padding: 10px 12px;">
+        <div style="font-weight: 700; font-size: 15px;">17:00</div>
+        <div style="font-size: 13px; color: #047857; font-weight: 600;">120.000đ</div>
+        <div style="font-size: 11px; color: #059669; margin-top: 2px;">Còn trống</div>
+      </div>
+      <div style="width: 118px; border: 1.5px solid #FDBA74; background: #FFF7ED; border-radius: 8px; padding: 10px 12px;">
+        <div style="font-weight: 700; font-size: 15px;">18:00</div>
+        <div style="font-size: 13px; color: #C2410C; font-weight: 600;">180.000đ</div>
+        <div style="font-size: 11px; color: #EA580C; margin-top: 2px;">Giờ vàng</div>
+      </div>
+      <div style="width: 118px; border: 1.5px solid #10B981; background: #10B981; border-radius: 8px; padding: 10px 12px;">
+        <div style="font-weight: 700; font-size: 15px; color: #fff;">19:00</div>
+        <div style="font-size: 13px; color: #fff; font-weight: 600;">180.000đ</div>
+        <div style="font-size: 11px; color: #D1FAE5; margin-top: 2px;">✓ Đang chọn</div>
+      </div>
+      <div style="width: 118px; border: 1.5px solid #E2E8F0; background: #F8FAFC; border-radius: 8px; padding: 10px 12px;">
+        <div style="font-weight: 700; font-size: 15px; color: #94A3B8;">20:00</div>
+        <div style="font-size: 13px; color: #94A3B8; font-weight: 600;">180.000đ</div>
+        <div style="font-size: 11px; color: #94A3B8; margin-top: 2px;">Đã có người</div>
+      </div>
+      <div style="width: 118px; border: 1.5px dashed #CBD5E1; background: #fff; border-radius: 8px; padding: 10px 12px;">
+        <div style="font-weight: 700; font-size: 15px; color: #94A3B8;">21:00</div>
+        <div style="font-size: 13px; color: #94A3B8; font-weight: 600;">—</div>
+        <div style="font-size: 11px; color: #94A3B8; margin-top: 2px;">Đóng cửa</div>
+      </div>
+    </div>
+    <div class="rule" style="margin-top: 10px;">
+      Năm trạng thái, <strong>mỗi trạng thái khác nhau ở ba chỗ</strong>: màu nền, kiểu viền, và dòng chữ. In ra đen trắng vẫn phân biệt được — đó là phép thử đúng.
+    </div>
+  </div>
+
+  <div>
+    <div class="sec" style="margin-bottom: 12px;">Ô nhập và thông báo</div>
+    <div style="display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap;">
+      <div style="width: 250px;">
+        <div style="font-size: 13px; font-weight: 600; margin-bottom: 5px;">Số điện thoại</div>
+        <div style="height: 44px; border: 1.5px solid #CBD5E1; border-radius: 8px; display: flex; align-items: center; padding: 0 13px; color: #94A3B8; font-size: 15px;">090 123 4567</div>
+      </div>
+      <div style="width: 250px;">
+        <div style="font-size: 13px; font-weight: 600; margin-bottom: 5px;">Số điện thoại</div>
+        <div style="height: 44px; border: 1.5px solid #EF4444; border-radius: 8px; display: flex; align-items: center; padding: 0 13px; color: #0F172A; font-size: 15px;">090 12</div>
+        <div style="font-size: 12px; color: #DC2626; margin-top: 5px;">Thiếu 5 số. Số Việt Nam có 10 chữ số.</div>
+      </div>
+      <div style="width: 320px; background: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 10px; padding: 12px 14px;">
+        <div style="font-weight: 700; font-size: 14px; color: #065F46;">Đã giữ chỗ cho bạn trong 09:42</div>
+        <div style="font-size: 13px; color: #047857; margin-top: 3px; line-height: 1.5;">Hết giờ thì khung này mở lại cho người khác.</div>
+      </div>
+    </div>
+    <div class="rule" style="margin-top: 10px;">
+      Báo lỗi phải nói <strong>sai ở đâu và sửa thế nào</strong>. “Số điện thoại không hợp lệ” là đổ lỗi; “Thiếu 5 số” là chỉ đường.
+    </div>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

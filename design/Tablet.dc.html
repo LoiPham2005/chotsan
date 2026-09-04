@@ -1,0 +1,146 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Be Vietnam Pro', system-ui, sans-serif; color: #0F172A; }
+    a { color: #047857; } a:hover { color: #065f46; }
+    .cell { height: 60px; border-radius: 7px; display: flex; flex-direction: column; justify-content: center; padding: 0 8px; overflow: hidden; }
+    .free { border: 1.5px dashed #CBD5E1; background: #fff; }
+    .bk { background: #ECFDF5; border: 1.5px solid #6EE7B7; }
+    .gold { background: #FFF7ED; border: 1.5px solid #FDBA74; }
+    .nm { font-size: 12px; font-weight: 700; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sub { font-size: 10px; color: #64748B; margin-top: 1px; }
+    .hr { font-size: 11px; font-weight: 700; color: #94A3B8; text-align: center; }
+  </style>
+</helmet>
+
+<div style="width: 990px; box-sizing: border-box; background: #F1F5F9; padding: 34px; display: flex; flex-direction: column; gap: 18px;">
+
+  <div>
+    <div style="font-size: 22px; font-weight: 800;">Máy tính bảng · 834px</div>
+    <div style="font-size: 14px; color: #475569; margin-top: 4px; line-height: 1.55; max-width: 700px;">
+      Đây là thiết bị <strong>quan trọng nhất</strong> của khu quản lý sân — nhân viên đứng quầy dùng iPad cả ngày, một tay bấm. Không phải bản desktop bị bóp lại, cũng không phải bản điện thoại phóng to.
+    </div>
+  </div>
+
+  <div style="width: 834px; height: 1050px; background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 20px; overflow: hidden; display: flex; flex-direction: column;">
+
+    <div style="background: #0F172A; padding: 13px 18px; display: flex; align-items: center; gap: 14px; flex-shrink: 0;">
+      <svg width="30" height="30" viewBox="0 0 100 100"><rect width="100" height="100" rx="24" fill="#10B981"/><rect x="14" y="35" width="72" height="30" rx="4" fill="none" stroke="#fff" stroke-width="5"/><path d="M50 35 V42 M50 58 V65" stroke="#fff" stroke-width="5" stroke-linecap="round"/><path d="M45 43 L59 50 L45 57 Z" fill="#fff"/></svg>
+      <div style="color: #fff; font-size: 16px; font-weight: 800;">Sân Sunrise</div>
+      <div style="margin-left: auto; display: flex; gap: 7px;">
+        <div style="height: 40px; padding: 0 15px; background: #10B981; color: #fff; border-radius: 8px; display: flex; align-items: center; font-size: 14px; font-weight: 700;">Lịch sân</div>
+        <div style="height: 40px; padding: 0 15px; color: #94A3B8; border-radius: 8px; display: flex; align-items: center; font-size: 14px; font-weight: 600;">Danh sách đặt</div>
+      </div>
+    </div>
+
+    <div style="background: #fff; border-bottom: 1px solid #E2E8F0; padding: 14px 18px; display: flex; align-items: center; gap: 12px; flex-shrink: 0;">
+      <div style="display: flex; align-items: center; gap: 7px;">
+        <div style="width: 46px; height: 46px; border: 1.5px solid #CBD5E1; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: #fff;">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2.4"><path d="M15 5l-7 7 7 7"/></svg>
+        </div>
+        <div style="height: 46px; padding: 0 18px; border: 1.5px solid #CBD5E1; border-radius: 8px; display: flex; flex-direction: column; justify-content: center; background: #fff;">
+          <div style="font-size: 15px; font-weight: 800; line-height: 1.1;">Hôm nay</div>
+          <div style="font-size: 11px; color: #64748B;">Thứ 5, 4/9</div>
+        </div>
+        <div style="width: 46px; height: 46px; border: 1.5px solid #CBD5E1; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: #fff;">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2.4"><path d="M9 5l7 7-7 7"/></svg>
+        </div>
+      </div>
+      <div style="height: 46px; padding: 0 20px; background: #10B981; color: #fff; border-radius: 8px; display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; margin-left: auto;">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6"><path d="M12 5v14M5 12h14"/></svg>
+        Đặt tại quầy
+      </div>
+    </div>
+
+    <div style="flex-grow: 1; padding: 16px 18px; overflow: hidden;">
+      <div style="background: #fff; border: 1px solid #E2E8F0; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 7px;">
+
+        <div style="display: grid; grid-template-columns: 76px repeat(7, minmax(0, 1fr)); gap: 6px; align-items: center;">
+          <div></div>
+          <div class="hr">15:00</div><div class="hr">16:00</div>
+          <div class="hr" style="color: #EA580C;">17:00</div><div class="hr" style="color: #EA580C;">18:00</div>
+          <div class="hr" style="color: #EA580C;">19:00</div><div class="hr" style="color: #EA580C;">20:00</div><div class="hr" style="color: #EA580C;">21:00</div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 76px repeat(7, minmax(0, 1fr)); gap: 6px; align-items: center;">
+          <div style="font-size: 14px; font-weight: 700;">Sân 1</div>
+          <div class="cell bk"><div class="nm">Trần B</div><div class="sub">Đã trả</div></div>
+          <div class="cell free"></div>
+          <div class="cell bk"><div class="nm">Lê C</div><div class="sub">Đã trả</div></div>
+          <div class="cell gold"><div class="nm">Phạm D</div><div class="sub" style="color: #C2410C; font-weight: 600;">Chờ trả</div></div>
+          <div class="cell gold"><div class="nm">Phạm D</div><div class="sub" style="color: #C2410C; font-weight: 600;">Chờ trả</div></div>
+          <div class="cell free"></div>
+          <div class="cell gold"><div class="nm">Vũ F</div><div class="sub">Đã trả</div></div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 76px repeat(7, minmax(0, 1fr)); gap: 6px; align-items: center;">
+          <div style="font-size: 14px; font-weight: 700;">Sân 2</div>
+          <div class="cell free"></div>
+          <div class="cell bk"><div class="nm">Bùi H</div><div class="sub">Tại quầy</div></div>
+          <div class="cell gold"><div class="nm">Ngô I</div><div class="sub">Đã trả</div></div>
+          <div class="cell gold"><div class="nm">Ngô I</div><div class="sub">Đã trả</div></div>
+          <div class="cell gold"><div class="nm">Đỗ K</div><div class="sub">Đã trả</div></div>
+          <div class="cell gold"><div class="nm">Đỗ K</div><div class="sub">Đã trả</div></div>
+          <div class="cell free"></div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 76px repeat(7, minmax(0, 1fr)); gap: 6px; align-items: center;">
+          <div style="font-size: 14px; font-weight: 700;">Sân 3</div>
+          <div class="cell free"></div>
+          <div class="cell bk"><div class="nm">Chu M</div><div class="sub">Đã trả</div></div>
+          <div class="cell free"></div>
+          <div class="cell free"></div>
+          <div class="cell gold"><div class="nm">Lý N</div><div class="sub">Đã trả</div></div>
+          <div class="cell gold"><div class="nm">Lý N</div><div class="sub">Đã trả</div></div>
+          <div class="cell free"></div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 76px repeat(7, minmax(0, 1fr)); gap: 6px; align-items: center;">
+          <div style="font-size: 14px; font-weight: 700;">Sân 4</div>
+          <div class="cell" style="background: #F1F5F9; border: 1.5px solid #E2E8F0;"><div class="nm" style="color: #64748B;">Bảo trì</div></div>
+          <div class="cell free"></div>
+          <div class="cell gold"><div class="nm">Tạ P</div><div class="sub">Đã trả</div></div>
+          <div class="cell gold"><div class="nm">Tạ P</div><div class="sub">Đã trả</div></div>
+          <div class="cell free"></div>
+          <div class="cell gold"><div class="nm">Hồ Q</div><div class="sub">Đã trả</div></div>
+          <div class="cell gold"><div class="nm">Hồ Q</div><div class="sub">Đã trả</div></div>
+        </div>
+
+      </div>
+
+      <div style="display: flex; gap: 10px; margin-top: 14px;">
+        <div style="flex-grow: 1; background: #fff; border: 1px solid #E2E8F0; border-radius: 10px; padding: 13px 15px;">
+          <div style="font-size: 11px; color: #94A3B8; font-weight: 700;">LẤP ĐẦY</div>
+          <div style="font-size: 21px; font-weight: 800; margin-top: 2px;">62%</div>
+        </div>
+        <div style="flex-grow: 1; background: #fff; border: 1px solid #E2E8F0; border-radius: 10px; padding: 13px 15px;">
+          <div style="font-size: 11px; color: #94A3B8; font-weight: 700;">DOANH THU</div>
+          <div style="font-size: 21px; font-weight: 800; margin-top: 2px;">2.840.000đ</div>
+        </div>
+        <div style="flex-grow: 1; background: #FFF7ED; border: 1px solid #FDBA74; border-radius: 10px; padding: 13px 15px;">
+          <div style="font-size: 11px; color: #C2410C; font-weight: 700;">CHỜ THANH TOÁN</div>
+          <div style="font-size: 21px; font-weight: 800; margin-top: 2px; color: #C2410C;">2 lượt</div>
+        </div>
+      </div>
+
+      <div style="background: #fff; border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 16px; margin-top: 12px; font-size: 12px; line-height: 1.65; color: #475569;">
+        <strong style="color: #0F172A;">Ba thứ đổi so với desktop:</strong>
+        điều hướng trái biến thành <strong>hai tab trên đầu</strong> — quầy chỉ dùng hai màn, không cần cả menu ·
+        lưới thu từ 12 cột giờ xuống <strong>7 cột quanh giờ cao điểm</strong>, vuốt ngang để xem giờ sáng ·
+        ô cao <strong>60px</strong> thay vì 54px, vì đây là màn hình cảm ứng và người bấm đang đứng.
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
