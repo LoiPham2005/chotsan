@@ -297,3 +297,32 @@ describe("quote — báo giá trước khi giữ chỗ", () => {
     expect(quote).toBeNull();
   });
 });
+
+describe("excludeBookingId — dùng khi đổi giờ", () => {
+  it("loại lượt đặt được chỉ định ra khỏi truy vấn, không lọc sau khi đã đọc", async () => {
+    // Lọc trong bộ nhớ thì `summary` và giá vẫn đúng, nhưng đây là chỗ dễ quên
+    // một nhánh; loại ngay trong câu truy vấn thì không có nhánh nào để quên.
+    const db = createDb();
+    await new AvailabilityService(db).forDay("v1", DATE, {
+      now: NOT_TODAY,
+      excludeBookingId: "b1",
+    });
+
+    const [{ where }] = (
+      db.booking.findMany as unknown as { mock: { calls: [{ where: { id?: { not: string } } }][] } }
+    ).mock.calls[0]!;
+
+    expect(where.id).toEqual({ not: "b1" });
+  });
+
+  it("không truyền thì KHÔNG thêm điều kiện — lịch bình thường không giấu gì", async () => {
+    const db = createDb();
+    await new AvailabilityService(db).forDay("v1", DATE, { now: NOT_TODAY });
+
+    const [{ where }] = (
+      db.booking.findMany as unknown as { mock: { calls: [{ where: { id?: unknown } }][] } }
+    ).mock.calls[0]!;
+
+    expect(where.id).toBeUndefined();
+  });
+});

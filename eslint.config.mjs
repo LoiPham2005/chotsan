@@ -71,9 +71,9 @@ export default tseslint.config(
     },
   },
 
-  // Script chạy bằng Node (seed) được phép log thoải mái.
+  // Script chạy bằng Node (seed, kiểm tra tay) được phép log thoải mái.
   {
-    files: ["prisma/**/*.ts"],
+    files: ["prisma/**/*.ts", "scripts/**/*.ts"],
     rules: { "no-console": "off" },
   },
 

@@ -401,3 +401,179 @@ export class PhoneOtpThrottledError extends DomainError {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Đặt sân
+// ---------------------------------------------------------------------------
+
+/**
+ * Khung giờ vừa bị người khác lấy mất.
+ *
+ * Ném khi ràng buộc `EXCLUDE USING gist` ở tầng database từ chối — nghĩa là hai
+ * người bấm gần như cùng lúc và người kia nhanh hơn vài mili giây. Đây là hành
+ * vi ĐÚNG, không phải lỗi hệ thống: thông điệp phải nói rõ để khách chọn lại
+ * ngay chứ không nghĩ là app hỏng.
+ */
+export class SlotTakenError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor() {
+    super("Khung giờ này vừa có người đặt mất. Chọn giờ khác giúp bạn nhé.");
+  }
+}
+
+/** Khung giờ không bán được: ngoài giờ mở cửa, đã qua, hoặc sân đang bảo trì. */
+export class SlotUnavailableError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(message = "Khung giờ này không đặt được") {
+    super(message);
+  }
+}
+
+export class BookingNotFoundError extends DomainError {
+  readonly code = "NOT_FOUND" as const;
+  constructor() {
+    super("Không tìm thấy lượt đặt sân");
+  }
+}
+
+/**
+ * Thao tác không hợp lệ với trạng thái hiện tại — huỷ một lượt đã huỷ, check-in
+ * một lượt chưa trả tiền.
+ *
+ * Thông điệp NÓI RÕ trạng thái hiện tại: "Lượt đặt đã bị huỷ" hữu ích hơn hẳn
+ * "Thao tác không hợp lệ", vì nhân viên quầy đang đứng trước mặt khách.
+ */
+export class BookingStateError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+/** Huỷ sau hạn miễn phí. Vẫn huỷ được, nhưng không hoàn tiền. */
+export class CancelWindowPassedError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(readonly freeUntil: Date) {
+    super("Đã quá hạn huỷ miễn phí của sân này");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Thanh toán
+// ---------------------------------------------------------------------------
+
+export class PaymentNotFoundError extends DomainError {
+  readonly code = "NOT_FOUND" as const;
+  constructor() {
+    super("Không tìm thấy giao dịch thanh toán");
+  }
+}
+
+/**
+ * Thao tác không hợp lệ với trạng thái giao dịch — duyệt một giao dịch đã huỷ,
+ * khai báo đã chuyển khoản cho một giao dịch đã thành công.
+ *
+ * Thông điệp nói rõ trạng thái hiện tại, vì chủ sân đọc câu này khi đang cầm
+ * điện thoại đối chiếu với app ngân hàng.
+ */
+export class PaymentStateError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+/**
+ * Duyệt tay một giao dịch của cổng thanh toán.
+ *
+ * Cổng tự báo về bằng webhook; cho phép duyệt tay nghĩa là bất kỳ ai có quyền
+ * `payment:confirm` cũng đánh dấu được "đã trả tiền" cho một lượt chưa trả một
+ * đồng nào. Tiền mặt và chuyển khoản tay thì ngược lại — chỉ có người mới xác
+ * nhận được.
+ */
+export class ManualApprovalNotAllowedError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(provider: string) {
+    super(
+      `Giao dịch qua ${provider} do cổng thanh toán tự xác nhận, không duyệt tay được. ` +
+        "Nếu khách đã trả bằng cách khác, tạo giao dịch tiền mặt hoặc chuyển khoản.",
+    );
+  }
+}
+
+/**
+ * Số tiền cổng báo về khác số tiền của giao dịch.
+ *
+ * KHÔNG tự xác nhận trong trường hợp này dù webhook nói "thành công": chênh
+ * lệch nghĩa là hoặc mã đối soát bị dùng lại, hoặc có người sửa số tiền giữa
+ * đường. Cả hai đều phải có người xem.
+ */
+export class PaymentAmountMismatchError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(
+    readonly expected: number,
+    readonly received: number,
+  ) {
+    super(`Số tiền không khớp: giao dịch ${expected}đ, cổng báo ${received}đ`);
+  }
+}
+
+/** Sân chưa khai tài khoản ngân hàng nên không dựng được mã QR chuyển khoản. */
+export class VenueBankAccountMissingError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor() {
+    super("Sân chưa khai tài khoản ngân hàng nên chưa nhận chuyển khoản được");
+  }
+}
+
+/** Hoàn quá số tiền còn lại của giao dịch. */
+export class RefundAmountError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(readonly remaining: number) {
+    super(`Chỉ còn ${remaining.toLocaleString("vi-VN")}đ có thể hoàn`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cơ sở và sân con
+// ---------------------------------------------------------------------------
+
+export class VenueNotFoundError extends DomainError {
+  readonly code = "NOT_FOUND" as const;
+  constructor() {
+    super("Không tìm thấy cơ sở");
+  }
+}
+
+export class CourtNotFoundError extends DomainError {
+  readonly code = "NOT_FOUND" as const;
+  constructor() {
+    super("Không tìm thấy sân");
+  }
+}
+
+/**
+ * Cấu hình sân sai — giờ mở cửa lệch khung, giá âm, khoảng thời gian ngược.
+ *
+ * Tách khỏi `ForbiddenError` vì đây là lỗi DỮ LIỆU chứ không phải lỗi quyền:
+ * người dùng có quyền làm việc này, chỉ là số liệu nhập vào không dùng được.
+ */
+export class VenueConfigError extends DomainError {
+  readonly code = "VALIDATION_ERROR" as const;
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+/**
+ * Chưa đủ điều kiện mở bán.
+ *
+ * Mang theo danh sách thứ còn thiếu để giao diện chỉ thẳng vào chỗ cần sửa,
+ * thay vì bắt chủ sân đi dò từng màn xem thiếu gì.
+ */
+export class VenueNotReadyError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(readonly missing: string[]) {
+    super(`Chưa mở bán được: sân còn thiếu ${missing.join(", ")}`);
+  }
+}

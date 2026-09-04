@@ -51,6 +51,22 @@ export type JobPayloads = {
    * thêm một dòng.
    */
   "maintenance:purge-expired": Record<string, never>;
+
+  /**
+   * Nhả những chỗ giữ quá 10 phút mà chưa thanh toán. Chạy MỖI PHÚT.
+   *
+   * Đây là job không được phép chết. Không có nó, một người mở trang thanh
+   * toán rồi bỏ đi sẽ khoá khung giờ đẹp nhất vĩnh viễn, và chủ sân nhìn thấy
+   * lịch kín trong khi sân trống.
+   */
+  "booking:expire-holds": Record<string, never>;
+
+  /**
+   * Huỷ giao dịch quá hạn, để lượt đặt mở được giao dịch mới. Chạy mỗi phút.
+   *
+   * KHÔNG đụng giao dịch đang chờ chủ sân duyệt — xem `PaymentService.expirePending`.
+   */
+  "payment:expire-pending": Record<string, never>;
 };
 
 export type JobName = keyof JobPayloads;

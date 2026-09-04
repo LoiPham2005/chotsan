@@ -49,6 +49,18 @@ const schema = z
      * cách rẻ nhất để nhìn thấy hàng đợi mà không phải gõ `redis-cli`.
      */
     WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(3003),
+
+    /**
+     * Nhịp chạy job dọn theo lịch, dạng cron.
+     *
+     * `booking:expire-holds` mặc định MỖI PHÚT. Thưa hơn thì chỗ giữ quá hạn
+     * nằm lại lâu hơn đúng bằng khoảng đó — khách nhìn thấy "đã có người đặt"
+     * cho một khung thật ra đang trống.
+     */
+    CRON_EXPIRE_HOLDS: z.string().default("* * * * *"),
+
+    /** Dọn token/nhật ký cũ. Mặc định 3 giờ sáng, lúc ít người dùng nhất. */
+    CRON_PURGE_EXPIRED: z.string().default("0 3 * * *"),
   })
   .superRefine((value, ctx) => {
     if (value.QUEUE_ENABLED && !value.REDIS_URL) {

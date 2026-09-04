@@ -43,6 +43,7 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:seed:prod": "NODE_ENV=production tsx prisma/seed.ts",
     "db:purge": "tsx --tsconfig tsconfig.scripts.json scripts/purge-expired.ts",
+    "db:check-conflict": "tsx --env-file-if-exists=.env --tsconfig tsconfig.scripts.json scripts/kiem-tra-chong-trung.ts",
     "postinstall": "prisma generate",
     "prepare": "husky || true"
   },

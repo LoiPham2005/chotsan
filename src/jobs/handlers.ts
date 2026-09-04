@@ -7,6 +7,8 @@ import { TokenService } from "@/services/token.service";
 import { VerificationService } from "@/services/verification.service";
 import { AuditService } from "@/services/audit.service";
 import { DeviceService } from "@/services/device.service";
+import { BookingService } from "@/services/booking.service";
+import { PaymentService } from "@/services/payment.service";
 import type { JobHandlers } from "@/jobs/types";
 
 /**
@@ -95,5 +97,24 @@ export const jobHandlers: JobHandlers = {
       auditLogs,
       staleDevices,
     });
+  },
+
+  /**
+   * Nhả chỗ giữ quá hạn.
+   *
+   * Chạy lại được vô hại: `updateMany` chỉ đụng những dòng CÒN đang `HOLDING`
+   * và đã quá hạn, nên chạy hai lần thì lần hai không tìm thấy gì.
+   *
+   * Không log khi số bằng 0 — job này chạy 1.440 lần mỗi ngày, và một dòng log
+   * "đã nhả 0 chỗ" mỗi phút là cách chắc chắn để không ai đọc log nữa.
+   */
+  async "booking:expire-holds"() {
+    const count = await new BookingService(prisma).expireHolds();
+    if (count > 0) logger.info("Đã nhả chỗ giữ quá hạn", { count });
+  },
+
+  async "payment:expire-pending"() {
+    const count = await new PaymentService(prisma).expirePending();
+    if (count > 0) logger.info("Đã huỷ giao dịch quá hạn", { count });
   },
 };

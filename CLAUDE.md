@@ -72,6 +72,7 @@ pnpm db:migrate                 # tạo + áp migration mới (dev)
 pnpm db:studio                  # GUI xem/sửa data — http://localhost:5555
 pnpm db:seed                # dữ liệu mẫu (roles, user demo)
 pnpm db:purge                   # dọn token hết hạn + nhật ký cũ (qua tsconfig.scripts.json)
+pnpm db:check-conflict          # chạy thao tác ĐỒNG THỜI thật trên DB thật: chống trùng chỗ + trùng tiền
 
 pnpm realtime:dev               # WebSocket, tiến trình riêng (cổng 3002)
 pnpm worker:dev                 # job nền, tiến trình riêng — cần REDIS_URL

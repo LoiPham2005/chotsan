@@ -68,6 +68,66 @@ function startHealthServer(queue: Queue): HttpServer {
   return server;
 }
 
+/**
+ * Đăng ký các job chạy theo lịch.
+ *
+ * ---
+ * VÌ SAO DÙNG JOB SCHEDULER CỦA BULLMQ CHỨ KHÔNG PHẢI `setInterval`
+ *
+ * Chạy 3 bản worker thì `setInterval` cho ra BA lượt chạy mỗi phút. Với job
+ * dọn dẹp thì vô hại; với job đụng tiền thì không. Job scheduler dùng Redis
+ * làm điểm chốt: mỗi mốc thời gian chỉ sinh ra ĐÚNG MỘT job, và đúng một
+ * worker nhận nó — không cần khoá phân tán tự viết.
+ *
+ * `upsertJobScheduler` là idempotent theo `id`: mọi bản worker gọi cùng một id
+ * thì kết quả vẫn là một lịch duy nhất. Đổi biểu thức cron rồi deploy lại là
+ * lịch tự cập nhật, không đẻ ra lịch thứ hai.
+ */
+async function registerSchedules(queue: Queue): Promise<void> {
+  const schedules = [
+    { id: "booking-expire-holds", cron: workerEnv.CRON_EXPIRE_HOLDS, name: "booking:expire-holds" },
+    {
+      id: "payment-expire-pending",
+      cron: workerEnv.CRON_EXPIRE_HOLDS,
+      name: "payment:expire-pending",
+    },
+    {
+      id: "maintenance-purge-expired",
+      cron: workerEnv.CRON_PURGE_EXPIRED,
+      name: "maintenance:purge-expired",
+    },
+  ] as const;
+
+  try {
+    for (const schedule of schedules) {
+      await queue.upsertJobScheduler(
+        schedule.id,
+        { pattern: schedule.cron },
+        {
+          name: schedule.name,
+          data: {},
+          /*
+           * Job theo lịch KHÔNG thử lại: mốc tiếp theo tới sau vài giây tới vài
+           * phút nữa và sẽ tự dọn nốt phần còn sót. Thử lại chỉ chồng thêm việc
+           * lên một hệ thống đang có vấn đề.
+           */
+          opts: { attempts: 1, removeOnComplete: 100, removeOnFail: 100 },
+        },
+      );
+    }
+
+    logger.info("Đã đăng ký job theo lịch", {
+      expireHolds: workerEnv.CRON_EXPIRE_HOLDS,
+      purgeExpired: workerEnv.CRON_PURGE_EXPIRED,
+    });
+  } catch (error) {
+    // Không giết tiến trình: worker vẫn xử lý được job thường. Nhưng phải kêu
+    // to — thiếu lịch này thì chỗ giữ quá hạn không bao giờ được nhả, và triệu
+    // chứng (lịch kín trong khi sân trống) không hề trỏ về đây.
+    logger.error("KHÔNG đăng ký được job theo lịch — chỗ giữ quá hạn sẽ không được nhả", error);
+  }
+}
+
 export function startWorker(): WorkerHandle {
   const worker = new Worker(
     "app",
@@ -132,9 +192,10 @@ export function startWorker(): WorkerHandle {
     logger.error("Worker lỗi", error);
   });
 
-  // Hàng đợi chỉ để ĐỌC số liệu cho `/health`, không dùng để đẩy job.
   const queue = new Queue("app", { connection: { url: workerEnv.REDIS_URL } });
   const healthServer = startHealthServer(queue);
+
+  void registerSchedules(queue);
 
   logger.info("Worker đã chạy", {
     concurrency: workerEnv.WORKER_CONCURRENCY,

@@ -142,6 +142,53 @@ một bản sao trong log truy cập của họ — vĩnh viễn.
 **Fix**: vẽ QR ngay trong trình duyệt (`qrcode` → `<canvas>`), xem
 `src/app/security/two-factor-manager.tsx`. Bí mật không đi đâu ngoài đường nó vốn đã đi.
 
+## 10. Prisma 7 + driver adapter: `error.meta.target` KHÔNG còn, tên ràng buộc chỉ nằm trong `meta`
+
+Mọi ví dụ trên mạng (và tài liệu Prisma 6) đều dạy bắt lỗi trùng khoá kiểu này:
+
+```ts
+if (error.code === "P2002" && error.meta.target.includes("email")) { ... }   // ❌ Prisma 7
+if (error.message.includes("ten_rang_buoc")) { ... }                         // ❌ Prisma 7
+```
+
+Hình dạng THẬT của lỗi Prisma 7.9 + `@prisma/adapter-pg`, chép nguyên từ database:
+
+```
+error.code    = "P2002"
+error.message = "Unique constraint failed on the fields: (`booking_id`)"
+error.meta    = {
+  modelName: "Payment",
+  driverAdapterError: { cause: {
+    originalCode: "23505",
+    originalMessage: 'duplicate key value violates unique constraint "ten_rang_buoc_that"',
+    constraint: { fields: ["booking_id"] },
+  } },
+}
+```
+
+Hai điểm chết người:
+
+- **`meta.target` không tồn tại** — điều kiện đọc nó là `undefined.includes(...)` hoặc luôn sai.
+- **TÊN ràng buộc chỉ có trong `meta.driverAdapterError.cause.originalMessage`**, không có trong
+  `error.message`. Dò bằng `message.includes("ten_rang_buoc")` không bao giờ khớp.
+
+Và lỗi **im lặng**: nhánh bắt lỗi không chạy, lỗi bung lên thành 500 — chỉ khi có hai người thao
+tác đúng cùng lúc. Typecheck không thấy, unit test với lỗi tự bịa cũng không thấy, vì lỗi tự bịa
+có đúng hình dạng mà người viết test tưởng tượng ra.
+
+**Fix**: đừng bao giờ tự dò. Dùng `isUniqueViolation(error, "ten_rang_buoc_hoac_ten_cot")` và
+`isExclusionViolation(error, ...)` trong [`src/lib/prisma-errors.ts`](../src/lib/prisma-errors.ts)
+— chúng dò cả `message`, `meta.target` (nếu có) lẫn `meta.driverAdapterError.cause`.
+`prisma-errors.test.ts` giữ các lỗi **chép nguyên từ database thật**, không phải bịa.
+
+⚠️ Ràng buộc `EXCLUDE` (mã Postgres **23P01**, dùng để chống trùng khung giờ đặt sân) thì Prisma
+**không ánh xạ thành mã P2xxx nào cả** — không có `code`, chỉ có `meta.driverAdapterError.cause.
+originalCode = "23P01"`. Đó là lý do có hàm thứ hai.
+
+**Cách phát hiện loại lỗi này**: `pnpm db:check-conflict` — chạy các thao tác đồng thời thật trên
+database thật (tự tạo sân riêng rồi tự xoá). Chính lệnh này đã bắt được hai lỗi mà 440 unit test
+không thấy.
+
 ## Lưu ý chung khi code
 
 - **Ưu tiên `pnpm typecheck`/`pnpm test` qua terminal hơn tin theo IDE** khi vừa đổi
@@ -151,3 +198,5 @@ một bản sao trong log truy cập của họ — vĩnh viễn.
 - **Đóng terminal sau khi override `DATABASE_URL` để test** — xem gotcha #4, #6.
 - **Mọi cột `@unique` không nullable phải có kế hoạch xoá mềm riêng**, không áp dụng chung 1 công
   thức cho mọi cột.
+- **Ràng buộc chạy đua (trùng chỗ, trùng tiền) phải kiểm bằng `pnpm db:check-conflict`**, không
+  chỉ bằng unit test — xem gotcha #10.

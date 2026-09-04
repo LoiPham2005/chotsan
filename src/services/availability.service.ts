@@ -64,7 +64,7 @@ export class AvailabilityService {
   async forDay(
     venueId: string,
     date: Date,
-    options: { now?: Date } = {},
+    options: { now?: Date; excludeBookingId?: string } = {},
   ): Promise<DayAvailability> {
     const now = options.now ?? new Date();
     const weekday = weekdayInVN(date);
@@ -98,6 +98,9 @@ export class AvailabilityService {
           status: { in: [...LIVE_BOOKING_STATUSES] },
           startAt: { lt: dayEnd },
           endAt: { gt: dayStart },
+          // Đổi giờ thì lượt đặt phải được giấu khỏi lịch của chính nó, nếu
+          // không nó tự chặn mình mỗi khi khung mới gối lên khung cũ.
+          ...(options.excludeBookingId ? { id: { not: options.excludeBookingId } } : {}),
         },
         select: { courtId: true, startAt: true, endAt: true },
       }),
@@ -229,8 +232,13 @@ export class AvailabilityService {
     startMinute: number;
     endMinute: number;
     now?: Date;
+    /** Đổi giờ: giấu lượt đặt này khỏi lịch để nó không tự chặn chính mình. */
+    excludeBookingId?: string;
   }): Promise<{ slotCount: number; total: number; slots: SlotCell[] } | null> {
-    const day = await this.forDay(params.venueId, params.date, { now: params.now });
+    const day = await this.forDay(params.venueId, params.date, {
+      now: params.now,
+      excludeBookingId: params.excludeBookingId,
+    });
     if (day.isClosed) return null;
 
     const court = day.courts.find((item) => item.courtId === params.courtId);

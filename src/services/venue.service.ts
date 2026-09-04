@@ -1,0 +1,375 @@
+import type { Prisma, PrismaClient, VenueStatus } from "@prisma/client";
+import { VenueConfigError, VenueNotFoundError, VenueNotReadyError } from "@/lib/errors";
+import { slugify } from "@/lib/format";
+import { prisma } from "@/lib/prisma";
+import { isSlotAligned, MINUTES_PER_DAY, SLOT_MINUTES } from "@/lib/slots";
+
+/**
+ * Cơ sở thể thao — hồ sơ, giờ mở cửa, ảnh, người làm việc.
+ *
+ * ---
+ * GIỜ MỞ CỬA PHẢI THẲNG KHUNG 30 PHÚT
+ *
+ * Toàn hệ thống chạy khung 30 phút. Sân khai mở cửa 06:15 thì `slotRange()` sẽ
+ * sinh ra 06:15, 06:45… — lệch với mọi bảng giá, mọi lưới đặt sân, và không có
+ * gì báo lỗi. Chặn ngay ở đây là chỗ rẻ nhất.
+ */
+
+/** Sắp xếp danh sách sân cho khách — sân đông khách trước. */
+const PUBLIC_ORDER: Prisma.VenueOrderByWithRelationInput[] = [
+  { ratingAvg: "desc" },
+  { ratingCount: "desc" },
+  { name: "asc" },
+];
+
+export type VenueHourInput = {
+  /** 0 = Chủ nhật, khớp `Date.getDay()`. */
+  weekday: number;
+  openMinute: number;
+  closeMinute: number;
+  isClosed?: boolean;
+};
+
+export class VenueService {
+  constructor(private readonly db: PrismaClient = prisma) {}
+
+  /**
+   * Tạo cơ sở. Người tạo thành `OWNER` ngay trong cùng transaction.
+   *
+   * Tách hai bước thì có khe: tạo sân xong, tạo thành viên hỏng, và sân đó
+   * không thuộc về ai — kể cả người vừa tạo cũng không sửa được nó.
+   */
+  async create(input: {
+    name: string;
+    sportId: string;
+    address: string;
+    district: string;
+    city: string;
+    ownerId: string;
+    ward?: string | null;
+    phone?: string | null;
+    description?: string | null;
+    holdMinutes?: number | null;
+  }) {
+    const slug = await this.uniqueSlug(input.name);
+
+    return this.db.$transaction(async (tx) => {
+      const venue = await tx.venue.create({
+        data: {
+          slug,
+          name: input.name.trim(),
+          sportId: input.sportId,
+          address: input.address.trim(),
+          ward: input.ward ?? null,
+          district: input.district.trim(),
+          city: input.city.trim(),
+          phone: input.phone ?? null,
+          description: input.description ?? null,
+          holdMinutes: input.holdMinutes ?? null,
+          // Sân mới luôn là bản nháp: chưa có giờ mở cửa, chưa có sân con, chưa
+          // có giá. Cho ACTIVE ngay là bán ra một thứ chưa tồn tại.
+          status: "DRAFT",
+        },
+      });
+
+      await tx.venueMember.create({
+        data: { venueId: venue.id, userId: input.ownerId, role: "OWNER", status: "ACTIVE" },
+      });
+
+      return venue;
+    });
+  }
+
+  async update(
+    venueId: string,
+    input: Partial<{
+      name: string;
+      description: string | null;
+      address: string;
+      ward: string | null;
+      district: string;
+      city: string;
+      phone: string | null;
+      email: string | null;
+      amenities: string[];
+      lat: number | null;
+      lng: number | null;
+      holdMinutes: number | null;
+      bankName: string | null;
+      bankAccountNumber: string | null;
+      bankAccountName: string | null;
+    }>,
+  ) {
+    await this.requireVenue(venueId);
+
+    return this.db.venue.update({ where: { id: venueId }, data: input });
+  }
+
+  /**
+   * Đổi trạng thái hiển thị.
+   *
+   * Chặn `ACTIVE` khi sân chưa đủ ba thứ tối thiểu — giờ mở cửa, ít nhất một
+   * sân con đang bật, và một luật giá. Thiếu bất kỳ thứ nào thì lưới đặt sân
+   * hiện ra trống trơn hoặc giá 0đ, và khách nghĩ app hỏng.
+   */
+  async setStatus(venueId: string, status: VenueStatus) {
+    const venue = await this.db.venue.findFirst({
+      where: { id: venueId, deletedAt: null },
+      select: {
+        id: true,
+        _count: {
+          select: {
+            hours: { where: { isClosed: false } },
+            courts: { where: { isActive: true, deletedAt: null } },
+            priceRules: true,
+          },
+        },
+      },
+    });
+
+    if (!venue) throw new VenueNotFoundError();
+
+    if (status === "ACTIVE") {
+      const thieu: string[] = [];
+      if (venue._count.hours === 0) thieu.push("giờ mở cửa");
+      if (venue._count.courts === 0) thieu.push("ít nhất một sân con");
+      if (venue._count.priceRules === 0) thieu.push("bảng giá");
+
+      if (thieu.length > 0) throw new VenueNotReadyError(thieu);
+    }
+
+    return this.db.venue.update({ where: { id: venueId }, data: { status } });
+  }
+
+  /**
+   * Đặt lại toàn bộ giờ mở cửa của cả tuần.
+   *
+   * Thay CẢ TUẦN một lần chứ không sửa từng thứ: giao diện là một bảng bảy
+   * dòng, và cập nhật từng dòng thì nửa chừng lỗi mạng để lại một tuần lẫn lộn
+   * giờ cũ với giờ mới.
+   */
+  async setHours(venueId: string, hours: VenueHourInput[]) {
+    await this.requireVenue(venueId);
+
+    for (const hour of hours) {
+      if (!Number.isInteger(hour.weekday) || hour.weekday < 0 || hour.weekday > 6) {
+        throw new VenueConfigError(`Thứ không hợp lệ: ${hour.weekday}`);
+      }
+      if (hour.isClosed) continue;
+
+      if (!isSlotAligned(hour.openMinute) || !isSlotAligned(hour.closeMinute)) {
+        throw new VenueConfigError(`Giờ mở cửa phải tròn ${SLOT_MINUTES} phút`);
+      }
+      if (hour.openMinute >= hour.closeMinute) {
+        throw new VenueConfigError("Giờ đóng cửa phải sau giờ mở cửa");
+      }
+      if (hour.closeMinute > MINUTES_PER_DAY) {
+        throw new VenueConfigError("Giờ đóng cửa không vượt quá 24:00");
+      }
+    }
+
+    return this.db.$transaction(async (tx) => {
+      await tx.venueHour.deleteMany({ where: { venueId } });
+      await tx.venueHour.createMany({
+        data: hours.map((hour) => ({
+          venueId,
+          weekday: hour.weekday,
+          openMinute: hour.openMinute,
+          closeMinute: hour.closeMinute,
+          isClosed: hour.isClosed ?? false,
+        })),
+      });
+
+      return tx.venueHour.findMany({ where: { venueId }, orderBy: { weekday: "asc" } });
+    });
+  }
+
+  /** Hồ sơ đầy đủ cho trang chi tiết của khách. */
+  async publicDetail(slug: string) {
+    return this.db.venue.findFirst({
+      where: { slug, status: "ACTIVE", deletedAt: null },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        description: true,
+        address: true,
+        ward: true,
+        district: true,
+        city: true,
+        lat: true,
+        lng: true,
+        phone: true,
+        amenities: true,
+        ratingAvg: true,
+        ratingCount: true,
+        sport: { select: { key: true, name: true } },
+        images: { orderBy: { sortOrder: "asc" }, select: { url: true, isPrimary: true } },
+        hours: {
+          orderBy: { weekday: "asc" },
+          select: { weekday: true, openMinute: true, closeMinute: true, isClosed: true },
+        },
+        courts: {
+          where: { isActive: true, deletedAt: null },
+          orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
+          select: { id: true, name: true, surface: true, note: true },
+        },
+      },
+    });
+  }
+
+  /**
+   * Tìm sân cho khách. Phân trang theo SỐ TRANG vì màn tìm kiếm cần biết tổng.
+   *
+   * `minPrice` lọc theo luật giá RẺ NHẤT của sân — người dùng lọc "dưới 100k"
+   * là muốn thấy sân có khung nào đó dưới 100k, không phải sân mà mọi khung
+   * đều dưới 100k.
+   */
+  async search(params: {
+    q?: string;
+    sportKey?: string;
+    city?: string;
+    district?: string;
+    maxPricePerSlot?: number;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.min(50, Math.max(1, params.limit ?? 20));
+
+    const where: Prisma.VenueWhereInput = {
+      status: "ACTIVE",
+      deletedAt: null,
+      ...(params.sportKey ? { sport: { key: params.sportKey } } : {}),
+      ...(params.city ? { city: params.city } : {}),
+      ...(params.district ? { district: params.district } : {}),
+      ...(params.q
+        ? {
+            OR: [
+              { name: { contains: params.q, mode: "insensitive" } },
+              { address: { contains: params.q, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+      ...(params.maxPricePerSlot
+        ? { priceRules: { some: { pricePerSlot: { lte: params.maxPricePerSlot } } } }
+        : {}),
+    };
+
+    // Đếm và lấy trang trong MỘT lần gọi — hai lần gọi rời có thể thấy hai
+    // trạng thái khác nhau của bảng.
+    const [items, total] = await this.db.$transaction([
+      this.db.venue.findMany({
+        where,
+        orderBy: PUBLIC_ORDER,
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true,
+          slug: true,
+          name: true,
+          address: true,
+          district: true,
+          city: true,
+          ratingAvg: true,
+          ratingCount: true,
+          sport: { select: { key: true, name: true } },
+          images: {
+            where: { isPrimary: true },
+            take: 1,
+            select: { url: true },
+          },
+          priceRules: {
+            orderBy: { pricePerSlot: "asc" },
+            take: 1,
+            select: { pricePerSlot: true },
+          },
+        },
+      }),
+      this.db.venue.count({ where }),
+    ]);
+
+    return {
+      items: items.map((venue) => ({
+        ...venue,
+        imageUrl: venue.images[0]?.url ?? null,
+        fromPricePerSlot: venue.priceRules[0]?.pricePerSlot ?? null,
+      })),
+      meta: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
+    };
+  }
+
+  /** Những sân một người có chân — dùng cho màn chọn sân của chủ/nhân viên. */
+  async listForUser(userId: string) {
+    const members = await this.db.venueMember.findMany({
+      where: { userId, status: "ACTIVE", venue: { deletedAt: null } },
+      orderBy: { createdAt: "asc" },
+      select: {
+        role: true,
+        permissions: true,
+        venue: {
+          select: {
+            id: true,
+            slug: true,
+            name: true,
+            status: true,
+            city: true,
+            district: true,
+            sport: { select: { key: true, name: true } },
+          },
+        },
+      },
+    });
+
+    return members.map((member) => ({
+      ...member.venue,
+      role: member.role,
+      permissions: member.permissions,
+    }));
+  }
+
+  /**
+   * Xoá mềm.
+   *
+   * KHÔNG xoá thật: lượt đặt, hoá đơn và nhật ký trỏ tới sân này phải đọc được
+   * sau khi sân đóng cửa — nếu không thì báo cáo doanh thu năm ngoái vỡ.
+   */
+  async softDelete(venueId: string, now = new Date()) {
+    await this.requireVenue(venueId);
+
+    return this.db.venue.update({
+      where: { id: venueId },
+      data: { deletedAt: now, status: "SUSPENDED" },
+    });
+  }
+
+  /**
+   * Sinh slug không đụng hàng.
+   *
+   * Thử `ten-san`, `ten-san-2`, `ten-san-3`… Vẫn có thể đụng nếu hai người tạo
+   * cùng lúc — `create()` để lỗi trùng bung ra chứ không thử lại vô hạn.
+   */
+  private async uniqueSlug(name: string): Promise<string> {
+    const base = slugify(name) || "san";
+
+    for (let attempt = 1; attempt <= 20; attempt += 1) {
+      const slug = attempt === 1 ? base : `${base}-${attempt}`;
+      const existing = await this.db.venue.findUnique({ where: { slug }, select: { id: true } });
+      if (!existing) return slug;
+    }
+
+    throw new VenueConfigError("Không sinh được đường dẫn cho tên sân này, đổi tên khác giúp bạn");
+  }
+
+  private async requireVenue(venueId: string) {
+    const venue = await this.db.venue.findFirst({
+      where: { id: venueId, deletedAt: null },
+      select: { id: true },
+    });
+
+    if (!venue) throw new VenueNotFoundError();
+    return venue;
+  }
+}
+
+export const venueService = new VenueService();
