@@ -353,38 +353,38 @@ enum VenueStatus {
 }
 
 model Venue {
-  id                String         @id @default(cuid())
-  slug              String         @unique
+  id                String            @id @default(cuid())
+  slug              String            @unique
   name              String
   description       String?
-  status            VenueStatus    @default(DRAFT)
+  status            VenueStatus       @default(DRAFT)
   // ⚠️ Hai cấp: phường/xã → tỉnh/thành. Cấp quận/huyện đã bỏ từ 01/07/2025.
   address           String
   ward              String
   province          String
   // Vì sao sân đang đóng — khách đọc câu này trên trang chi tiết, và admin ghi
   // lý do khoá vào đây. Thiếu nó thì "hiện không nhận đặt" không nói được gì.
-  inactiveNote      String?        @map("inactive_note")
+  inactiveNote      String?           @map("inactive_note")
   lat               Float?
   lng               Float?
   phone             String?
   email             String?
-  amenities         String[]       @default([])
-  bankName          String?        @map("bank_name")
-  bankAccountNumber String?        @map("bank_account_number")
-  bankAccountName   String?        @map("bank_account_name")
-  commissionRate    Decimal?       @map("commission_rate") @db.Decimal(5, 2)
-  holdMinutes       Int?           @map("hold_minutes")
+  amenities         String[]          @default([])
+  bankName          String?           @map("bank_name")
+  bankAccountNumber String?           @map("bank_account_number")
+  bankAccountName   String?           @map("bank_account_name")
+  commissionRate    Decimal?          @map("commission_rate") @db.Decimal(5, 2)
+  holdMinutes       Int?              @map("hold_minutes")
   // Chính sách huỷ RIÊNG của từng sân. Để trống = theo mặc định nền tảng.
-  freeCancelHours   Int?           @map("free_cancel_hours")
-  cancelFeePercent  Int?           @map("cancel_fee_percent")
-  ratingAvg         Decimal        @default(0) @map("rating_avg") @db.Decimal(3, 2)
-  ratingCount       Int            @default(0) @map("rating_count")
-  sportId           String         @map("sport_id")
-  sport             Sport          @relation(fields: [sportId], references: [id])
-  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt         DateTime?      @map("deleted_at") @db.Timestamptz(3)
+  freeCancelHours   Int?              @map("free_cancel_hours")
+  cancelFeePercent  Int?              @map("cancel_fee_percent")
+  ratingAvg         Decimal           @default(0) @map("rating_avg") @db.Decimal(3, 2)
+  ratingCount       Int               @default(0) @map("rating_count")
+  sportId           String            @map("sport_id")
+  sport             Sport             @relation(fields: [sportId], references: [id])
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt         DateTime?         @map("deleted_at") @db.Timestamptz(3)
   images            VenueImage[]
   hours             VenueHour[]
   members           VenueMember[]
@@ -395,6 +395,7 @@ model Venue {
   favorites         Favorite[]
   payouts           Payout[]
   earnings          OwnerEarning[]
+  invoices          PlatformInvoice[]
 
   @@index([status, province, ward])
   @@index([sportId, status])
@@ -873,6 +874,44 @@ model Dispute {
   @@index([status, createdAt])
   @@index([bookingId])
   @@map("disputes")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  DUE
+  PAID
+  OVERDUE
+  WAIVED
+}
+
+/// Hoá đơn hoa hồng nền tảng thu của chủ sân, mỗi tháng một hoá đơn.
+///
+/// ⚠️ Tiền đặt sân đi THẲNG vào tài khoản của sân — nền tảng không giữ hộ.
+/// Nên đây là khoản chủ sân NỢ, không phải khoản đã bị trừ. Quá hạn thì khoá
+/// sân, đó là đòn bẩy duy nhất để đòi.
+model PlatformInvoice {
+  id               String        @id @default(cuid())
+  number           String        @unique
+  venueId          String        @map("venue_id")
+  venue            Venue         @relation(fields: [venueId], references: [id])
+  periodStart      DateTime      @map("period_start") @db.Date
+  periodEnd        DateTime      @map("period_end") @db.Date
+  bookingCount     Int           @map("booking_count")
+  grossRevenue     Int           @map("gross_revenue")
+  commissionRate   Decimal       @map("commission_rate") @db.Decimal(5, 2)
+  commissionAmount Int           @map("commission_amount")
+  status           InvoiceStatus @default(DRAFT)
+  dueDate          DateTime      @map("due_date") @db.Date
+  paidAt           DateTime?     @map("paid_at") @db.Timestamptz(3)
+  waivedBy         String?       @map("waived_by")
+  waiveReason      String?       @map("waive_reason")
+  note             String?
+  createdAt        DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime      @updatedAt @db.Timestamptz(3)
+
+  @@unique([venueId, periodStart])
+  @@index([status, dueDate])
+  @@map("platform_invoices")
 }
 
 model Setting {

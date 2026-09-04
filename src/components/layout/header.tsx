@@ -4,6 +4,7 @@ import { apiPath } from "@/lib/api/version";
 import { Logo } from "@/components/layout/logo";
 import { Button } from "@/components/ui/button";
 import { permissionService } from "@/services/permission.service";
+import { venueService } from "@/services/venue.service";
 
 /**
  * Thanh điều hướng.
@@ -14,7 +15,7 @@ import { permissionService } from "@/services/permission.service";
  * lên nền tối của toàn trang.
  */
 /** Các trang trong khu quản trị. Union để `typedRoutes` bắt lỗi đường dẫn sai. */
-type AdminRoute = "/users" | "/roles";
+type AdminRoute = "/venue-approvals" | "/users" | "/roles";
 
 export async function Header() {
   const user = await getCurrentUser();
@@ -25,14 +26,22 @@ export async function Header() {
   // `can()` nhận USER ID, không phải tên vai trò. Trước đây chỗ này truyền
   // `user.roles.join(", ")` — một chuỗi không khớp id nào, nên câu hỏi luôn trả
   // false và mục quản trị KHÔNG BAO GIỜ hiện với ai, kể cả SUPER_ADMIN.
-  const [canSeeUsers, canSeeRoles] = user
+  const [canSeeUsers, canSeeRoles, canApproveVenues, venues] = user
     ? await Promise.all([
         permissionService.can(user.id, "user:read"),
         permissionService.can(user.id, "role:read"),
+        permissionService.can(user.id, "venue:approve"),
+        venueService.listForUser(user.id),
       ])
-    : [false, false];
+    : [false, false, false, []];
 
-  const adminEntry: AdminRoute | null = canSeeUsers ? "/users" : canSeeRoles ? "/roles" : null;
+  const adminEntry: AdminRoute | null = canApproveVenues
+    ? "/venue-approvals"
+    : canSeeUsers
+      ? "/users"
+      : canSeeRoles
+        ? "/roles"
+        : null;
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-line bg-canvas/85 backdrop-blur-md">
@@ -49,6 +58,11 @@ export async function Header() {
           */}
           <nav className="flex items-center gap-1">
             <NavLink href="/venues">Tìm sân</NavLink>
+
+            {/* Chỉ hiện với người thật sự quản lý sân — bày mục dẫn tới trang
+                trống là hứa một thứ không có. */}
+            {venues.length > 0 && <NavLink href="/manage">Quản lý sân</NavLink>}
+            {user && <NavLink href="/account/bookings">Lượt đặt</NavLink>}
 
             {/*
               MỘT lối vào khu quản trị, không liệt kê từng trang ở đây — việc đó
@@ -103,7 +117,8 @@ function NavLink({
   href,
   children,
 }: {
-  href: "/" | "/venues" | "/users" | "/roles";
+  href:
+    "/" | "/venues" | "/manage" | "/account/bookings" | "/venue-approvals" | "/users" | "/roles";
   children: React.ReactNode;
 }) {
   return (

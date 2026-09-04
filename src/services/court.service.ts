@@ -275,6 +275,23 @@ export class CourtService {
   }
 
   /** Sân con của một cơ sở, kèm khoảng đóng sắp tới — nguồn cho màn quản lý sân. */
+  /** Bảng giá hiện tại của một cơ sở — nguồn cho màn sửa giá. */
+  async listPriceRules(venueId: string) {
+    return this.db.priceRule.findMany({
+      where: { venueId },
+      orderBy: [{ priority: "desc" }, { startMinute: "asc" }],
+      select: {
+        courtId: true,
+        weekdays: true,
+        startMinute: true,
+        endMinute: true,
+        pricePerSlot: true,
+        isPeak: true,
+        priority: true,
+      },
+    });
+  }
+
   async listForVenue(venueId: string, options: { from?: Date } = {}) {
     const from = options.from ?? new Date();
 

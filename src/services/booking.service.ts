@@ -397,6 +397,62 @@ export class BookingService {
     });
   }
 
+  /**
+   * Lượt đặt của MỘT NGƯỜI — nguồn cho màn "Lượt đặt của tôi".
+   *
+   * Chia hai nhóm ngay ở tầng này chứ không để giao diện tự lọc: "sắp tới" và
+   * "đã qua" trả lời hai câu hỏi khác nhau, và người dùng gần như chỉ quan tâm
+   * nhóm đầu. Sắp tới thì gần nhất lên trước; đã qua thì mới nhất lên trước.
+   */
+  async listForUser(userId: string, options: { now?: Date; limit?: number } = {}) {
+    const now = options.now ?? new Date();
+
+    const select = {
+      id: true,
+      code: true,
+      status: true,
+      startAt: true,
+      endAt: true,
+      total: true,
+      court: { select: { name: true } },
+      venue: { select: { slug: true, name: true, address: true, ward: true, province: true } },
+      review: { select: { id: true } },
+    } as const;
+
+    const [upcoming, past] = await Promise.all([
+      this.db.booking.findMany({
+        where: { userId, endAt: { gte: now }, status: { notIn: ["CANCELLED", "EXPIRED"] } },
+        orderBy: { startAt: "asc" },
+        select,
+      }),
+      this.db.booking.findMany({
+        where: {
+          userId,
+          OR: [{ endAt: { lt: now } }, { status: { in: ["CANCELLED", "EXPIRED"] } }],
+        },
+        orderBy: { startAt: "desc" },
+        take: options.limit ?? 30,
+        select,
+      }),
+    ]);
+
+    return { upcoming, past };
+  }
+
+  /**
+   * Lượt đặt cụ thể của một người — dùng trước khi cho họ huỷ.
+   *
+   * Ràng buộc quyền sở hữu nằm TRONG câu truy vấn (`where: { id, userId }`),
+   * không phải một phép kiểm riêng sau đó: `id` đến từ URL nên người gọi tự
+   * đặt được, và quên phép kiểm rời là ai cũng huỷ được lượt của người khác.
+   */
+  async findOwnedByUser(bookingId: string, userId: string) {
+    return this.db.booking.findFirst({
+      where: { id: bookingId, userId },
+      select: { id: true, code: true, status: true, startAt: true, venueId: true },
+    });
+  }
+
   /** Lượt đặt của một sân trong một ngày — nguồn cho màn lịch của chủ sân. */
   async listForVenueDay(venueId: string, date: Date) {
     const dayStart = atMinuteVN(date, 0);

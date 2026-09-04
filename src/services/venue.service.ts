@@ -219,6 +219,86 @@ export class VenueService {
   }
 
   /** Hồ sơ đầy đủ cho trang chi tiết của khách. */
+  /**
+   * Hồ sơ cơ sở cho khu QUẢN LÝ — tra theo id, không lọc theo trạng thái.
+   *
+   * `publicDetail` không dùng được ở đây vì nó chỉ trả sân `ACTIVE`: chủ sân
+   * phải vào được sân đang là bản nháp, đang tạm nghỉ, hay đang bị khoá — đó
+   * đúng là lúc họ cần vào để sửa.
+   *
+   * Không kiểm quyền trong này. Quyền là việc của `requireVenueAccess` ở trang
+   * và `defineVenueAction` ở action; service chỉ trả dữ liệu.
+   */
+  /**
+   * Cơ sở đang chờ nền tảng duyệt.
+   *
+   * Trả kèm số sân con và số luật giá: đó là hai thứ quyết định "duyệt được
+   * chưa". Duyệt một sân chưa có sân con nào là mở bán một trang trống.
+   */
+  async listPendingApproval(limit = 50) {
+    return this.db.venue.findMany({
+      where: { status: "PENDING", deletedAt: null },
+      orderBy: { createdAt: "asc" },
+      take: limit,
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        description: true,
+        address: true,
+        ward: true,
+        province: true,
+        phone: true,
+        createdAt: true,
+        sport: { select: { key: true, name: true } },
+        _count: {
+          select: {
+            courts: { where: { isActive: true, deletedAt: null } },
+            priceRules: true,
+            hours: { where: { isClosed: false } },
+          },
+        },
+        members: {
+          where: { role: "OWNER" },
+          take: 1,
+          select: {
+            user: { select: { email: true, phone: true, profile: { select: { fullName: true } } } },
+          },
+        },
+      },
+    });
+  }
+
+  async forManage(venueId: string) {
+    return this.db.venue.findFirst({
+      where: { id: venueId, deletedAt: null },
+      select: {
+        id: true,
+        slug: true,
+        name: true,
+        status: true,
+        inactiveNote: true,
+        address: true,
+        ward: true,
+        province: true,
+        description: true,
+        amenities: true,
+        phone: true,
+        holdMinutes: true,
+        freeCancelHours: true,
+        cancelFeePercent: true,
+        bankName: true,
+        bankAccountNumber: true,
+        bankAccountName: true,
+        sport: { select: { key: true, name: true } },
+        hours: {
+          orderBy: { weekday: "asc" },
+          select: { weekday: true, openMinute: true, closeMinute: true, isClosed: true },
+        },
+      },
+    });
+  }
+
   async publicDetail(slug: string) {
     return this.db.venue.findFirst({
       where: { slug, status: "ACTIVE", deletedAt: null },

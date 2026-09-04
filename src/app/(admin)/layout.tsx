@@ -19,7 +19,7 @@ import { permissionService } from "@/services/permission.service";
  * Vì vậy hai lớp sau vẫn giữ nguyên và KHÔNG được lược bớt:
  *
  *   1. Mỗi trang tự gọi `requirePermission(...)` với đúng quyền của nó —
- *      layout không thể biết `/users` cần `user:lấy` còn `/roles` cần
+ *      layout không thể biết `/users` cần `user:read` còn `/roles` cần
  *      `role:read`.
  *   2. Mỗi Server Action tự kiểm quyền. Đây mới là lớp chặn thật.
  *
@@ -30,16 +30,23 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // không phải lặp lại. Kiểm tra QUYỀN vẫn nằm ở từng trang.
   const user = await requireUser("/users");
 
-  const [canSeeUsers, canSeeRoles] = await Promise.all([
-    permissionService.can(user.roles.join(", "), "user:read"),
-    permissionService.can(user.roles.join(", "), "role:read"),
+  const [canSeeUsers, canSeeRoles, canApproveVenues] = await Promise.all([
+    // `can()` nhận USER ID, không phải tên vai trò. Truyền `user.roles.join()`
+    // là hỏi quyền của một id không tồn tại — luôn trả false, nên sidebar quản
+    // trị KHÔNG BAO GIỜ hiện mục nào, kể cả với SUPER_ADMIN. Cùng lỗi đã có ở
+    // `src/components/layout/header.tsx`.
+    permissionService.can(user.id, "user:read"),
+    permissionService.can(user.id, "role:read"),
+    permissionService.can(user.id, "venue:approve"),
   ]);
 
-  if (!canSeeUsers && !canSeeRoles) {
+  // Người chỉ có quyền duyệt cơ sở vẫn phải vào được khu này.
+  if (!canSeeUsers && !canSeeRoles && !canApproveVenues) {
     notFound();
   }
 
   const items = [
+    { href: "/venue-approvals", label: "Duyệt cơ sở", visible: canApproveVenues },
     { href: "/users", label: "Người dùng", visible: canSeeUsers },
     { href: "/roles", label: "Vai trò & phân quyền", visible: canSeeRoles },
   ] as const;

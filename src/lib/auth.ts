@@ -86,6 +86,28 @@ export async function requirePermission(
   return user;
 }
 
+/**
+ * Dùng trong trang/layout của khu quản lý MỘT SÂN cụ thể.
+ *
+ * ---
+ * TRẢ 404, KHÔNG PHẢI 403
+ *
+ * `venueId` đến từ URL nên ai cũng gõ được. Trả 403 là xác nhận "sân này có
+ * thật, chỉ là bạn không có quyền" — đủ để dò xem nền tảng có những sân nào.
+ * 404 không nói gì cả.
+ *
+ * ⚠️ Đây vẫn chỉ là lớp cho GIAO DIỆN. Server Action không đi qua trang, nên
+ * mỗi action vẫn phải tự kiểm bằng `defineVenueAction`.
+ */
+export async function requireVenueAccess(
+  venueId: string,
+  permission: Permission,
+): Promise<CurrentUser> {
+  const user = await requireUser(`/manage/${venueId}`);
+  if (!(await permissionService.canOnVenue(user.id, permission, venueId))) notFound();
+  return user;
+}
+
 export async function createSession(payload: SessionPayload): Promise<void> {
   const token = await signSession(payload);
   const cookieStore = await cookies();

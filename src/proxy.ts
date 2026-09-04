@@ -63,7 +63,11 @@ export async function proxy(request: NextRequest) {
   }
 
   if (session && GUEST_ONLY_PATHS.includes(pathname)) {
-    return NextResponse.redirect(new URL("/users", request.url));
+    // Đích phải là trang MỌI người đăng nhập đều mở được. Bộ khung để lại
+    // `/users` — màn quản trị cần quyền `user:read`, mà gần như không ai trong
+    // ChốtSân có quyền đó. Hậu quả: đăng nhập xong, mở lại /login là rơi vào
+    // 404 và tưởng tài khoản hỏng.
+    return NextResponse.redirect(new URL("/", request.url));
   }
 
   // Nonce phải đi vào REQUEST header thì Next.js mới đọc được và gắn vào các

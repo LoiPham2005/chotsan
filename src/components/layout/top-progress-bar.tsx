@@ -91,11 +91,27 @@ export function TopProgressBar() {
 
     document.addEventListener("click", onDocumentClick, true);
 
-    // `router.push()` không sinh sự kiện click. Vá `pushState` để bắt được nó.
+    /*
+     * `router.push()` không sinh sự kiện click. Vá `pushState` để bắt được nó.
+     *
+     * ⚠️ `start()` phải chạy Ở NHỊP SAU, không được gọi thẳng ở đây.
+     *
+     * React gọi `history.pushState` từ bên trong `useInsertionEffect`, và
+     * `setState` trong giai đoạn đó là lỗi cứng: "useInsertionEffect must not
+     * schedule updates". Khi nó xảy ra, React huỷ luôn lần điều hướng đang
+     * chạy — nghĩa là MỌI Server Action kết thúc bằng `redirect()` đều đứng im.
+     *
+     * Đã xảy ra thật: đăng nhập chạy đúng ở máy chủ (cookie được đặt, nhật ký
+     * ghi "User logged in") nhưng trình duyệt vẫn nằm ở trang đăng nhập, và
+     * không có lỗi nào hiện ra cho người dùng.
+     */
     const originalPushState = history.pushState.bind(history);
     history.pushState = function (...args: Parameters<typeof history.pushState>) {
-      start();
-      return originalPushState(...args);
+      const result = originalPushState(...args);
+      // `setTimeout` chứ không phải `queueMicrotask`: microtask vẫn chạy trong
+      // cùng nhịp commit của React, còn macrotask thì chắc chắn nằm ngoài.
+      setTimeout(start, 0);
+      return result;
     };
 
     return () => {

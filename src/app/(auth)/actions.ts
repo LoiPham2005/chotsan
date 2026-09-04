@@ -126,8 +126,17 @@ export async function loginAction(
   });
   logger.info("User logged in", { userId: user.id });
 
+  /*
+   * Đích mặc định phải là trang MỌI người đăng nhập đều mở được.
+   *
+   * Bộ khung để lại `/users` — màn quản trị, cần quyền `user:read`. Với ChốtSân
+   * thì gần như không ai có quyền đó, nên đăng nhập thành công xong bị ném vào
+   * 404. Tệ hơn: điều hướng của Server Action hỏng giữa chừng thì trình duyệt
+   * KHÔNG giữ lại cookie phiên vừa được đặt trong cùng response — nghĩa là
+   * không ai đăng nhập nổi, mà nhật ký máy chủ vẫn ghi "User logged in".
+   */
   // redirect() hoạt động bằng cách ném exception — phải nằm ngoài mọi try/catch.
-  redirect(safeRedirectPath(formData.get("next"), "/users"));
+  redirect(safeRedirectPath(formData.get("next"), "/"));
 }
 
 /**
@@ -190,7 +199,8 @@ export async function verifyTwoFactorAction(
   });
   logger.info("User logged in with 2FA", { userId: user.id });
 
-  redirect(safeRedirectPath(formData.get("next"), "/users"));
+  // redirect() hoạt động bằng cách ném exception — phải nằm ngoài mọi try/catch.
+  redirect(safeRedirectPath(formData.get("next"), "/"));
 }
 
 export async function registerAction(

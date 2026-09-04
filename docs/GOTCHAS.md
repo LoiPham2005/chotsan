@@ -228,6 +228,44 @@ migrate):
 | `users_email_active_key`, `users_phone_active_key` | Trùng email/sđt giữa tài khoản còn sống |
 | 7 ràng buộc `CHECK`                                | Điểm sao ngoài 1–5, tiền âm, giờ ngược  |
 
+## 12. Server Action ở dev chạy tới 10 giây — đừng vội kết luận là hỏng
+
+Bấm "Đăng nhập" rồi đợi 3–4 giây thấy nút vẫn ghi "Đang đăng nhập…", trang không nhúc nhích,
+console không lỗi. Trông y hệt một luồng RSC bị đứt. **Không phải.** Nó chỉ chưa xong:
+
+```
+POST /login 200 in 3.9s
+  └─ ƒ loginAction({}, {}) in 3860ms
+```
+
+Đo lại với thời gian chờ đủ: điều hướng xong sau **9,7 giây**, cookie đặt đúng, header đổi sang
+"Đăng xuất". Thời gian đó là biên dịch trang đích của Turbopack cộng lần mở kết nối đầu tiên tới
+Neon — cả hai chỉ có ở dev.
+
+**Bài học cho việc kiểm thử**: `waitForTimeout(3500)` rồi đọc trang là cách chắc chắn để kết luận
+sai. Dùng điều kiện, không dùng đồng hồ:
+
+```js
+await p.waitForURL((u) => !u.pathname.includes("/login"), { timeout: 25000 });
+```
+
+Và khi nghi ngờ, đọc dòng `POST ... in Xms` trong output của `next dev` trước — nó nói thẳng
+action mất bao lâu.
+
+⚠️ `browser.close()` khi request còn đang chạy sinh ra `⨯ Error: The destination stream closed
+early.` ở máy chủ. Đó là hệ quả của việc đóng trình duyệt sớm, KHÔNG phải nguyên nhân.
+
+**Hai lỗi thật tìm được trong lúc lần theo dấu vết sai này** — cả hai đều đáng giá:
+
+1. **Đích mặc định sau đăng nhập là `/users`** (thừa hưởng từ bộ khung) — màn quản trị cần quyền
+   `user:read`, mà gần như không ai trong ChốtSân có. Đăng nhập xong là rơi vào 404. Có ở HAI
+   chỗ: `loginAction` và `src/proxy.ts` (nhánh `GUEST_ONLY_PATHS`). Đã đổi cả hai về `/`.
+
+2. **Vá `history.pushState` để bắt điều hướng thì không được `setState` ngay tại đó.** React gọi
+   `pushState` từ trong `useInsertionEffect`, nơi cấm đặt lịch cập nhật:
+   `useInsertionEffect must not schedule updates` — và React HUỶ luôn lần điều hướng đang chạy.
+   Xem `src/components/layout/top-progress-bar.tsx`, phải đẩy sang `setTimeout(start, 0)`.
+
 ## Lưu ý chung khi code
 
 - **Ưu tiên `pnpm typecheck`/`pnpm test` qua terminal hơn tin theo IDE** khi vừa đổi

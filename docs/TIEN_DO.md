@@ -3,7 +3,7 @@
 Cập nhật: **04/09/2026**. Kế hoạch đầy đủ ở [KE_HOACH_REFACTOR.md](KE_HOACH_REFACTOR.md); tệp này
 chỉ nói **đã làm được gì, còn gì**, để mở ra là biết đứng ở đâu.
 
-Số liệu hiện tại: **509 test / 45 tệp xanh**, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
+Số liệu hiện tại: **532 test / 47 tệp xanh**, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
 trên database thật.
 
 ## Bảng tổng
@@ -110,7 +110,18 @@ nóng nhất cho một cột toàn NULL). Cả ba thêm lại sau bằng một m
 - **`AppVersionConfig`** — chặn phiên bản app cũ, cần trước khi phát hành Flutter (GĐ7).
 - **Danh mục tiện ích** — hiện là `String[]` tự do; bản cũ có bảng `Amenity` (có icon, lọc chuẩn).
 
-## Một quyết định còn chờ
+## Mô hình dòng tiền — ĐÃ CHỐT
+
+**Tiền đi thẳng vào tài khoản của sân. Nền tảng xuất hoá đơn hoa hồng hàng tháng.**
+
+Chọn thế vì nền tảng không giữ tiền của người khác — giữ hộ tiền là bước vào phạm vi trung gian
+thanh toán, kèm ràng buộc pháp lý và vốn. Đổi lại phải đi ĐÒI hoa hồng, nhưng có sẵn đòn bẩy: quá
+hạn thì khoá sân. Đây cũng là cách bản cũ (`PlatformInvoice`) đã làm.
+
+Hệ quả đã có trong schema: `Payment.receivedBy = VENUE`, `Venue.commissionRate`, `OwnerEarning`
+ghi nhận từng lượt. Còn thiếu bảng `PlatformInvoice` và màn đối soát.
+
+## (cũ) Một quyết định còn chờ
 
 **Tiền chuyển khoản tay vào tài khoản nào?** `Payment.receivedBy` đã có hai giá trị
 (`PLATFORM` / `VENUE`) nên code chạy được cả hai đường, nhưng phải chọn một để làm màn đối soát:
