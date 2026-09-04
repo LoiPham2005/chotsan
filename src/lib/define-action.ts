@@ -57,6 +57,9 @@ export type ActionContext = {
   actorId: string;
 };
 
+/** Như `ActionContext`, kèm sân mà quyền vừa được kiểm trên đó. */
+export type VenueActionContext = ActionContext & { venueId: string };
+
 /**
  * Tạo một Server Action đã tự kiểm quyền.
  *
@@ -137,5 +140,53 @@ export function defineAuthedAction<TArgs extends unknown[], TState extends Actio
     }
 
     return handler({ session, actorId: session.sub }, ...args);
+  };
+}
+
+/**
+ * Server Action thao tác trên MỘT SÂN cụ thể.
+ *
+ * ---
+ * VÌ SAO CÓ HÀM RIÊNG THAY VÌ TỰ KIỂM TRONG THÂN ACTION
+ *
+ * `defineAction("booking:cancel", …)` chỉ hỏi "có quyền huỷ booking không" —
+ * câu hỏi thiếu vế quan trọng nhất: **huỷ của sân nào**. Bản cũ của dự án chỉ
+ * kiểm phạm vi sân ở 2/29 service, nghĩa là nhân viên sân A huỷ được booking
+ * sân B nếu tìm đúng endpoint.
+ *
+ * Ở đây `venueId` là THAM SỐ ĐẦU TIÊN bắt buộc, nên không có cách nào viết một
+ * action venue-scoped mà quên kiểm sân — nó sẽ không biên dịch được.
+ *
+ * ```ts
+ * export const cancelBookingAction = defineVenueAction(
+ *   "booking:cancel",
+ *   async (ctx, bookingId: string) => { … },   // ctx.venueId đã được kiểm
+ * );
+ * // Gọi: cancelBookingAction(venueId, bookingId)
+ * ```
+ */
+export function defineVenueAction<TArgs extends unknown[], TState extends ActionState>(
+  permission: Permission,
+  handler: (ctx: VenueActionContext, ...args: TArgs) => Promise<TState>,
+): (venueId: string, ...args: TArgs) => Promise<TState> {
+  return async (venueId: string, ...args: TArgs) => {
+    const session = await getSession();
+
+    if (!session) {
+      return denied<TState>("Bạn cần đăng nhập để thực hiện thao tác này.");
+    }
+
+    if (!(await permissionService.canOnVenue(session.sub, permission, venueId))) {
+      // Ghi log MỌI lần bị từ chối kèm `venueId`: một người có quyền ở sân này
+      // gõ cửa sân khác là tín hiệu đáng chú ý hơn hẳn thiếu quyền thông thường.
+      logger.warn("Server Action bị từ chối vì thiếu quyền trên sân", {
+        userId: session.sub,
+        venueId,
+        permission,
+      });
+      return denied<TState>("Bạn không có quyền thực hiện thao tác này trên sân này.");
+    }
+
+    return handler({ session, actorId: session.sub, venueId }, ...args);
   };
 }

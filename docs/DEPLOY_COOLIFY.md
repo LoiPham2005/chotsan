@@ -123,7 +123,7 @@ thông báo chỉ rõ **tên biến nào** — đọc log là biết, đừng đ
 | `ADMIN_EMAIL`          | Tài khoản quản trị đầu tiên                                              |
 | `ADMIN_PASSWORD`       | Đặt mạnh. Ở production, thiếu là seed **dừng** chứ không tự đặt mặc định |
 | `POSTGRES_USER`        | Mặc định `postgres`                                                      |
-| `POSTGRES_DB`          | Mặc định `chotsan`                                            |
+| `POSTGRES_DB`          | Mặc định `chotsan`                                                       |
 | `REALTIME_CORS_ORIGIN` | `https://<domain-that>` — thiếu thì trình duyệt chặn WebSocket vì CORS   |
 
 `REDIS_URL` **không cần điền**: compose đã set sẵn `redis://redis:6379` cho cả

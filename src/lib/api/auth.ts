@@ -77,6 +77,30 @@ export async function requireApiPermission(
   return session;
 }
 
+/**
+ * Như `requireApiPermission`, nhưng hỏi kèm SÂN.
+ *
+ * `venueId` đến từ URL hoặc body nên người gọi tự đặt được — vì vậy phép kiểm
+ * phải nhận nó làm tham số, không được suy ra từ phiên đăng nhập.
+ *
+ * Trả 404 chứ không 403 khi thiếu quyền trên sân: phân biệt "sân không tồn tại"
+ * với "sân có thật nhưng bạn không được vào" là xác nhận cho người đang dò biết
+ * id đó có thật.
+ */
+export async function requireVenuePermission(
+  request: Request,
+  venueId: string,
+  permission: Permission,
+): Promise<SessionPayload> {
+  const session = await requireApiUser(request);
+
+  if (!(await permissionService.canOnVenue(session.sub, permission, venueId))) {
+    throw apiErrors.notFound("Không tìm thấy sân");
+  }
+
+  return session;
+}
+
 /** IP của client, đọc qua các header proxy thường gặp. */
 export function clientIp(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for");

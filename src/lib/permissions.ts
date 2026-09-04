@@ -60,9 +60,107 @@ export const PERMISSIONS = [
 
   // Tệp tin
   "file:upload",
+
+  // ---------------------------------------------------------------------
+  // QUYỀN THEO SÂN — luôn hỏi kèm `venueId` qua `canOnVenue()`.
+  // Xem docs/THIET_KE_LAI.md §2 và `VENUE_STAFF_DEFAULT` bên dưới.
+  // ---------------------------------------------------------------------
+  "venue:read",
+  "venue:update",
+  "venue:delete",
+  "venue:transfer",
+  "court:read",
+  "court:update",
+  "pricing:read",
+  "pricing:update",
+  "booking:read",
+  "booking:create",
+  "booking:checkin",
+  "booking:cancel",
+  "booking:reschedule",
+  "payment:refund",
+  "report:read",
+  "member:manage",
+  "payout:manage",
+
+  // Quyền toàn nền tảng, KHÔNG gắn sân
+  "venue:approve",
+  "payout:approve",
+  "dispute:resolve",
+  "setting:update",
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
+
+// ---------------------------------------------------------------------------
+// Phân quyền theo SÂN
+// ---------------------------------------------------------------------------
+
+/** Vai trò gắn với một sân cụ thể, qua bảng `VenueMember`. */
+export const VENUE_ROLES = { OWNER: "OWNER", STAFF: "STAFF" } as const;
+export type VenueRoleKey = (typeof VENUE_ROLES)[keyof typeof VENUE_ROLES];
+
+/**
+ * Quyền STAFF có SẴN, không cần chủ sân tick.
+ *
+ * ⚠️ Danh sách này phải đủ để trực sân từ ngày đầu. Để trống rồi bắt chủ sân
+ * tick 12 ô cho mỗi nhân viên mới là làm hỏng đúng thứ mà vai trò sinh ra để
+ * giải quyết — và quên một ô là nhân viên không làm việc được rồi gọi điện hỏi.
+ */
+export const VENUE_STAFF_DEFAULT: readonly Permission[] = [
+  "venue:read",
+  "court:read",
+  "pricing:read",
+  "booking:read",
+  "booking:checkin",
+  "booking:create",
+];
+
+/**
+ * Quyền chủ sân TICK THÊM được cho từng nhân viên.
+ *
+ * Đây là thứ thay cho vai trò `MANAGER` cứng: mỗi sân định nghĩa "quản lý" một
+ * kiểu, nhét tất cả vào một enum là ép 100 sân theo hình dạng của một sân.
+ */
+export const VENUE_STAFF_GRANTABLE: readonly Permission[] = [
+  "booking:cancel",
+  "booking:reschedule",
+  "payment:refund",
+  "pricing:update",
+  "court:update",
+  "venue:update",
+  "report:read",
+  "member:manage",
+];
+
+/**
+ * ⚠️ KHÔNG BAO GIỜ tick được cho STAFF — chỉ `OWNER` của sân đó.
+ *
+ * Đây là tiền rời khỏi hệ thống và mất sân. Giao diện phải KHÔNG CÓ Ô để tick,
+ * không phải hiện ra rồi cảnh báo khi bấm: một cú bấm nhầm là mất trắng và chủ
+ * sân sẽ không hiểu mình vừa làm gì.
+ */
+export const VENUE_OWNER_ONLY: readonly Permission[] = [
+  "payout:manage",
+  "venue:delete",
+  "venue:transfer",
+];
+
+/** Quyền có ý nghĩa trong phạm vi một sân — dùng cho `canOnVenue()`. */
+export const VENUE_SCOPED_PERMISSIONS: ReadonlySet<string> = new Set<string>([
+  ...VENUE_STAFF_DEFAULT,
+  ...VENUE_STAFF_GRANTABLE,
+  ...VENUE_OWNER_ONLY,
+]);
+
+export function isVenueScopedPermission(value: string): value is Permission {
+  return VENUE_SCOPED_PERMISSIONS.has(value);
+}
+
+/** Chủ sân có tick được quyền này cho nhân viên không. */
+export function isGrantableToStaff(value: string): value is Permission {
+  return (VENUE_STAFF_GRANTABLE as readonly string[]).includes(value);
+}
 
 const PERMISSION_SET: ReadonlySet<string> = new Set(PERMISSIONS);
 
@@ -81,9 +179,14 @@ export const SYSTEM_ROLES = {
   /** Toàn quyền. Luôn có MỌI quyền, kể cả quyền mới thêm sau này. */
   SUPER_ADMIN: "SUPER_ADMIN",
   ADMIN: "ADMIN",
-  MANAGER: "MANAGER",
-  STAFF: "STAFF",
-  /** Vai trò mặc định của tài khoản tự đăng ký. */
+  /**
+   * Vai trò mặc định của tài khoản tự đăng ký.
+   *
+   * ChốtSân chỉ có BA vai trò nền tảng. `OWNER` và `STAFF` là vai trò THEO SÂN
+   * (enum trên `VenueMember`), không phải dòng trong bảng `roles` — xem
+   * docs/THIET_KE_LAI.md §2. Đừng thêm chúng lại vào đây: `STAFF` tồn tại ở hai
+   * nơi với hai nghĩa chính là cái bẫy đã làm hỏng bản cũ.
+   */
   USER: "USER",
 } as const;
 
@@ -136,35 +239,16 @@ export const DEFAULT_ROLE_PERMISSIONS: readonly RoleSeed[] = [
       "notification:read",
       "notification:send",
       "file:upload",
-    ],
-  },
-  {
-    key: SYSTEM_ROLES.MANAGER,
-    level: 20,
-    name: "Quản lý",
-    description: "Xem người dùng, gửi thông báo nội bộ, xem nhật ký",
-    permissions: [
-      "user:read",
-      "profile:read:own",
-      "profile:update:own",
-      "role:read",
-      "audit:read",
-      "notification:read",
-      "notification:send",
-      "file:upload",
-    ],
-  },
-  {
-    key: SYSTEM_ROLES.STAFF,
-    level: 10,
-    name: "Nhân viên",
-    description: "Xem thông tin người dùng để hỗ trợ, nhận thông báo",
-    permissions: [
-      "user:read",
-      "profile:read:own",
-      "profile:update:own",
-      "notification:read",
-      "file:upload",
+      // Quản trị nền tảng: xem được MỌI sân, nhưng không rút tiền hộ ai
+      "venue:read",
+      "venue:approve",
+      "court:read",
+      "pricing:read",
+      "booking:read",
+      "booking:cancel",
+      "payment:refund",
+      "report:read",
+      "dispute:resolve",
     ],
   },
   {
@@ -258,6 +342,110 @@ export const PERMISSION_METADATA: Record<Permission, PermissionMeta> = {
     name: "Tải tệp lên",
     category: "Tệp tin",
     description: "Xin link tải tệp lên kho lưu trữ",
+  },
+  // --- Theo sân ---
+  "venue:read": {
+    name: "Xem sân",
+    category: "Sân bãi",
+    description: "Xem thông tin cơ sở được gán",
+  },
+  "venue:update": {
+    name: "Sửa thông tin sân",
+    category: "Sân bãi",
+    description: "Sửa tên, mô tả, ảnh, giờ mở cửa, tiện ích",
+  },
+  "venue:delete": {
+    name: "Xoá sân",
+    category: "Sân bãi",
+    description: "⚠️ Chỉ chủ sân. Không tick được cho nhân viên",
+  },
+  "venue:transfer": {
+    name: "Chuyển quyền sở hữu",
+    category: "Sân bãi",
+    description: "⚠️ Chỉ chủ sân. Không tick được cho nhân viên",
+  },
+  "court:read": {
+    name: "Xem sân con",
+    category: "Sân bãi",
+    description: "Xem danh sách sân con và lịch đóng bảo trì",
+  },
+  "court:update": {
+    name: "Sửa sân con",
+    category: "Sân bãi",
+    description: "Thêm, sửa, xoá sân con; đóng sân bảo trì",
+  },
+  "pricing:read": {
+    name: "Xem bảng giá",
+    category: "Giá",
+    description: "Xem giá theo khung giờ và giá đè ngày lễ",
+  },
+  "pricing:update": {
+    name: "Sửa bảng giá",
+    category: "Giá",
+    description: "Đổi giá theo khung giờ, đặt giá ngày lễ",
+  },
+  "booking:read": {
+    name: "Xem lượt đặt",
+    category: "Đặt sân",
+    description: "Xem lịch sân và danh sách lượt đặt",
+  },
+  "booking:create": {
+    name: "Đặt tại quầy",
+    category: "Đặt sân",
+    description: "Tạo lượt đặt cho khách vãng lai",
+  },
+  "booking:checkin": {
+    name: "Check-in khách",
+    category: "Đặt sân",
+    description: "Đánh dấu khách đã tới sân",
+  },
+  "booking:cancel": {
+    name: "Huỷ lượt đặt",
+    category: "Đặt sân",
+    description: "Huỷ lượt đặt của khách",
+  },
+  "booking:reschedule": {
+    name: "Đổi giờ",
+    category: "Đặt sân",
+    description: "Đổi khung giờ hoặc sân con của lượt đặt",
+  },
+  "payment:refund": { name: "Hoàn tiền", category: "Tiền", description: "Hoàn tiền cho khách" },
+  "report:read": {
+    name: "Xem doanh thu",
+    category: "Tiền",
+    description: "Xem báo cáo doanh thu và tỉ lệ lấp đầy",
+  },
+  "member:manage": {
+    name: "Quản lý nhân viên",
+    category: "Sân bãi",
+    description: "Mời, gỡ nhân viên và tick quyền cho họ",
+  },
+  "payout:manage": {
+    name: "Rút tiền",
+    category: "Tiền",
+    description: "⚠️ Chỉ chủ sân. Xin chi trả về tài khoản ngân hàng",
+  },
+
+  // --- Toàn nền tảng ---
+  "venue:approve": {
+    name: "Duyệt sân",
+    category: "Vận hành nền tảng",
+    description: "Duyệt hoặc từ chối sân mới đăng ký",
+  },
+  "payout:approve": {
+    name: "Duyệt chi trả",
+    category: "Vận hành nền tảng",
+    description: "⚠️ Tiền rời khỏi hệ thống. Chỉ quản trị tối cao",
+  },
+  "dispute:resolve": {
+    name: "Xử lý khiếu nại",
+    category: "Vận hành nền tảng",
+    description: "Giải quyết khiếu nại và hoàn tiền thủ công",
+  },
+  "setting:update": {
+    name: "Sửa cấu hình nền tảng",
+    category: "Vận hành nền tảng",
+    description: "⚠️ Hoa hồng, chính sách huỷ, cổng thanh toán",
   },
 };
 

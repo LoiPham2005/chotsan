@@ -1,6 +1,12 @@
 import type { PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { isKnownPermission, type Permission } from "@/lib/permissions";
+import {
+  isKnownPermission,
+  isVenueScopedPermission,
+  VENUE_OWNER_ONLY,
+  VENUE_STAFF_DEFAULT,
+  type Permission,
+} from "@/lib/permissions";
 import { cacheDelByPrefix, cacheGet, cacheSet } from "@/lib/cache";
 
 /**
@@ -280,6 +286,90 @@ export class PermissionService {
 
     if (granted.has(permissions.any)) return true;
     return ownerId === actorId && granted.has(permissions.own);
+  }
+
+  // -------------------------------------------------------------------------
+  // Phân quyền theo SÂN
+  // -------------------------------------------------------------------------
+
+  /**
+   * "Người này có quyền P **trên sân V** không?"
+   *
+   * ---
+   * VÌ SAO MỌI CÂU HỎI PHÂN QUYỀN PHẢI ĐI QUA ĐÂY
+   *
+   * `can(userId, "booking:update")` là câu hỏi SAI trong sản phẩm này — nó
+   * không nói booking của sân nào. Bản cũ chỉ kiểm phạm vi sân ở 2/29 service,
+   * nghĩa là nhân viên sân A thao tác được lên sân B nếu tìm đúng endpoint.
+   *
+   * Ở đây câu hỏi luôn có đúng một dạng, nên không còn chỗ để quên.
+   *
+   * ---
+   * THỨ TỰ XÉT
+   *
+   *   1. Quyền TOÀN CỤC (quản trị nền tảng) → cho qua mọi sân.
+   *      Trừ nhóm `VENUE_OWNER_ONLY`: rút tiền và xoá sân là việc của chủ sân,
+   *      quản trị viên không làm hộ được — kể cả khi có quyền toàn cục.
+   *   2. Là `OWNER` của sân đó → mọi quyền trên sân đó.
+   *   3. Là `STAFF` đang hoạt động → bộ mặc định + những quyền chủ sân tick thêm.
+   */
+  async canOnVenue(userId: string, permission: Permission, venueId: string): Promise<boolean> {
+    if (!isKnownPermission(permission)) return false;
+
+    const ownerOnly = (VENUE_OWNER_ONLY as readonly string[]).includes(permission);
+
+    // Quyền toàn cục thắng — nhưng KHÔNG với nhóm chỉ-chủ-sân.
+    if (!ownerOnly && (await this.permissionsFor(userId)).has(permission)) {
+      return true;
+    }
+
+    // Quyền không thuộc phạm vi sân thì không có đường nào khác để có được nó.
+    if (!isVenueScopedPermission(permission)) return false;
+
+    const member = await this.db.venueMember.findUnique({
+      where: { venueId_userId: { venueId, userId } },
+      select: { role: true, status: true, permissions: true },
+    });
+
+    if (!member || member.status !== "ACTIVE") return false;
+    if (member.role === "OWNER") return true;
+
+    // STAFF: bộ mặc định cộng phần được tick thêm. Nhóm chỉ-chủ-sân đã bị chặn
+    // ở trên, nên dù có ai ghi thẳng vào database cũng không lọt.
+    if (ownerOnly) return false;
+
+    return (
+      (VENUE_STAFF_DEFAULT as readonly string[]).includes(permission) ||
+      member.permissions.includes(permission)
+    );
+  }
+
+  /**
+   * Danh sách sân mà người này có quyền P — dùng cho màn "chọn sân đang quản".
+   *
+   * Người có quyền toàn cục (quản trị) nhận `null` nghĩa là **mọi sân**, thay
+   * vì trả về danh sách hàng nghìn id.
+   */
+  async venuesWithPermission(userId: string, permission: Permission): Promise<string[] | null> {
+    const ownerOnly = (VENUE_OWNER_ONLY as readonly string[]).includes(permission);
+
+    if (!ownerOnly && (await this.permissionsFor(userId)).has(permission)) return null;
+
+    const members = await this.db.venueMember.findMany({
+      where: { userId, status: "ACTIVE" },
+      select: { venueId: true, role: true, permissions: true },
+    });
+
+    return members
+      .filter((member) => {
+        if (member.role === "OWNER") return true;
+        if (ownerOnly) return false;
+        return (
+          (VENUE_STAFF_DEFAULT as readonly string[]).includes(permission) ||
+          member.permissions.includes(permission)
+        );
+      })
+      .map((member) => member.venueId);
   }
 }
 

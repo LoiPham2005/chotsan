@@ -7,3 +7,6 @@ coverage
 pnpm-lock.yaml
 next-env.d.ts
 prisma/migrations
+
+# Artboard của canvas thiết kế — định dạng riêng, prettier làm rối diff
+design/

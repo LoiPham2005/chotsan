@@ -33,12 +33,12 @@ Backend viết lại từ đầu nên lập luận "giữ 18k dòng NestJS" khô
 Quyết định đổi so với bản kế hoạch đầu: **thiết kế lại toàn bộ giao diện** thay vì nâng cấp 40k
 dòng UI Next 14. Hệ quả — mọi lập luận từng níu về `base_template` đều biến mất:
 
-| Lập luận cho base_template | Còn không |
-|---|---|
-| Giữ 18.185 dòng NestJS đã viết | Không — viết lại backend từ đầu |
-| Tránh nâng cấp 40k dòng UI Next 14 | Không — thiết kế lại giao diện |
-| API phục vụ client bên ngoài | Không — Flutter là app của chính mình |
-| Job nặng cần máy riêng | Không — hai cron rất nhẹ, `worker/` lo được |
+| Lập luận cho base_template         | Còn không                                   |
+| ---------------------------------- | ------------------------------------------- |
+| Giữ 18.185 dòng NestJS đã viết     | Không — viết lại backend từ đầu             |
+| Tránh nâng cấp 40k dòng UI Next 14 | Không — thiết kế lại giao diện              |
+| API phục vụ client bên ngoài       | Không — Flutter là app của chính mình       |
+| Job nặng cần máy riêng             | Không — hai cron rất nhẹ, `worker/` lo được |
 
 Và bộ thiết kế mới chạy trên **Tailwind 4 / React 19 / Next 16** — đúng stack gốc của nextjs_base,
 không phải stack phải nâng cấp lên.
@@ -65,11 +65,11 @@ Vì vậy luật xuyên suốt kế hoạch này:
 
 ### Bắt buộc bê nguyên sang (đừng thiết kế lại)
 
-| Thứ | Ở đâu | Vì sao |
-|---|---|---|
+| Thứ                                      | Ở đâu                                       | Vì sao                                                                                                                                    |
+| ---------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `EXCLUDE USING gist` chống trùng booking | `prisma/migrations/000_init_extensions.sql` | Ràng buộc ở tầng **database**. Hai request đồng thời không thể cùng đặt một khung giờ, kể cả khi code sai. Thiết kế đúng, hiếm người làm. |
-| `@@unique([provider, externalEventId])` | `schema.prisma:649` | Idempotency thanh toán bằng ràng buộc DB, không bằng `if`. Cổng thanh toán **luôn** gửi lại webhook. |
-| 46 model Prisma | `schema.prisma` | UI web và Flutter đã dựng quanh hình dạng dữ liệu này. Đổi schema là đổi luôn 154k dòng UI. |
+| `@@unique([provider, externalEventId])`  | `schema.prisma:649`                         | Idempotency thanh toán bằng ràng buộc DB, không bằng `if`. Cổng thanh toán **luôn** gửi lại webhook.                                      |
+| 46 model Prisma                          | `schema.prisma`                             | UI web và Flutter đã dựng quanh hình dạng dữ liệu này. Đổi schema là đổi luôn 154k dòng UI.                                               |
 
 ### Có sẵn trong nextjs_base — đừng viết lại
 
@@ -112,8 +112,8 @@ Cả hai được giải trong Giai đoạn 2 và 6 dưới đây, **trước** 
 
 Đây là nền móng. Làm sau thì 29 miền phải sửa lại.
 
-`permissionService` hiện trả lời *"có quyền `booking:update` không"*. Cần trả lời *"có quyền
-`booking:update` **trên sân X** không"*:
+`permissionService` hiện trả lời _"có quyền `booking:update` không"_. Cần trả lời _"có quyền
+`booking:update` **trên sân X** không"_:
 
 ```ts
 // src/services/permission.service.ts
@@ -172,20 +172,21 @@ Mỗi miền một chu trình cố định:
 
 Thứ tự — dễ trước để quen tay, tiền sau cùng:
 
-| Đợt | Miền | Ngày |
-|---|---|---|
-| 1 | sports, venues, courts, uploads, search | 4 |
-| 2 | pricing (giá theo khung giờ, ngày lễ, override, voucher) | 3 |
-| 3 | **bookings** — quote → hold Redis 10' → create → cancel → reschedule | 4 |
-| 4 | **payments** — VNPay/MoMo/ZaloPay/SePay, HMAC, idempotency, `OwnerEarning` | 4 |
-| 5 | invoices, revenue, subscriptions, affiliate, boost | 4 |
-| 6 | reviews, notifications, staff, teams, vouchers | 3 |
-| 7 | admin, fraud, monitor, weather, ai-*, app-version | 3 |
+| Đợt | Miền                                                                       | Ngày |
+| --- | -------------------------------------------------------------------------- | ---- |
+| 1   | sports, venues, courts, uploads, search                                    | 4    |
+| 2   | pricing (giá theo khung giờ, ngày lễ, override, voucher)                   | 3    |
+| 3   | **bookings** — quote → hold Redis 10' → create → cancel → reschedule       | 4    |
+| 4   | **payments** — VNPay/MoMo/ZaloPay/SePay, HMAC, idempotency, `OwnerEarning` | 4    |
+| 5   | invoices, revenue, subscriptions, affiliate, boost                         | 4    |
+| 6   | reviews, notifications, staff, teams, vouchers                             | 3    |
+| 7   | admin, fraud, monitor, weather, ai-*, app-version                          | 3    |
 
 **Cắt nhỏ ba service khổng lồ của bản cũ** khi viết lại: `boost` 1.017 dòng, `invoices` 957,
 `owner` 705. Chia theo hành vi thật, không theo số dòng.
 
 **Test bắt buộc cho đợt 3 và 4** (không thương lượng):
+
 - Hai request đồng thời cùng khung giờ → đúng một cái thắng (chạy song song thật)
 - Webhook thanh toán gửi lại 3 lần → ghi nhận đúng một lần
 - IPN không bao giờ tới → cron đối soát bắt được
@@ -248,17 +249,17 @@ Chỉ dùng `/api/v1` cho phần chạy ở trình duyệt (react-query cho màn
 
 ## 3. Tổng thời gian
 
-| Giai đoạn | Ngày |
-|---|---|
-| 1. Khung + schema | 3 |
-| 2. Phân quyền theo sân | 3 |
-| 3. Dựng giao diện mới | 15–20 |
-| 4. Viết lại nghiệp vụ | 20–25 |
-| 5. Nối UI web | 5–7 |
-| 6. Cron + realtime | 3 |
-| 7. Nối Flutter | 5 |
-| 8. E2E + cắt chuyển | 3 |
-| **Tổng** | **57–69 ngày làm việc** |
+| Giai đoạn              | Ngày                    |
+| ---------------------- | ----------------------- |
+| 1. Khung + schema      | 3                       |
+| 2. Phân quyền theo sân | 3                       |
+| 3. Dựng giao diện mới  | 15–20                   |
+| 4. Viết lại nghiệp vụ  | 20–25                   |
+| 5. Nối UI web          | 5–7                     |
+| 6. Cron + realtime     | 3                       |
+| 7. Nối Flutter         | 5                       |
+| 8. E2E + cắt chuyển    | 3                       |
+| **Tổng**               | **57–69 ngày làm việc** |
 
 Làm một mình: **khoảng 12–14 tuần.**
 
@@ -283,14 +284,14 @@ lại của dự án.
 
 ## 5. Rủi ro
 
-| Rủi ro | Chặn bằng |
-|---|---|
-| Viết lại làm mất luật nghiệp vụ chỉ tồn tại trong code cũ | Nguyên tắc #1 — test viết từ code cũ trước |
-| Sai sót tiền bạc | GĐ4 đợt 3–4 có test bắt buộc, không thương lượng |
-| UI trôi khỏi bản thiết kế | Nguyên tắc #4 + dựng hệ thiết kế trước, màn sau |
-| Phân quyền theo sân vá không kín | GĐ2 làm TRƯỚC nghiệp vụ + luật ESLint + test 403 |
-| Cron chạy trùng sau khi scale | Khoá Redis ngay GĐ6, không đợi |
-| Flutter lệch hợp đồng API | Sinh client từ OpenAPI, không viết tay model |
+| Rủi ro                                                    | Chặn bằng                                        |
+| --------------------------------------------------------- | ------------------------------------------------ |
+| Viết lại làm mất luật nghiệp vụ chỉ tồn tại trong code cũ | Nguyên tắc #1 — test viết từ code cũ trước       |
+| Sai sót tiền bạc                                          | GĐ4 đợt 3–4 có test bắt buộc, không thương lượng |
+| UI trôi khỏi bản thiết kế                                 | Nguyên tắc #4 + dựng hệ thiết kế trước, màn sau  |
+| Phân quyền theo sân vá không kín                          | GĐ2 làm TRƯỚC nghiệp vụ + luật ESLint + test 403 |
+| Cron chạy trùng sau khi scale                             | Khoá Redis ngay GĐ6, không đợi                   |
+| Flutter lệch hợp đồng API                                 | Sinh client từ OpenAPI, không viết tay model     |
 
 ---
 

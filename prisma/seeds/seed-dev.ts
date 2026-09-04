@@ -10,10 +10,14 @@ import { hash } from "@node-rs/argon2";
  */
 const DEV_PASSWORD = "matkhau123";
 
+/*
+ * ChốtSân chỉ có BA vai trò nền tảng. "Chủ sân" và "nhân viên" không nằm ở đây
+ * — chúng là dòng trong `VenueMember`, tạo ra khi seed sân mẫu bên dưới.
+ */
 const DEV_USERS = [
   { email: "admin@dev.local", fullName: "Quản trị viên Dev", role: SYSTEM_ROLES.ADMIN },
-  { email: "manager@dev.local", fullName: "Quản lý Dev", role: SYSTEM_ROLES.MANAGER },
-  { email: "staff@dev.local", fullName: "Nhân viên Dev", role: SYSTEM_ROLES.STAFF },
+  { email: "chusan@dev.local", fullName: "Chủ sân Dev", role: SYSTEM_ROLES.USER },
+  { email: "nhanvien@dev.local", fullName: "Nhân viên Dev", role: SYSTEM_ROLES.USER },
   { email: "user@dev.local", fullName: "Người dùng Dev", role: SYSTEM_ROLES.USER },
 ];
 

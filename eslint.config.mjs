@@ -114,6 +114,43 @@ export default tseslint.config(
     },
   },
 
+  /*
+   * PHÂN QUYỀN THEO SÂN, ép bằng máy.
+   *
+   * Trong khu quản lý sân, `defineAction` và `requireApiPermission` TRẦN là
+   * sai: chúng hỏi "có quyền huỷ booking không" mà không nói booking của sân
+   * nào. Bản cũ của dự án dính đúng lỗi này ở 27/29 service — nhân viên sân A
+   * thao tác được lên sân B.
+   *
+   * Luật dưới đây làm việc quên kiểm sân thành lỗi biên dịch, không phải thứ
+   * phải nhớ.
+   */
+  {
+    files: ["src/app/(venue)/**/*.{ts,tsx}", "src/app/api/v1/venues/**/*.ts"],
+    ignores: ["**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@/lib/define-action",
+              importNames: ["defineAction", "defineAuthedAction"],
+              message:
+                "Khu quản lý sân phải dùng defineVenueAction(permission, handler) — nó bắt truyền venueId và tự gọi canOnVenue.",
+            },
+            {
+              name: "@/lib/api/auth",
+              importNames: ["requireApiPermission"],
+              message:
+                "Route thuộc phạm vi sân phải dùng requireVenuePermission(request, venueId, permission).",
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // File test.
   {
     files: ["**/*.test.{ts,tsx}", "vitest.setup.ts", "test/**/*.ts"],

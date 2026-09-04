@@ -14,11 +14,11 @@ Dựng trên bộ khung `nextjs_base` (đã sao chép vào đây, không phải 
 
 ## Ba tài liệu phải đọc trước khi code
 
-| Tài liệu | Nội dung |
-|---|---|
-| [THIET_KE_LAI.md](THIET_KE_LAI.md) | **Vai trò, 21 bảng, 36 màn** — quyết định nền tảng, đọc đầu tiên |
+| Tài liệu                                                                             | Nội dung                                                                          |
+| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| [docs/THIET_KE_LAI.md](docs/THIET_KE_LAI.md)                                         | **Vai trò, 21 bảng, 36 màn** — quyết định nền tảng, đọc đầu tiên                  |
 | [.claude/skills/chotsan-thiet-ke/SKILL.md](.claude/skills/chotsan-thiet-ke/SKILL.md) | **Mã màu, chữ, thành phần, responsive** — đọc trước khi viết bất kỳ giao diện nào |
-| [KE_HOACH_REFACTOR.md](KE_HOACH_REFACTOR.md) | Tám giai đoạn, thứ tự làm, nguyên tắc |
+| [docs/KE_HOACH_REFACTOR.md](docs/KE_HOACH_REFACTOR.md)                               | Tám giai đoạn, thứ tự làm, nguyên tắc                                             |
 
 Bản vẽ giao diện: [design/chotsan-giao-dien.html](design/chotsan-giao-dien.html) — mở bằng trình duyệt.
 

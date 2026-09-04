@@ -5,7 +5,7 @@ import { Footer } from "@/components/layout/footer";
 import "./globals.css";
 
 const beVietnamPro = Be_Vietnam_Pro({
-  weight: ['400', '500', '600', '700', '800'],
+  weight: ["400", "500", "600", "700", "800"],
   subsets: ["latin", "vietnamese"],
   variable: "--font-be-vietnam-pro",
   display: "swap",
