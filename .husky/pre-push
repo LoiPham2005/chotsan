@@ -1,0 +1,2 @@
+# Chặn push nếu type hoặc test hỏng. Lint đã chạy ở pre-commit.
+# pnpm typecheck && pnpm test

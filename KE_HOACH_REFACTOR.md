@@ -1,8 +1,13 @@
 # Kế hoạch viết lại sports_booking
 
 > Viết ngày 2026-09-03, dựa trên audit thật của `../sports_booking`.
-> **Phạm vi**: viết lại toàn bộ backend từ đầu, **giữ nguyên UI** web và mobile.
-> Bản gốc không bị đụng tới cho tới Giai đoạn 7.
+> **Phạm vi**: viết lại **toàn bộ** từ đầu — backend, giao diện web, và lớp mạng của app Flutter.
+> Giữ lại: 114k dòng UI Flutter, hình dạng schema, hai ràng buộc database.
+> Bản gốc không bị đụng tới cho tới Giai đoạn 8.
+>
+> Đi kèm: [THIET_KE_LAI.md](THIET_KE_LAI.md) (vai trò, bảng, màn hình) ·
+> [design/chotsan-giao-dien.html](design/chotsan-giao-dien.html) (hệ thiết kế + màn mẫu).
+> Tên sản phẩm: **ChốtSân**.
 
 ---
 
@@ -23,22 +28,23 @@ Backend viết lại từ đầu nên lập luận "giữ 18k dòng NestJS" khô
 - Có `worker/` cho cron, `realtime/` cho lịch sân cập nhật trực tiếp, `/api/v1` Bearer cho Flutter
 - Ranh giới tầng đã được ép bằng ESLint (`no-restricted-imports` chặn Prisma ngoài `src/services/`)
 
-### Cái giá phải trả cho việc giữ UI web
+### Giao diện dựng mới, không port bản cũ
 
-Web UI cũ là **Next 14.1 / React 18 / Tailwind 3.4**, nextjs_base là **Next 16.3 / React 19 /
-Tailwind 4**. Phải nâng cấp 40k dòng. Phần lớn tự động được bằng codemod chính chủ:
+Quyết định đổi so với bản kế hoạch đầu: **thiết kế lại toàn bộ giao diện** thay vì nâng cấp 40k
+dòng UI Next 14. Hệ quả — mọi lập luận từng níu về `base_template` đều biến mất:
 
-```bash
-npx @next/codemod@canary upgrade latest    # params/searchParams thành async, v.v.
-npx @tailwindcss/upgrade                   # tailwind.config.ts → @theme trong CSS
-npx types-react-codemod@latest preset-19   # React 18 → 19
-```
+| Lập luận cho base_template | Còn không |
+|---|---|
+| Giữ 18.185 dòng NestJS đã viết | Không — viết lại backend từ đầu |
+| Tránh nâng cấp 40k dòng UI Next 14 | Không — thiết kế lại giao diện |
+| API phục vụ client bên ngoài | Không — Flutter là app của chính mình |
+| Job nặng cần máy riêng | Không — hai cron rất nhẹ, `worker/` lo được |
 
-JSX và class Tailwind gần như giữ nguyên. Ước tính **5–7 ngày**, không phải vài tuần.
+Và bộ thiết kế mới chạy trên **Tailwind 4 / React 19 / Next 16** — đúng stack gốc của nextjs_base,
+không phải stack phải nâng cấp lên.
 
-⚠️ **Radix UI dùng thẳng** trong bản cũ (6 gói `@radix-ui/react-*`), còn nextjs_base dùng
-shadcn-style bọc quanh Radix. **Giữ cách của bản cũ**, đừng viết lại 58 component sang shadcn —
-hai cách cùng chạy trên Radix, không xung đột.
+Số màn giảm từ **78 xuống 36** (xem [THIET_KE_LAI.md](THIET_KE_LAI.md) §4), nên "dựng mới" không
+đắt hơn "port cũ" nhiều như nghe tưởng.
 
 ### ⚠️ Điều nguy hiểm nhất của việc viết lại từ đầu
 
@@ -90,12 +96,13 @@ Cả hai được giải trong Giai đoạn 2 và 6 dưới đây, **trước** 
 ### GĐ 1 — Khung + schema (3 ngày)
 
 1. `cp -r nextjs_base/* sports_booking_v2/`, đổi tên gói, xoá trang demo, **giữ** bộ auth.
-2. Chuyển 46 model sang `prisma/schema.prisma`. Gộp với model auth của nextjs_base
+2. Viết **21 bảng** theo [THIET_KE_LAI.md](THIET_KE_LAI.md) §3 vào `prisma/schema.prisma`. Gộp với model auth của nextjs_base
    (`User`, `Role`, `UserPermission`, `RefreshToken`, `WebAuthnCredential`…) — bỏ model `User`
    cũ, giữ các model nghiệp vụ.
 3. **Bê nguyên** `000_init_extensions.sql`: `btree_gist` + `EXCLUDE`.
 4. `pnpm db:migrate` trên database rỗng, `pnpm db:seed`.
-5. Seed 5 vai trò: `PLAYER`, `OWNER`, `MANAGER`, `STAFF`, `ADMIN` với `level` tăng dần.
+5. Seed **3** vai trò nền tảng: `USER` (0), `ADMIN` (50), `SUPER_ADMIN` (100). `OWNER`/`STAFF` là
+   enum trên `VenueMember`, **không seed dòng nào** — xem [THIET_KE_LAI.md](THIET_KE_LAI.md) §2.
 
 **Xong khi**: `pnpm check` xanh, `/api/health` trả `database: up`.
 
@@ -113,9 +120,10 @@ Cả hai được giải trong Giai đoạn 2 và 6 dưới đây, **trước** 
 async canOnVenue(userId: string, permission: Permission, venueId: string): Promise<boolean>
 ```
 
-Luật: hợp quyền toàn cục **HOẶC** quyền đến từ `VenueMember` của đúng sân đó. Chủ sân
-(`OWNER`) có mọi quyền trên sân mình sở hữu; `MANAGER`/`STAFF` chỉ trên sân được gán và
-`status = ACTIVE`.
+Luật: quyền toàn cục **HOẶC** quyền từ `VenueMember` của đúng sân đó. `OWNER` có mọi quyền trên
+sân mình sở hữu; `STAFF` có bộ mặc định cộng những quyền chủ sân tick thêm
+(`VenueMember.permissions`), và `status = ACTIVE`. Ba quyền **không bao giờ tick được**:
+`payout:manage`, `venue:delete`, `venue:transfer`.
 
 Kèm hai lớp ép buộc:
 
@@ -133,20 +141,22 @@ nhóm venue-scoped — quên là không qua được CI, không phải "nhớ th
 
 ---
 
-### GĐ 3 — Port UI web (5–7 ngày)
+### GĐ 3 — Dựng giao diện mới (15–20 ngày)
 
-1. Chạy 3 codemod ở §0 trên bản sao của `frontend/`.
-2. Chuyển `src/app` (78 trang) + `src/components` (58) vào `sports_booking_v2/src/app`.
-3. Giữ Radix trực tiếp, **không** viết lại sang shadcn.
-4. Giữ nguyên **mock data** ở bước này — mục tiêu là UI dựng được trên Next 16, chưa nối gì.
-5. `middleware.ts` cũ → gộp vào `src/proxy.ts` của nextjs_base.
+Theo [design/chotsan-giao-dien.html](design/chotsan-giao-dien.html). Thứ tự:
 
-**Xong khi**: `pnpm build` xanh, mở được cả 78 trang trên mock, không lỗi hydration.
+1. **Hệ thiết kế trước**: token màu/chữ/khoảng cách vào `globals.css` (`@theme` của Tailwind 4),
+   rồi các thành phần dùng lại — nút, ô nhập, thẻ, **ô khung giờ 30 phút**, lưới sân × giờ.
+2. **Lưới sân × giờ là thành phần đắt nhất**, dựng và test kỹ trước mọi màn khác: nó xuất hiện ở
+   màn khách, màn chủ sân, máy tính bảng và điện thoại — mỗi khổ một cách bày khác nhau.
+3. 36 màn theo nhóm: công khai (5) → xác thực (3) → đặt sân (3) → tài khoản (5) →
+   quản lý sân (11) → quản trị (9).
+4. **Giữ mock data tới hết giai đoạn này.** Mục tiêu là UI chạy được, chưa nối gì.
+
+**Xong khi**: `pnpm build` xanh, mở được cả 36 màn ở ba khổ (1440 / 834 / 390), không lỗi hydration.
 
 > Làm trước backend có chủ đích: UI chạy được là **danh sách đầy đủ những gì backend phải cung
 > cấp**. Viết backend trước thì luôn thừa endpoint không ai gọi và thiếu endpoint UI cần.
-
----
 
 ### GĐ 4 — Viết lại nghiệp vụ theo miền (20–25 ngày)
 
@@ -242,19 +252,19 @@ Chỉ dùng `/api/v1` cho phần chạy ở trình duyệt (react-query cho màn
 |---|---|
 | 1. Khung + schema | 3 |
 | 2. Phân quyền theo sân | 3 |
-| 3. Port UI web | 5–7 |
+| 3. Dựng giao diện mới | 15–20 |
 | 4. Viết lại nghiệp vụ | 20–25 |
 | 5. Nối UI web | 5–7 |
 | 6. Cron + realtime | 3 |
 | 7. Nối Flutter | 5 |
 | 8. E2E + cắt chuyển | 3 |
-| **Tổng** | **47–56 ngày làm việc** |
+| **Tổng** | **57–69 ngày làm việc** |
 
-Làm một mình: **khoảng 10–12 tuần.**
+Làm một mình: **khoảng 12–14 tuần.**
 
-So với phương án chuyển sang `base_template` (giữ backend cũ, ~4–6 tuần): **đắt hơn gấp đôi**.
-Đổi lại được một codebase có test, hai lỗ hổng P0 được thiết kế đúng từ đầu, và vòng lặp dev
-nhanh gấp 4 cho toàn bộ vòng đời còn lại của dự án.
+Đắt hơn phương án giữ backend cũ (~4–6 tuần), nhưng đổi lại: codebase có test, hai lỗ hổng P0
+được thiết kế đúng từ đầu, giao diện đúng ý, và vòng lặp dev nhanh gấp 4 cho toàn bộ vòng đời còn
+lại của dự án.
 
 ---
 
@@ -263,9 +273,11 @@ nhanh gấp 4 cho toàn bộ vòng đời còn lại của dự án.
 1. **Không viết service mới từ trí nhớ.** Đọc code cũ → test → code mới. Bản cũ là đặc tả duy nhất.
 2. **Bản cũ luôn khởi động được** cho tới hết GĐ 8. Nó là mốc đối chiếu duy nhất.
 3. **Một miền một commit**, `pnpm check` trước khi commit.
-4. **Không "tiện tay cải tiến" khi đang port UI.** Port là port. Đổi giao diện làm ở commit riêng.
+4. **Dựng UI đúng theo bản thiết kế đã duyệt.** Muốn đổi thì sửa bản thiết kế trước, rồi mới sửa
+   code — sửa thẳng vào code là hai nguồn sự thật, và bản thiết kế thành vô dụng sau một tuần.
 5. **Không đụng `EXCLUDE` constraint và `@@unique([provider, externalEventId])`.**
-6. **Không đổi hình dạng 46 model** trừ khi bắt buộc — UI hai đầu đã dựng quanh chúng.
+6. **21 bảng theo [THIET_KE_LAI.md](THIET_KE_LAI.md) §3**, không phải 46 bảng cũ. Nhưng giữ
+   nguyên hình dạng những bảng mà UI Flutter đã dựng quanh.
 
 ---
 
@@ -275,7 +287,7 @@ nhanh gấp 4 cho toàn bộ vòng đời còn lại của dự án.
 |---|---|
 | Viết lại làm mất luật nghiệp vụ chỉ tồn tại trong code cũ | Nguyên tắc #1 — test viết từ code cũ trước |
 | Sai sót tiền bạc | GĐ4 đợt 3–4 có test bắt buộc, không thương lượng |
-| Port UI sa lầy vì vừa port vừa sửa giao diện | Nguyên tắc #4 + giữ mock tới hết GĐ3 |
+| UI trôi khỏi bản thiết kế | Nguyên tắc #4 + dựng hệ thiết kế trước, màn sau |
 | Phân quyền theo sân vá không kín | GĐ2 làm TRƯỚC nghiệp vụ + luật ESLint + test 403 |
 | Cron chạy trùng sau khi scale | Khoá Redis ngay GĐ6, không đợi |
 | Flutter lệch hợp đồng API | Sinh client từ OpenAPI, không viết tay model |

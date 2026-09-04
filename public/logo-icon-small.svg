@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="ChốtSân">
+  <!-- Bản RÚT GỌN cho 16–20px: bỏ khung sân (vạch 4px biến mất ở cỡ đó),
+       giữ vạch giữa + tam giác để không bị đọc thành nút play thuần. -->
+  <rect width="100" height="100" rx="24" fill="#10B981"/>
+  <path d="M34 30 V70" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
+  <path d="M48 33 L76 50 L48 67 Z" fill="#fff"/>
+</svg>

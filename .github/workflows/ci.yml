@@ -1,0 +1,221 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, dev]
+  pull_request:
+    branches: [main, master, dev]
+
+# Push mới lên cùng một nhánh sẽ huỷ lần chạy trước, khỏi xếp hàng vô ích.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: 1
+
+jobs:
+  validate:
+    name: Lint · Typecheck · Test · Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nextjs_prisma_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/nextjs_prisma_test?schema=public
+      SESSION_SECRET: ci-session-secret-must-be-at-least-32-characters-long
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Không ghim version ở đây: action đọc trường `packageManager` trong
+      # package.json, nên CI và máy dev không thể lệch nhau.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Cache build của Next.js — không có nó thì mọi lần build đều là build lạnh.
+      - name: Restore Next.js cache
+        uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('src/**/*.ts', 'src/**/*.tsx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
+
+      - name: Prisma generate
+        run: pnpm db:generate
+
+      - name: Apply migrations
+        run: pnpm db:deploy
+
+      - name: Format check
+        run: pnpm format:check
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test:coverage
+
+      - name: Build
+        run: pnpm build
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Job riêng chứ không gộp vào `validate`: E2E cần build production + tải
+    # trình duyệt, nên nó chậm hơn hẳn phần còn lại. Gộp vào là mọi lần chạy
+    # CI đều phải chờ, kể cả khi chỉ sửa một dòng comment.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nextjs_prisma_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/nextjs_prisma_e2e?schema=public
+      SESSION_SECRET: ci-session-secret-must-be-at-least-32-characters-long
+      # Bộ test đăng ký tài khoản mới, mà đăng ký lại gửi email xác thực —
+      # thiếu biến này thì `emails.ts` ném lỗi thay vì dựng được link.
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3100
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Chỉ tải Chromium: bộ test chỉ khai báo một project, tải cả ba trình
+      # duyệt là mất thêm vài phút mỗi lần chạy mà không dùng tới.
+      - name: Cài trình duyệt Playwright
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Prisma generate
+        run: pnpm db:generate
+
+      - name: Apply migrations
+        run: pnpm db:deploy
+
+      # E2E đăng nhập bằng tài khoản mẫu, nên database phải có sẵn chúng.
+      - name: Seed dữ liệu mẫu
+        run: pnpm db:seed
+
+      - name: Chạy E2E
+        run: pnpm test:e2e
+
+      # Chỉ tải lên khi hỏng: report của lần chạy xanh không ai mở.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      # Không cache pnpm ở đây: job này không chạy `pnpm install`, nên store
+      # của pnpm không tồn tại — `cache: pnpm` sẽ làm bước "Post Run" thất bại
+      # vì "path does not exist", kéo cả job đỏ dù `pnpm audit` đã chạy đúng.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level high || true
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      # Dockerfile hỏng chỉ lộ ra lúc deploy nếu CI không tự build thử.
+      # `load: true` để bước sau chạy được image vừa build.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner
+          push: false
+          load: true
+          tags: app:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Build xong KHÔNG có nghĩa là chạy được.
+      #
+      # Đã từng gặp: image build sạch nhưng container vừa lên là chết với
+      # MODULE_NOT_FOUND, do Next.js truy vết thiếu file vào bản standalone
+      # (xem `outputFileTracingIncludes` trong next.config.mjs). Loại lỗi này
+      # chỉ lộ ra khi chạy thật, nên bước dưới đây là bắt buộc.
+      #
+      # Cố tình KHÔNG dựng Postgres ở đây: mục tiêu là chứng minh tiến trình
+      # Node khởi động và phục vụ được HTTP. `/api/health` trả 503 khi mất
+      # database — 503 vẫn là một phản hồi, tức là server đã lên. Thứ cần bắt
+      # là container chết ngay hoặc từ chối kết nối.
+      - name: Chạy thử container
+        run: |
+          docker run -d --name app-ci -p 3000:3000 \
+            -e DATABASE_URL=postgresql://ci:ci@127.0.0.1:5432/ci \
+            -e SESSION_SECRET=ci-session-secret-must-be-at-least-32-characters-long \
+            app:ci
+
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/health || echo 000)
+            [ "$code" != "000" ] && break
+            sleep 2
+          done
+
+          if [ "${code:-000}" = "000" ]; then
+            echo "::error::Container không phục vụ được HTTP sau 60 giây."
+            docker logs app-ci
+            exit 1
+          fi
+
+          echo "✓ Container đã khởi động và phản hồi HTTP $code"
+          docker rm -f app-ci
