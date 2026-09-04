@@ -1,107 +1,172 @@
+import type { Metadata } from "next";
 import Link from "next/link";
-import { getCurrentUser } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { TheSan } from "@/components/venue/the-san";
+import { sportService } from "@/services/sport.service";
+import { venueService } from "@/services/venue.service";
+
+export const metadata: Metadata = {
+  title: "ChốtSân — Đặt sân thể thao nhanh, rõ giá",
+  description:
+    "Xem sân nào còn trống, giá bao nhiêu, đặt trong 30 giây. Cầu lông, bóng đá, pickleball, tennis.",
+};
 
 /**
- * Trang chủ — cũng là trang mẫu cho lối viết giao diện của dự án.
+ * Trang chủ.
  *
- * Dùng class tiện ích của Tailwind với TOKEN của dự án (`bg-surface`,
- * `text-muted`…), không dùng `style={{}}` nội tuyến như bản trước. Lý do không
- * chỉ là gọn: `style` nội tuyến buộc CSP phải mở `style-src 'unsafe-inline'`
- * (xem ghi chú trong `src/proxy.ts`). Càng ít inline style, càng gần tới ngày
- * siết được dòng đó.
+ * ---
+ * Ô TÌM KIẾM ĐỨNG ĐẦU, KHÔNG PHẢI LỜI GIỚI THIỆU
+ *
+ * Người mở trang này đã biết mình cần gì: một sân, tối nay, gần nhà. Họ không
+ * cần đọc app làm được gì. Nên thứ đầu tiên chạm tới là ô tìm — và ngay dưới
+ * là sân thật, không phải ba khối "tính năng nổi bật".
  */
-export default async function HomePage() {
-  const user = await getCurrentUser();
+export default async function TrangChuPage() {
+  const [monTheThao, noiBat] = await Promise.all([
+    sportService.listActive(),
+    venueService.search({ limit: 6 }),
+  ]);
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-16 sm:px-6 lg:px-8">
-      <section className="mx-auto max-w-3xl text-center">
-        <span className="inline-flex items-center rounded-full bg-brand/15 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-brand ring-1 ring-inset ring-brand/30">
-          Next.js 16 + Prisma
-        </span>
+    <div>
+      <section className="border-b border-line bg-gradient-to-b from-brand-tint to-canvas">
+        <div className="mx-auto max-w-4xl px-4 py-12 text-center sm:px-6 sm:py-20">
+          <h1 className="text-3xl font-bold leading-tight text-content sm:text-5xl">
+            Đặt sân thể thao
+            <br className="sm:hidden" /> <span className="text-brand">nhanh, rõ giá</span>
+          </h1>
 
-        <h1 className="mt-6 text-4xl font-extrabold tracking-tight text-content sm:text-5xl">
-          Bộ khung web có sẵn xác thực và phân quyền
-        </h1>
+          <p className="mx-auto mt-3 max-w-xl text-base text-muted sm:text-lg">
+            Xem sân nào còn trống theo từng 30 phút, biết trước giá, đặt xong trong 30 giây. Không
+            cần gọi điện hỏi.
+          </p>
 
-        <p className="mx-auto mt-5 max-w-2xl text-base leading-relaxed text-muted sm:text-lg">
-          App Router + Prisma + Zod trong một dự án phẳng. Đăng nhập, RBAC sửa được lúc chạy, REST
-          API cho mobile và WebSocket đều đã dựng sẵn.
-        </p>
+          {/*
+            `<form method="get">` thuần, không JavaScript: kết quả có URL chia
+            sẻ được, nút quay lại hoạt động đúng, và tìm được cả khi mạng 3G
+            ngoài sân chưa tải xong bundle.
+          */}
+          <form
+            action="/san"
+            method="get"
+            className="mx-auto mt-7 grid max-w-2xl gap-2 sm:grid-cols-[1fr_11rem_auto]"
+          >
+            <Input
+              type="search"
+              name="q"
+              placeholder="Tên sân hoặc địa chỉ…"
+              aria-label="Tìm theo tên sân hoặc địa chỉ"
+              className="h-12 bg-surface text-base"
+            />
 
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-          {user ? (
-            <>
-              <Button asChild size="lg">
-                <Link href="/users">Vào khu quản trị</Link>
-              </Button>
-              <Button asChild size="lg" variant="outline">
-                <Link href="/security">Bảo mật tài khoản</Link>
-              </Button>
-            </>
-          ) : (
-            <Button asChild size="lg">
-              <Link href="/login">Đăng nhập</Link>
+            <select
+              name="mon"
+              aria-label="Môn thể thao"
+              className="h-12 rounded-token-md border border-line bg-surface px-3 text-base text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60"
+            >
+              <option value="">Tất cả môn</option>
+              {monTheThao.map((mon) => (
+                <option key={mon.key} value={mon.key}>
+                  {mon.name}
+                </option>
+              ))}
+            </select>
+
+            <Button type="submit" size="lg" className="h-12">
+              Tìm sân
             </Button>
-          )}
-          <Button asChild size="lg" variant="outline">
-            <Link href="/docs">Tài liệu API</Link>
-          </Button>
+          </form>
+
+          <ul className="mt-5 flex flex-wrap justify-center gap-2">
+            {monTheThao.slice(0, 5).map((mon) => (
+              <li key={mon.key}>
+                <Link
+                  href={`/san?mon=${mon.key}`}
+                  className="inline-block rounded-full border border-line bg-surface px-3.5 py-1.5 text-sm text-content transition hover:border-brand-line hover:bg-brand-tint focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+                >
+                  {mon.name}
+                </Link>
+              </li>
+            ))}
+          </ul>
         </div>
       </section>
 
-      <section className="mt-20 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-        {FEATURES.map((feature) => (
-          <article
-            key={feature.title}
-            className="rounded-token-lg border border-line bg-surface p-6 transition-colors hover:border-brand/40"
-          >
-            <h2 className="text-base font-semibold text-content">{feature.title}</h2>
-            <p className="mt-1 font-mono text-xs text-brand">{feature.path}</p>
-            <p className="mt-3 text-sm leading-relaxed text-muted">{feature.description}</p>
-          </article>
-        ))}
+      <section className="mx-auto max-w-6xl px-4 py-10 sm:px-6 sm:py-14 lg:px-8">
+        <div className="flex items-baseline justify-between gap-4">
+          <h2 className="text-xl font-bold text-content sm:text-2xl">Sân đang nhận đặt</h2>
+          <Link href="/san" className="text-sm font-medium text-brand hover:underline">
+            Xem tất cả →
+          </Link>
+        </div>
+
+        {noiBat.items.length === 0 ? (
+          <p className="mt-6 rounded-token-lg border border-dashed border-line bg-surface p-10 text-center text-muted">
+            Chưa có sân nào đang mở bán. Quay lại sau giúp bạn nhé.
+          </p>
+        ) : (
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {noiBat.items.map((san) => (
+              // `Decimal` của Prisma không đi qua ranh giới Server → Client
+              // được — đổi sang số ngay tại đây.
+              <TheSan key={san.id} san={{ ...san, ratingAvg: Number(san.ratingAvg) }} />
+            ))}
+          </div>
+        )}
       </section>
-    </main>
+
+      <section className="border-t border-line bg-surface">
+        <div className="mx-auto max-w-5xl px-4 py-10 sm:px-6 sm:py-14 lg:px-8">
+          <h2 className="text-center text-xl font-bold text-content sm:text-2xl">
+            Đặt sân trong ba bước
+          </h2>
+
+          <ol className="mt-7 grid gap-6 sm:grid-cols-3">
+            <BuocLam
+              so={1}
+              tieuDe="Chọn sân và giờ"
+              mo="Lưới sân × khung 30 phút cho thấy ngay sân nào trống, giờ nào giá cao hơn."
+            />
+            <BuocLam
+              so={2}
+              tieuDe="Chuyển khoản"
+              mo="Quét mã QR bằng app ngân hàng. Chỗ được giữ 10 phút để bạn thanh toán."
+            />
+            <BuocLam
+              so={3}
+              tieuDe="Tới sân, đọc mã"
+              mo="Sân xác nhận xong bạn nhận thông báo. Tới nơi chỉ cần đọc mã đặt sân."
+            />
+          </ol>
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-3xl px-4 py-12 text-center sm:px-6 sm:py-16">
+        <h2 className="text-xl font-bold text-content sm:text-2xl">Bạn là chủ sân?</h2>
+        <p className="mx-auto mt-2 max-w-lg text-muted">
+          Đưa sân lên ChốtSân để nhận đặt online, tự quản lịch và bảng giá, xem doanh thu theo ngày.
+          Không mất phí đăng ký.
+        </p>
+        <Button asChild size="lg" variant="outline" className="mt-5">
+          <Link href="/register">Đăng ký chủ sân</Link>
+        </Button>
+      </section>
+    </div>
   );
 }
 
-const FEATURES = [
-  {
-    title: "Xác thực & phiên đăng nhập",
-    path: "src/lib/session.ts · src/lib/auth.ts",
-    description:
-      "Mật khẩu băm Argon2id tự nâng cấp dần từ bcrypt, khoá tài khoản khi sai liên tiếp, refresh token xoay vòng và thu hồi được.",
-  },
-  {
-    title: "Phân quyền sửa được lúc chạy",
-    path: "src/services/role.service.ts · /roles",
-    description:
-      "Danh mục quyền nằm trong code để TypeScript bắt lỗi; việc gán quyền nằm trong database để đổi mà không cần deploy.",
-  },
-  {
-    title: "Tầng nghiệp vụ tách bạch",
-    path: "src/services/",
-    description:
-      "Nơi duy nhất gọi Prisma. Web và REST API dùng chung một tầng, nên không có luật nghiệp vụ nào chỉ tồn tại ở một phía.",
-  },
-  {
-    title: "REST API cho mobile",
-    path: "src/app/api/v1/",
-    description:
-      "Bearer token, envelope JSON thống nhất, đặc tả OpenAPI sinh thẳng từ Zod schema nên không bao giờ lệch tài liệu.",
-  },
-  {
-    title: "Realtime tách tiến trình",
-    path: "realtime/",
-    description:
-      "WebSocket chạy riêng, dùng chung token với web và mobile. Deploy web không làm rớt kết nối đang mở.",
-  },
-  {
-    title: "Sẵn sàng triển khai",
-    path: "Dockerfile · deploy/",
-    description:
-      "Image standalone, systemd unit đã siết quyền, Caddy tự cấp HTTPS, CI tự build và chạy thử container.",
-  },
-];
+function BuocLam({ so, tieuDe, mo }: { so: number; tieuDe: string; mo: string }) {
+  return (
+    <li className="text-center sm:text-left">
+      <span
+        className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-brand text-base font-bold text-white"
+        aria-hidden
+      >
+        {so}
+      </span>
+      <h3 className="mt-3 font-semibold text-content">{tieuDe}</h3>
+      <p className="mt-1 text-sm leading-relaxed text-muted">{mo}</p>
+    </li>
+  );
+}

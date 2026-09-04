@@ -225,3 +225,41 @@ Mỗi khổ có **một chỗ đổi hẳn cách bày**, không phải co giãn:
 - **Đừng viết mã màu thẳng vào component.** Dùng token; đổi tông sau này chỉ sửa một chỗ.
 - **Đừng tạo thư mục/pattern cho nhu cầu chưa có.** Trước khi thêm cấu trúc mới, tự hỏi: đã có ≥2
   nơi cần dùng thật chưa?
+
+## `min-w-0` — chữ hay quên nhất, và hỏng nặng nhất
+
+Phần tử con của `flex` hoặc `grid` mặc định là `min-width: auto`: **nó nở ra vừa nội dung thay vì
+chịu bó theo cha**. Hậu quả là `overflow-x-auto` đặt bên trong hoàn toàn vô hiệu — bảng không cuộn
+trong khung của nó mà đẩy rộng CẢ TRANG.
+
+Trên điện thoại, trang tràn ngang trông như: header bị cắt mất nút, chữ chạy ra ngoài mép, và người
+dùng phải cuộn ngang để đọc một câu. Đã xảy ra thật với lưới sân × khung giờ.
+
+**Luật**: mọi khung bọc nội dung rộng (bảng, lưới, dải cuộn) phải có `min-w-0` ở CẢ khung cuộn lẫn
+mọi phần tử flex/grid cha của nó.
+
+```tsx
+<section className="min-w-0">
+  {" "}
+  {/* ô của grid */}
+  <div className="flex min-w-0 flex-col">
+    {" "}
+    {/* khung flex */}
+    <div className="min-w-0 overflow-x-auto">
+      <div className="min-w-max">{/* nội dung rộng */}</div>
+    </div>
+  </div>
+</section>
+```
+
+Với ô `flex-1` mang chữ bên trong (dải tổng quan cả ngày), `flex-1` một mình cũng không đủ — thêm
+`min-w-0` cho ô, và ẩn chữ ở khổ hẹp nhất.
+
+**Cách kiểm, không đoán bằng mắt:**
+
+```js
+document.documentElement.scrollWidth <= window.innerWidth; // phải đúng ở MỌI khổ
+```
+
+Đo ở 320 · 360 · 390 · 430 · 768 · 1024 · 1280 · 1920. 320px là iPhone SE đời cũ — dưới ngưỡng đó
+thì ẩn chữ trong logo, giữ biểu tượng.

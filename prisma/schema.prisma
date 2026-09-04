@@ -16,11 +16,11 @@ model Role {
   name        String
   description String?
   level       Int              @default(0)
-  isSystem    Boolean          @default(false)
+  isSystem    Boolean          @default(false) @map("is_system")
   permissions RolePermission[]
   userRoles   UserRole[]
-  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime         @updatedAt @db.Timestamptz(3)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([level])
   @@map("roles")
@@ -34,18 +34,18 @@ model Permission {
   description     String?
   roles           RolePermission[]
   userPermissions UserPermission[]
-  createdAt       DateTime         @default(now()) @db.Timestamptz(3)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([category])
   @@map("permissions")
 }
 
 model RolePermission {
-  roleId       String
-  permissionId String
+  roleId       String     @map("role_id")
+  permissionId String     @map("permission_id")
   role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
   permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
-  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@id([roleId, permissionId])
   @@index([permissionId])
@@ -53,10 +53,10 @@ model RolePermission {
 }
 
 model UserRole {
-  userId     String
-  roleId     String
-  assignedBy String?
-  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  userId     String   @map("user_id")
+  roleId     String   @map("role_id")
+  assignedBy String?  @map("assigned_by")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
@@ -66,12 +66,12 @@ model UserRole {
 }
 
 model UserPermission {
-  userId       String
-  permissionId String
-  isGranted    Boolean    @default(true)
-  grantedBy    String?
-  expiresAt    DateTime?  @db.Timestamptz(3)
-  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
+  userId       String     @map("user_id")
+  permissionId String     @map("permission_id")
+  isGranted    Boolean    @default(true) @map("is_granted")
+  grantedBy    String?    @map("granted_by")
+  expiresAt    DateTime?  @map("expires_at") @db.Timestamptz(3)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
@@ -94,17 +94,17 @@ model User {
   username            String?
   password            String?
   status              UserStatus              @default(ACTIVE)
-  emailVerifiedAt     DateTime?               @db.Timestamptz(3)
-  phoneVerifiedAt     DateTime?               @db.Timestamptz(3)
-  pendingEmail        String?
-  passwordChangedAt   DateTime?               @db.Timestamptz(3)
-  failedLoginAttempts Int                     @default(0)
-  lockedUntil         DateTime?               @db.Timestamptz(3)
-  deletedAt           DateTime?               @db.Timestamptz(3)
-  twoFactorSecret     String?
-  twoFactorEnabledAt  DateTime?               @db.Timestamptz(3)
-  createdAt           DateTime                @default(now()) @db.Timestamptz(3)
-  updatedAt           DateTime                @updatedAt @db.Timestamptz(3)
+  emailVerifiedAt     DateTime?               @map("email_verified_at") @db.Timestamptz(3)
+  phoneVerifiedAt     DateTime?               @map("phone_verified_at") @db.Timestamptz(3)
+  pendingEmail        String?                 @map("pending_email")
+  passwordChangedAt   DateTime?               @map("password_changed_at") @db.Timestamptz(3)
+  failedLoginAttempts Int                     @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime?               @map("locked_until") @db.Timestamptz(3)
+  deletedAt           DateTime?               @map("deleted_at") @db.Timestamptz(3)
+  twoFactorSecret     String?                 @map("two_factor_secret")
+  twoFactorEnabledAt  DateTime?               @map("two_factor_enabled_at") @db.Timestamptz(3)
+  createdAt           DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime                @updatedAt @map("updated_at") @db.Timestamptz(3)
   profile             UserProfile?
   userRoles           UserRole[]
   userPermissions     UserPermission[]
@@ -136,10 +136,10 @@ enum Gender {
 
 model UserProfile {
   id        String    @id @default(cuid())
-  userId    String    @unique
+  userId    String    @unique @map("user_id")
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  fullName  String?
-  avatarUrl String?
+  fullName  String?   @map("full_name")
+  avatarUrl String?   @map("avatar_url")
   gender    Gender?
   dob       DateTime? @db.Date
   bio       String?
@@ -148,19 +148,19 @@ model UserProfile {
   district  String?
   country   String?   @default("VN")
   metadata  Json?
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@map("user_profiles")
 }
 
 model RecoveryCode {
   id        String    @id @default(cuid())
-  userId    String
+  userId    String    @map("user_id")
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  codeHash  String
-  usedAt    DateTime? @db.Timestamptz(3)
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  codeHash  String    @map("code_hash")
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@unique([userId, codeHash])
   @@index([userId])
@@ -169,19 +169,19 @@ model RecoveryCode {
 
 model WebAuthnCredential {
   id           String    @id @default(cuid())
-  userId       String
+  userId       String    @map("user_id")
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  credentialId String    @unique
-  publicKey    String
+  credentialId String    @unique @map("credential_id")
+  publicKey    String    @map("public_key")
   counter      BigInt    @default(0)
-  deviceType   String
-  backedUp     Boolean   @default(false)
+  deviceType   String    @map("device_type")
+  backedUp     Boolean   @default(false) @map("backed_up")
   transports   String[]
   aaguid       String?
   name         String?
-  lastUsedAt   DateTime? @db.Timestamptz(3)
-  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime  @updatedAt @db.Timestamptz(3)
+  lastUsedAt   DateTime? @map("last_used_at") @db.Timestamptz(3)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([userId])
   @@map("webauthn_credentials")
@@ -189,11 +189,11 @@ model WebAuthnCredential {
 
 model OAuthAccount {
   id                String   @id @default(cuid())
-  userId            String
+  userId            String   @map("user_id")
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   provider          String
-  providerAccountId String
-  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+  providerAccountId String   @map("provider_account_id")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@unique([provider, providerAccountId])
   @@index([userId])
@@ -202,17 +202,17 @@ model OAuthAccount {
 
 model RefreshToken {
   id          String      @id @default(cuid())
-  familyId    String
-  tokenHash   String      @unique
-  userId      String
+  familyId    String      @map("family_id")
+  tokenHash   String      @unique @map("token_hash")
+  userId      String      @map("user_id")
   user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  deviceId    String?
-  userAgent   String?
+  deviceId    String?     @map("device_id")
+  userAgent   String?     @map("user_agent")
   ip          String?
-  twoFactorAt DateTime?   @db.Timestamptz(3)
-  expiresAt   DateTime    @db.Timestamptz(3)
-  revokedAt   DateTime?   @db.Timestamptz(3)
-  createdAt   DateTime    @default(now()) @db.Timestamptz(3)
+  twoFactorAt DateTime?   @map("two_factor_at") @db.Timestamptz(3)
+  expiresAt   DateTime    @map("expires_at") @db.Timestamptz(3)
+  revokedAt   DateTime?   @map("revoked_at") @db.Timestamptz(3)
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   device      UserDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
 
   @@index([userId])
@@ -230,15 +230,15 @@ enum VerificationTokenType {
 
 model VerificationToken {
   id          String                @id @default(cuid())
-  tokenHash   String                @unique
+  tokenHash   String                @unique @map("token_hash")
   type        VerificationTokenType
-  userId      String
+  userId      String                @map("user_id")
   user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   destination String?
   attempts    Int                   @default(0)
-  expiresAt   DateTime              @db.Timestamptz(3)
-  usedAt      DateTime?             @db.Timestamptz(3)
-  createdAt   DateTime              @default(now()) @db.Timestamptz(3)
+  expiresAt   DateTime              @map("expires_at") @db.Timestamptz(3)
+  usedAt      DateTime?             @map("used_at") @db.Timestamptz(3)
+  createdAt   DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([userId, type])
   @@index([expiresAt])
@@ -253,16 +253,16 @@ enum DevicePlatform {
 
 model UserDevice {
   id            String         @id @default(cuid())
-  userId        String
+  userId        String         @map("user_id")
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   platform      DevicePlatform
-  fcmToken      String         @unique
-  deviceId      String?
-  deviceName    String?
-  isActive      Boolean        @default(true)
-  lastSeenAt    DateTime       @default(now()) @db.Timestamptz(3)
-  createdAt     DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt     DateTime       @updatedAt @db.Timestamptz(3)
+  fcmToken      String         @unique @map("fcm_token")
+  deviceId      String?        @map("device_id")
+  deviceName    String?        @map("device_name")
+  isActive      Boolean        @default(true) @map("is_active")
+  lastSeenAt    DateTime       @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
   refreshTokens RefreshToken[]
 
   @@index([userId])
@@ -279,12 +279,12 @@ model Notification {
   id         String                  @id @default(cuid())
   title      String
   body       String
-  imageUrl   String?
+  imageUrl   String?                 @map("image_url")
   type       NotificationType        @default(DIRECT)
-  actionUrl  String?
+  actionUrl  String?                 @map("action_url")
   data       Json?
-  senderId   String?
-  createdAt  DateTime                @default(now()) @db.Timestamptz(3)
+  senderId   String?                 @map("sender_id")
+  createdAt  DateTime                @default(now()) @map("created_at") @db.Timestamptz(3)
   recipients NotificationRecipient[]
 
   @@index([type, createdAt])
@@ -293,13 +293,13 @@ model Notification {
 
 model NotificationRecipient {
   id             String       @id @default(cuid())
-  notificationId String
-  userId         String
-  isRead         Boolean      @default(false)
-  readAt         DateTime?    @db.Timestamptz(3)
-  isPushed       Boolean      @default(false)
-  pushedAt       DateTime?    @db.Timestamptz(3)
-  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  notificationId String       @map("notification_id")
+  userId         String       @map("user_id")
+  isRead         Boolean      @default(false) @map("is_read")
+  readAt         DateTime?    @map("read_at") @db.Timestamptz(3)
+  isPushed       Boolean      @default(false) @map("is_pushed")
+  pushedAt       DateTime?    @map("pushed_at") @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -311,15 +311,15 @@ model NotificationRecipient {
 
 model AuditLog {
   id         String   @id @default(cuid())
-  actorId    String?
-  actorEmail String?
+  actorId    String?  @map("actor_id")
+  actorEmail String?  @map("actor_email")
   action     String
   entity     String
-  entityId   String?
+  entityId   String?  @map("entity_id")
   metadata   Json?
   ip         String?
-  userAgent  String?
-  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([createdAt])
   @@index([actorId, createdAt])
@@ -334,7 +334,7 @@ model Sport {
   name      String
   sortOrder Int      @default(0) @map("sort_order")
   isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   venues    Venue[]
   courts    Court[]
 
@@ -362,8 +362,8 @@ model Venue {
   address           String
   ward              String
   province          String
-  wardCode          String?        @map("ward_code")
-  provinceCode      String?        @map("province_code")
+  // Vì sao sân đang đóng — khách đọc câu này trên trang chi tiết, và admin ghi
+  // lý do khoá vào đây. Thiếu nó thì "hiện không nhận đặt" không nói được gì.
   inactiveNote      String?        @map("inactive_note")
   lat               Float?
   lng               Float?
@@ -382,8 +382,8 @@ model Venue {
   ratingCount       Int            @default(0) @map("rating_count")
   sportId           String         @map("sport_id")
   sport             Sport          @relation(fields: [sportId], references: [id])
-  createdAt         DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime       @updatedAt @db.Timestamptz(3)
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt         DateTime?      @map("deleted_at") @db.Timestamptz(3)
   images            VenueImage[]
   hours             VenueHour[]
@@ -412,7 +412,7 @@ model VenueImage {
   storageKey String?  @map("storage_key")
   isPrimary  Boolean  @default(false) @map("is_primary")
   sortOrder  Int      @default(0) @map("sort_order")
-  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([venueId, sortOrder])
   @@map("venue_images")
@@ -452,8 +452,8 @@ model VenueMember {
   status      VenueMemberStatus @default(ACTIVE)
   permissions String[]          @default([])
   invitedBy   String?           @map("invited_by")
-  createdAt   DateTime          @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime          @updatedAt @db.Timestamptz(3)
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@unique([venueId, userId])
   @@index([userId, status])
@@ -485,8 +485,8 @@ model Court {
   note      String?
   isActive  Boolean         @default(true) @map("is_active")
   sortOrder Int             @default(0) @map("sort_order")
-  createdAt DateTime        @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime        @updatedAt @db.Timestamptz(3)
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
   deletedAt DateTime?       @map("deleted_at") @db.Timestamptz(3)
   closures  CourtClosure[]
   bookings  Booking[]
@@ -504,7 +504,7 @@ model CourtClosure {
   endAt     DateTime @map("end_at") @db.Timestamptz(3)
   reason    String?
   createdBy String?  @map("created_by")
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([courtId, startAt])
   @@map("court_closures")
@@ -521,8 +521,8 @@ model PriceRule {
   pricePerSlot Int      @map("price_per_slot")
   isPeak       Boolean  @default(false) @map("is_peak")
   priority     Int      @default(0)
-  createdAt    DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([venueId, priority])
   @@map("price_rules")
@@ -539,7 +539,7 @@ model PriceOverride {
   pricePerSlot Int      @map("price_per_slot")
   isPeak       Boolean  @default(false) @map("is_peak")
   reason       String?
-  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([venueId, date])
   @@map("price_overrides")
@@ -562,47 +562,43 @@ enum BookingSource {
 }
 
 model Booking {
-  id               String              @id @default(cuid())
-  code             String              @unique
-  venueId          String              @map("venue_id")
-  venue            Venue               @relation(fields: [venueId], references: [id])
-  courtId          String              @map("court_id")
-  court            Court               @relation(fields: [courtId], references: [id])
-  userId           String?             @map("user_id")
-  user             User?               @relation(fields: [userId], references: [id])
-  customerName     String              @map("customer_name")
-  customerPhone    String              @map("customer_phone")
-  customerNote     String?             @map("customer_note")
-  startAt          DateTime            @map("start_at") @db.Timestamptz(3)
-  endAt            DateTime            @map("end_at") @db.Timestamptz(3)
-  slotCount        Int                 @map("slot_count")
-  status           BookingStatus       @default(HOLDING)
-  source           BookingSource       @default(WEB)
-  subtotal         Int
-  discountTotal    Int                 @default(0) @map("discount_total")
-  total            Int
-  holdExpiresAt    DateTime?           @map("hold_expires_at") @db.Timestamptz(3)
-  checkedInAt      DateTime?           @map("checked_in_at") @db.Timestamptz(3)
-  cancelledAt      DateTime?           @map("cancelled_at") @db.Timestamptz(3)
-  cancelReason     String?             @map("cancel_reason")
-  cancelledBy      String?             @map("cancelled_by")
-  // Nhóm các lượt của một lịch cố định ("thứ 3 hàng tuần"). Cột trước, tính
-  // năng sau — thêm cột vào bảng đã có triệu dòng đắt hơn nhiều.
-  recurringGroupId String?             @map("recurring_group_id")
-  createdBy        String?             @map("created_by")
-  createdAt        DateTime            @default(now()) @db.Timestamptz(3)
-  updatedAt        DateTime            @updatedAt @db.Timestamptz(3)
-  payments         Payment[]
-  redemptions      VoucherRedemption[]
-  earning          OwnerEarning?
-  review           Review?
-  disputes         Dispute[]
+  id            String              @id @default(cuid())
+  code          String              @unique
+  venueId       String              @map("venue_id")
+  venue         Venue               @relation(fields: [venueId], references: [id])
+  courtId       String              @map("court_id")
+  court         Court               @relation(fields: [courtId], references: [id])
+  userId        String?             @map("user_id")
+  user          User?               @relation(fields: [userId], references: [id])
+  customerName  String              @map("customer_name")
+  customerPhone String              @map("customer_phone")
+  customerNote  String?             @map("customer_note")
+  startAt       DateTime            @map("start_at") @db.Timestamptz(3)
+  endAt         DateTime            @map("end_at") @db.Timestamptz(3)
+  slotCount     Int                 @map("slot_count")
+  status        BookingStatus       @default(HOLDING)
+  source        BookingSource       @default(WEB)
+  subtotal      Int
+  discountTotal Int                 @default(0) @map("discount_total")
+  total         Int
+  holdExpiresAt DateTime?           @map("hold_expires_at") @db.Timestamptz(3)
+  checkedInAt   DateTime?           @map("checked_in_at") @db.Timestamptz(3)
+  cancelledAt   DateTime?           @map("cancelled_at") @db.Timestamptz(3)
+  cancelReason  String?             @map("cancel_reason")
+  cancelledBy   String?             @map("cancelled_by")
+  createdBy     String?             @map("created_by")
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  payments      Payment[]
+  redemptions   VoucherRedemption[]
+  earning       OwnerEarning?
+  review        Review?
+  disputes      Dispute[]
 
   @@index([venueId, startAt])
   @@index([courtId, startAt])
   @@index([userId, startAt])
   @@index([status, holdExpiresAt])
-  @@index([recurringGroupId])
   @@map("bookings")
 }
 
@@ -627,8 +623,8 @@ model Voucher {
   usagePerUser Int                 @default(1) @map("usage_per_user")
   usedCount    Int                 @default(0) @map("used_count")
   isActive     Boolean             @default(true) @map("is_active")
-  createdAt    DateTime            @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime            @updatedAt @db.Timestamptz(3)
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
   redemptions  VoucherRedemption[]
 
   @@index([isActive, startAt, endAt])
@@ -643,7 +639,7 @@ model VoucherRedemption {
   booking        Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   userId         String?  @map("user_id")
   discountAmount Int      @map("discount_amount")
-  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@unique([bookingId])
   @@index([voucherId, userId])
@@ -697,12 +693,9 @@ model Payment {
 
   receivedBy PaymentReceiver @default(PLATFORM) @map("received_by")
 
-  declaredAt     DateTime? @map("declared_at") @db.Timestamptz(3)
-  // Số tiền KHÁCH KHAI đã chuyển. Lệch với `amount` là dấu hiệu đầu tiên của
-  // chuyển thiếu hoặc ảnh chụp màn hình của giao dịch khác.
-  declaredAmount Int?      @map("declared_amount")
-  declaredNote   String?   @map("declared_note")
-  proofImageUrl  String?   @map("proof_image_url")
+  declaredAt    DateTime? @map("declared_at") @db.Timestamptz(3)
+  declaredNote  String?   @map("declared_note")
+  proofImageUrl String?   @map("proof_image_url")
 
   reviewedBy   String?   @map("reviewed_by")
   reviewedAt   DateTime? @map("reviewed_at") @db.Timestamptz(3)
@@ -712,8 +705,8 @@ model Payment {
   failedAt   DateTime? @map("failed_at") @db.Timestamptz(3)
   failReason String?   @map("fail_reason")
 
-  createdAt DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime       @updatedAt @db.Timestamptz(3)
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
   events    PaymentEvent[]
   refunds   Refund[]
 
@@ -734,7 +727,7 @@ model PaymentEvent {
   payload         Json
   verified        Boolean         @default(false)
   processedAt     DateTime?       @map("processed_at") @db.Timestamptz(3)
-  createdAt       DateTime        @default(now()) @db.Timestamptz(3)
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@unique([provider, externalEventId])
   @@index([paymentId])
@@ -762,7 +755,7 @@ model Refund {
   requestedBy String?   @map("requested_by")
   approvedBy  String?   @map("approved_by")
   refundedAt  DateTime? @map("refunded_at") @db.Timestamptz(3)
-  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([paymentId])
   @@index([status, createdAt])
@@ -790,8 +783,8 @@ model OwnerEarning {
   payoutId         String?       @map("payout_id")
   payout           Payout?       @relation(fields: [payoutId], references: [id])
   availableAt      DateTime?     @map("available_at") @db.Timestamptz(3)
-  createdAt        DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt        DateTime      @updatedAt @db.Timestamptz(3)
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([venueId, status])
   @@index([payoutId])
@@ -818,8 +811,8 @@ model Payout {
   approvedBy        String?        @map("approved_by")
   paidAt            DateTime?      @map("paid_at") @db.Timestamptz(3)
   note              String?
-  createdAt         DateTime       @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime       @updatedAt @db.Timestamptz(3)
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
   earnings          OwnerEarning[]
 
   @@index([venueId, status])
@@ -839,8 +832,8 @@ model Review {
   ownerReply     String?   @map("owner_reply")
   ownerRepliedAt DateTime? @map("owner_replied_at") @db.Timestamptz(3)
   isHidden       Boolean   @default(false) @map("is_hidden")
-  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt      DateTime  @updatedAt @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([venueId, isHidden, createdAt])
   @@map("reviews")
@@ -852,7 +845,7 @@ model Favorite {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   venueId   String   @map("venue_id")
   venue     Venue    @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@unique([userId, venueId])
   @@map("favorites")
@@ -875,7 +868,7 @@ model Dispute {
   resolvedBy  String?       @map("resolved_by")
   resolution  String?
   resolvedAt  DateTime?     @map("resolved_at") @db.Timestamptz(3)
-  createdAt   DateTime      @default(now()) @db.Timestamptz(3)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
 
   @@index([status, createdAt])
   @@index([bookingId])
@@ -887,7 +880,7 @@ model Setting {
   value       Json
   description String?
   updatedBy   String?  @map("updated_by")
-  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@map("settings")
 }

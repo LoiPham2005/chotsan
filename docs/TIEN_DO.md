@@ -3,7 +3,7 @@
 Cập nhật: **04/09/2026**. Kế hoạch đầy đủ ở [KE_HOACH_REFACTOR.md](KE_HOACH_REFACTOR.md); tệp này
 chỉ nói **đã làm được gì, còn gì**, để mở ra là biết đứng ở đâu.
 
-Số liệu hiện tại: **494 test / 43 tệp xanh**, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
+Số liệu hiện tại: **509 test / 45 tệp xanh**, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
 trên database thật.
 
 ## Bảng tổng
@@ -94,12 +94,18 @@ Kèm 3 ràng buộc database mới mà **cả hai bản đều thiếu**: một 
 (`venue_members_mot_chu_cho_moi_co_so`), 7 ràng buộc `CHECK` (điểm sao 1–5, tiền không âm, giờ
 không ngược), và index `pg_trgm` cho tìm kiếm.
 
+**Không bê về, dù bản cũ có:** `declaredAmount` (mã QR đã ghim số tiền; chủ sân vẫn phải mở app
+ngân hàng đối chiếu nên lời khai của khách không giúp gì), `wardCode`/`provinceCode` (hai nguồn
+sự thật song song với `province`/`ward` — danh mục hành chính thuộc về code, giống
+`src/lib/permissions.ts`), và `recurringGroupId` (chưa có tính năng đặt cố định; index trên bảng
+nóng nhất cho một cột toàn NULL). Cả ba thêm lại sau bằng một migration, gần như không tốn gì.
+
 **Còn nợ, chưa làm** (cần quyết định sản phẩm, không phải lỗi):
 
 - **`PlatformInvoice`** — bản cũ giải bài toán dòng tiền bằng cách cho tiền đi thẳng vào tài
   khoản sân rồi nền tảng xuất hoá đơn hoa hồng cuối tháng. Đây chính là câu trả lời cho câu hỏi
   còn treo bên dưới.
-- **Đặt sân cố định** — cột `recurringGroupId` đã có, tính năng chưa.
+- **Đặt sân cố định hàng tuần** — nhóm khách sộp nhất của cầu lông/bóng đá. Chưa có gì.
 - **`NotificationPreference`** — tắt/bật từng loại thông báo theo kênh.
 - **`AppVersionConfig`** — chặn phiên bản app cũ, cần trước khi phát hành Flutter (GĐ7).
 - **Danh mục tiện ích** — hiện là `String[]` tự do; bản cũ có bảng `Amenity` (có icon, lọc chuẩn).

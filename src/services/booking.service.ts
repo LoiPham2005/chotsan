@@ -341,6 +341,62 @@ export class BookingService {
     return result.count;
   }
 
+  /**
+   * Tra lượt đặt bằng MÃ, kèm đủ thứ màn thanh toán cần.
+   *
+   * Mã đặt sân là thứ duy nhất khách vãng lai có — họ không đăng nhập, nên
+   * không tra bằng `userId` được. Đổi lại mã phải khó đoán: 6 ký tự trên bảng
+   * 28 chữ = 481 triệu tổ hợp, và trang này KHÔNG lộ gì hơn những gì khách đã
+   * tự nhập cộng thông tin công khai của sân.
+   */
+  async findByCode(code: string) {
+    return this.db.booking.findUnique({
+      where: { code: code.trim().toUpperCase() },
+      select: {
+        id: true,
+        code: true,
+        status: true,
+        startAt: true,
+        endAt: true,
+        slotCount: true,
+        subtotal: true,
+        discountTotal: true,
+        total: true,
+        holdExpiresAt: true,
+        customerName: true,
+        customerPhone: true,
+        customerNote: true,
+        venueId: true,
+        court: { select: { name: true } },
+        venue: {
+          select: {
+            slug: true,
+            name: true,
+            address: true,
+            ward: true,
+            province: true,
+            phone: true,
+            freeCancelHours: true,
+            cancelFeePercent: true,
+          },
+        },
+        payments: {
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            status: true,
+            provider: true,
+            amount: true,
+            transferNote: true,
+            declaredAt: true,
+            rejectReason: true,
+            expiresAt: true,
+          },
+        },
+      },
+    });
+  }
+
   /** Lượt đặt của một sân trong một ngày — nguồn cho màn lịch của chủ sân. */
   async listForVenueDay(venueId: string, date: Date) {
     const dayStart = atMinuteVN(date, 0);

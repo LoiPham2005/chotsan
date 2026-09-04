@@ -54,8 +54,6 @@ export class VenueService {
     /** Tỉnh/thành phố. */
     province: string;
     ownerId: string;
-    wardCode?: string | null;
-    provinceCode?: string | null;
     phone?: string | null;
     description?: string | null;
     holdMinutes?: number | null;
@@ -71,8 +69,6 @@ export class VenueService {
           address: input.address.trim(),
           ward: input.ward.trim(),
           province: input.province.trim(),
-          wardCode: input.wardCode ?? null,
-          provinceCode: input.provinceCode ?? null,
           phone: input.phone ?? null,
           description: input.description ?? null,
           holdMinutes: input.holdMinutes ?? null,
@@ -98,8 +94,6 @@ export class VenueService {
       address: string;
       ward: string;
       province: string;
-      wardCode: string | null;
-      provinceCode: string | null;
       inactiveNote: string | null;
       phone: string | null;
       email: string | null;
@@ -298,9 +292,21 @@ export class VenueService {
         : {}),
     };
 
-    // Đếm và lấy trang trong MỘT lần gọi — hai lần gọi rời có thể thấy hai
-    // trạng thái khác nhau của bảng.
-    const [items, total] = await this.db.$transaction([
+    /*
+     * Hai truy vấn SONG SONG, cố ý KHÔNG bọc transaction.
+     *
+     * Bản trước dùng `$transaction([...])` để "đếm và lấy trang thấy cùng một
+     * trạng thái bảng". Đúng về lý thuyết, nhưng đây là trang được mở nhiều
+     * nhất của sản phẩm, và một transaction giữ riêng một kết nối suốt cả hai
+     * câu — trên Neon (pooler) nó đổ ngay khi có vài người tìm cùng lúc:
+     *
+     *     Transaction API error: Unable to start a transaction in the given time.
+     *
+     * Cái mất khi bỏ transaction: một khe rất hẹp mà tổng số lệch trang đang
+     * xem, ví dụ hiện "47 sân" trong khi vừa có sân thứ 48 được duyệt. Không
+     * ai nhận ra. Đổi lại trang tìm sân không sập khi đông người.
+     */
+    const [items, total] = await Promise.all([
       this.db.venue.findMany({
         where,
         orderBy: PUBLIC_ORDER,

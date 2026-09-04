@@ -22,10 +22,13 @@ export async function Header() {
   // Chỉ hiện mục quản trị cho người thật sự vào được. Link dẫn tới trang 404
   // không phải "bảo mật kém" (trang vẫn tự kiểm quyền), nhưng là giao diện tệ:
   // người dùng bấm vào thứ trông như dùng được rồi nhận trang không tìm thấy.
+  // `can()` nhận USER ID, không phải tên vai trò. Trước đây chỗ này truyền
+  // `user.roles.join(", ")` — một chuỗi không khớp id nào, nên câu hỏi luôn trả
+  // false và mục quản trị KHÔNG BAO GIỜ hiện với ai, kể cả SUPER_ADMIN.
   const [canSeeUsers, canSeeRoles] = user
     ? await Promise.all([
-        permissionService.can(user.roles.join(", "), "user:read"),
-        permissionService.can(user.roles.join(", "), "role:read"),
+        permissionService.can(user.id, "user:read"),
+        permissionService.can(user.id, "role:read"),
       ])
     : [false, false];
 
@@ -33,12 +36,19 @@ export async function Header() {
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-line bg-canvas/85 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center gap-8">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-2 px-4 sm:gap-4 sm:px-6 lg:px-8">
+        {/* Khoảng cách hẹp lại trên điện thoại: ở 390px, `gap-8` + `gap-3` làm
+            header rộng 409px và đẩy tràn CẢ TRANG sang ngang. */}
+        <div className="flex items-center gap-2 sm:gap-8">
           <Logo />
 
-          <nav className="hidden items-center gap-1 md:flex">
-            <NavLink href="/">Trang chủ</NavLink>
+          {/*
+            "Tìm sân" hiện ở MỌI khổ màn, kể cả điện thoại — đó là việc duy
+            nhất người mở app muốn làm, giấu nó sau menu ba gạch là chặn đúng
+            đường đi chính.
+          */}
+          <nav className="flex items-center gap-1">
+            <NavLink href="/san">Tìm sân</NavLink>
 
             {/*
               MỘT lối vào khu quản trị, không liệt kê từng trang ở đây — việc đó
@@ -53,7 +63,7 @@ export async function Header() {
           </nav>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-3">
           {user ? (
             <>
               {/* Tên người dùng dẫn thẳng tới màn quản lý thiết bị — đó là
@@ -72,10 +82,13 @@ export async function Header() {
             </>
           ) : (
             <>
-              <Button asChild size="sm" variant="ghost">
+              {/* `px-2` ở khổ nhỏ nhất: ở 360px (iPhone SE và nhiều máy
+                  Android) đệm mặc định làm header rộng hơn màn hình và đẩy
+                  tràn ngang cả trang. */}
+              <Button asChild size="sm" variant="ghost" className="px-2 sm:px-3">
                 <Link href="/login">Đăng nhập</Link>
               </Button>
-              <Button asChild size="sm">
+              <Button asChild size="sm" className="px-2 sm:px-3">
                 <Link href="/register">Đăng ký</Link>
               </Button>
             </>
@@ -90,13 +103,13 @@ function NavLink({
   href,
   children,
 }: {
-  href: "/" | "/users" | "/roles";
+  href: "/" | "/san" | "/users" | "/roles";
   children: React.ReactNode;
 }) {
   return (
     <Link
       href={href}
-      className="rounded-token-md px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-elevated hover:text-content"
+      className="whitespace-nowrap rounded-token-md px-2 py-2 text-sm font-medium text-muted transition-colors hover:bg-elevated hover:text-content sm:px-3"
     >
       {children}
     </Link>

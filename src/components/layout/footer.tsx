@@ -11,7 +11,7 @@ export function Footer() {
           <Logo size="sm" />
 
           <p className="text-xs text-muted">
-            &copy; {currentYear} Bản quyền thuộc về hệ thống. Đã đăng ký bản quyền.
+            &copy; {currentYear} ChốtSân. Đặt sân thể thao nhanh, rõ giá.
           </p>
 
           <div className="flex gap-6 text-xs">

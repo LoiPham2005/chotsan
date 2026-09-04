@@ -341,16 +341,16 @@ describe("search — tìm sân", () => {
     expect((await new VenueService(db).search({ page: 0 })).meta.page).toBe(1);
   });
 
-  it("đếm và lấy trang trong MỘT transaction, không phải hai lần gọi rời", async () => {
-    // Hai lần gọi rời có thể thấy hai trạng thái khác nhau của bảng, và phân
-    // trang nhảy số trước mắt người dùng.
+  it("đếm và lấy trang SONG SONG, KHÔNG bọc transaction", async () => {
+    // Trang này được mở nhiều nhất; một transaction giữ riêng một kết nối cho
+    // cả hai câu và đổ ngay khi có vài người tìm cùng lúc trên Neon.
     const { db, mock } = createDb();
-    await new VenueService(db).search({});
+    const result = await new VenueService(db).search({});
 
-    expect(mock.$transaction).toHaveBeenCalledTimes(1);
-    // Cả hai truy vấn nằm trong đúng một lời gọi $transaction.
-    expect(mock.$transaction.mock.calls[0]![0]).toHaveLength(2);
+    expect(mock.$transaction).not.toHaveBeenCalled();
+    expect(mock.venue.findMany).toHaveBeenCalledTimes(1);
     expect(mock.venue.count).toHaveBeenCalledTimes(1);
+    expect(result.meta.total).toBe(0);
   });
 });
 

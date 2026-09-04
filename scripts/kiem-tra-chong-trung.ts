@@ -22,6 +22,42 @@ const db = new PrismaClient({
 });
 
 async function main() {
+  // -----------------------------------------------------------------------
+  // Phần không: RÀNG BUỘC VIẾT TAY CÒN NGUYÊN KHÔNG
+  //
+  // `prisma migrate diff` đòi xoá mọi index/ràng buộc không có trong
+  // schema.prisma, và nếu ai đó áp thẳng SQL nó sinh ra thì chúng biến mất
+  // trong im lặng — test vẫn xanh, chỉ có chống trùng chỗ và chống trùng tiền
+  // là không còn. Xem GOTCHAS #11. Đây là chốt chặn cuối cho chuyện đó.
+  // -----------------------------------------------------------------------
+  const CAN_GIU = [
+    "bookings_khong_trung_khung_gio",
+    "payments_mot_giao_dich_song_cho_moi_booking",
+    "venue_members_mot_chu_cho_moi_co_so",
+    "venues_name_trgm_idx",
+    "venues_address_trgm_idx",
+    "users_email_active_key",
+    "users_phone_active_key",
+    "reviews_diem_tu_1_den_5",
+    "bookings_khoang_thoi_gian_hop_le",
+    "bookings_tien_khong_am",
+    "payments_tien_hop_le",
+    "venue_hours_gio_dong_sau_gio_mo",
+    "price_rules_khung_gio_hop_le",
+    "venues_phi_huy_tu_0_den_100",
+  ];
+
+  const daCo = new Set(
+    (
+      await db.$queryRawUnsafe<{ ten: string }[]>(
+        `select indexname as ten from pg_indexes where schemaname = 'public'
+         union select conname as ten from pg_constraint`,
+      )
+    ).map((row) => row.ten),
+  );
+
+  const thieu = CAN_GIU.filter((ten) => !daCo.has(ten));
+
   const suffix = Date.now().toString(36);
 
   const sport = await db.sport.upsert({
@@ -81,6 +117,12 @@ async function main() {
     if (!dat_) ok = false;
     console.log(`${dat_ ? "✓" : "✗"} ${nhan} — ${chiTiet}`);
   };
+
+  bao(
+    `${CAN_GIU.length} ràng buộc viết tay còn nguyên`,
+    thieu.length === 0,
+    thieu.length === 0 ? "không mất cái nào" : `MẤT: ${thieu.join(", ")}`,
+  );
 
   // 1. ĐỒNG THỜI, không tuần tự: cả hai đều thấy "còn trống" ở bước kiểm.
   const ketQua = await Promise.allSettled([dat("Người A"), dat("Người B")]);

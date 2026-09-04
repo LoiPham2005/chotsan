@@ -1,7 +1,9 @@
 import "server-only";
+import { headers } from "next/headers";
 import { getSession } from "@/lib/auth";
 import { logger } from "@/lib/logger";
 import type { Permission } from "@/lib/permissions";
+import { rateLimit } from "@/lib/rate-limit";
 import type { SessionPayload } from "@/lib/session";
 import { permissionService } from "@/services/permission.service";
 
@@ -59,6 +61,17 @@ export type ActionContext = {
 
 /** Như `ActionContext`, kèm sân mà quyền vừa được kiểm trên đó. */
 export type VenueActionContext = ActionContext & { venueId: string };
+
+/**
+ * Ngữ cảnh của action công khai. Khác `ActionContext` ở chỗ **có thể không có
+ * ai đăng nhập** — nên `session` và `actorId` đều nullable, và TypeScript buộc
+ * nơi gọi phải xử lý trường hợp đó.
+ */
+export type PublicActionContext = {
+  session: SessionPayload | null;
+  actorId: string | null;
+  ip: string;
+};
 
 /**
  * Tạo một Server Action đã tự kiểm quyền.
@@ -140,6 +153,65 @@ export function defineAuthedAction<TArgs extends unknown[], TState extends Actio
     }
 
     return handler({ session, actorId: session.sub }, ...args);
+  };
+}
+
+/**
+ * Server Action mà NGƯỜI CHƯA ĐĂNG NHẬP gọi được.
+ *
+ * ---
+ * VÌ SAO PHẢI CÓ HÀM RIÊNG THAY VÌ VIẾT MỘT HÀM TRẦN
+ *
+ * Khách vãng lai đặt sân được — không có tài khoản, không có quyền nào. Nhưng
+ * một action không bọc gì trông y hệt một action mà người viết QUÊN kiểm quyền,
+ * và đó chính là lỗi im lặng cả file này sinh ra để chặn.
+ *
+ * Hàm này biến "công khai" thành một quyết định phải nói ra:
+ *
+ *   - `lyDo` bắt buộc, và nó nằm trong log — đọc log là biết vì sao action này
+ *     không cần đăng nhập, không phải đi đọc lại code.
+ *   - Luôn có rate limit theo địa chỉ IP. Endpoint công khai KHÔNG có trần là
+ *     một endpoint chờ bị dội; ở đây action tạo lượt đặt, nên dội nó nghĩa là
+ *     khoá sạch khung giờ của một sân.
+ *   - `grep definePublicAction src/` liệt kê đủ mọi bề mặt công khai.
+ */
+export function definePublicAction<TArgs extends unknown[], TState extends ActionState>(
+  lyDo: string,
+  options: { key: string; limit: number; windowSeconds: number },
+  handler: (ctx: PublicActionContext, ...args: TArgs) => Promise<TState>,
+): (...args: TArgs) => Promise<TState> {
+  return async (...args: TArgs) => {
+    const session = await getSession();
+
+    /*
+     * Định danh người gọi để đếm: đã đăng nhập thì theo user, chưa thì theo IP.
+     *
+     * IP đọc từ header do proxy đặt. Header giả mạo được — nhưng đây là trần
+     * chống dội, không phải kiểm quyền; kẻ giả mạo header chỉ tự tách mình sang
+     * một xô đếm khác, không leo được quyền gì.
+     */
+    const headerList = await headers();
+    const ip =
+      headerList.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+      headerList.get("x-real-ip") ??
+      "khong-ro";
+
+    const danhTinh = session?.sub ?? `ip:${ip}`;
+    const result = await rateLimit(`action:${options.key}:${danhTinh}`, {
+      limit: options.limit,
+      windowSeconds: options.windowSeconds,
+    });
+
+    if (!result.success) {
+      logger.warn("Server Action công khai bị chặn vì quá nhiều lần gọi", {
+        action: options.key,
+        lyDo,
+        danhTinh,
+      });
+      return denied<TState>("Bạn thao tác hơi nhanh. Chờ một chút rồi thử lại giúp bạn nhé.");
+    }
+
+    return handler({ session, actorId: session?.sub ?? null, ip }, ...args);
   };
 }
 

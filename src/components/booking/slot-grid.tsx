@@ -55,7 +55,6 @@ const STATUS_LABEL: Record<SlotStatus, string> = {
 
 export function SlotGrid({ day, onSelect, hoursPerPage = 7, className }: Props) {
   const [anchor, setAnchor] = useState<SlotSelection | null>(null);
-  const [pageStart, setPageStart] = useState(0);
 
   /** Gom các khung thành nhóm theo GIỜ để mắt đọc theo giờ, không loạn 32 cột. */
   const hours = useMemo(() => {
@@ -68,6 +67,33 @@ export function SlotGrid({ day, onSelect, hoursPerPage = 7, className }: Props) 
 
     return [...grouped.entries()].map(([hour, minutes]) => ({ hour, minutes }));
   }, [day.minutes]);
+
+  /*
+   * MỞ Ở GIỜ CÒN ĐẶT ĐƯỢC, KHÔNG PHẢI Ở GIỜ MỞ CỬA.
+   *
+   * Sân mở 05:30 nhưng người mở trang lúc 3 giờ chiều thì trang đầu tiên toàn
+   * ô xám của những khung đã trôi qua — họ phải bấm "Muộn hơn" hai lần mới
+   * thấy thứ mua được. Nhảy thẳng tới giờ đầu tiên còn bán được.
+   *
+   * `day` do máy chủ dựng và ĐÃ đánh dấu `PAST` theo giờ Việt Nam, nên chỗ này
+   * không đọc `Date.now()` — làm vậy là máy chủ và trình duyệt tính ra hai
+   * trang khác nhau, và React báo lỗi hydration.
+   */
+  const trangDau = useMemo(() => {
+    const conBan = hours.findIndex((group) =>
+      group.minutes.some((minute) =>
+        day.courts.some(
+          (court) => court.slots.find((slot) => slot.minute === minute)?.status === "FREE",
+        ),
+      ),
+    );
+
+    if (conBan <= 0) return 0;
+    // Lùi lại một giờ để còn thấy bối cảnh liền trước, nhưng không vượt cuối dải.
+    return Math.min(Math.max(0, conBan - 1), Math.max(0, hours.length - hoursPerPage));
+  }, [hours, day.courts, hoursPerPage]);
+
+  const [pageStart, setPageStart] = useState(trangDau);
 
   const visible = hours.slice(pageStart, pageStart + hoursPerPage);
   const canPrev = pageStart > 0;
@@ -111,7 +137,16 @@ export function SlotGrid({ day, onSelect, hoursPerPage = 7, className }: Props) 
     anchor?.courtId === courtId && minute >= anchor.startMinute && minute < anchor.endMinute;
 
   return (
-    <div className={cn("flex flex-col gap-3", className)}>
+    /*
+     * `min-w-0` KHÔNG PHẢI THỪA.
+     *
+     * Phần tử con của flex/grid mặc định là `min-width: auto`, nghĩa là nó nở
+     * ra vừa nội dung thay vì chịu bó theo cha. Thiếu một chữ này thì cái
+     * `overflow-x-auto` bên dưới hoàn toàn vô hiệu: lưới không cuộn trong khung
+     * của nó mà đẩy RỘNG CẢ TRANG — trên điện thoại là header bị cắt, chữ tràn
+     * ra ngoài mép, và người dùng phải cuộn ngang toàn trang để đọc.
+     */
+    <div className={cn("flex min-w-0 flex-col gap-3", className)}>
       {/* Điều hướng theo buổi — 32 cột không vừa màn nào, kể cả desktop */}
       <div className="flex items-center justify-between gap-2">
         <button
@@ -143,7 +178,7 @@ export function SlotGrid({ day, onSelect, hoursPerPage = 7, className }: Props) 
         </button>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="min-w-0 overflow-x-auto">
         <div className="min-w-max">
           {/* Tiêu đề: giờ + giá. Giá ở đây chứ không ở trong ô. */}
           <div className="mb-1.5 flex gap-2">
@@ -306,7 +341,19 @@ export function DaySummaryStrip({
               title={`${formatHhMm(minute)} — còn ${free} sân`}
               aria-label={`${formatHhMm(minute)}, còn ${free} sân trống`}
               className={cn(
-                "h-7 flex-1 rounded-[3px] text-[10px] font-extrabold text-white",
+                /*
+                 * `min-w-0` cho phép ô co lại thật sự.
+                 *
+                 * `flex-1` một mình KHÔNG đủ: phần tử flex mặc định
+                 * `min-width: auto`, tức không co nhỏ hơn nội dung của nó. Với
+                 * 35 ô mang chữ số, ở màn 320px cả dải đòi ~348px và đẩy tràn
+                 * ngang cả trang.
+                 *
+                 * Chữ số ẩn đi ở khổ hẹp nhất — dải này bán MÀU trước, con số
+                 * chỉ là phần thêm, mà một dải màu đọc được vẫn hơn một trang
+                 * phải cuộn ngang.
+                 */
+                "h-7 min-w-0 flex-1 overflow-hidden rounded-[3px] text-[10px] font-extrabold text-white",
                 free === 0
                   ? "bg-slate-300 text-slate-500"
                   : ratio <= 0.15
@@ -318,7 +365,7 @@ export function DaySummaryStrip({
                         : "bg-brand",
               )}
             >
-              {free}
+              <span className="max-[380px]:hidden">{free}</span>
             </button>
           );
         })}

@@ -1,4 +1,19 @@
-import { isProduction } from "./env";
+/*
+ * ⚠️ TỆP NÀY CHẠY CẢ TRÊN TRÌNH DUYỆT — KHÔNG ĐƯỢC IMPORT `./env`.
+ *
+ * `src/app/error.tsx` là Client Component và nó gọi `captureException`. Trước
+ * đây tệp này `import { isProduction } from "./env"`, kéo theo cả lược đồ biến
+ * môi trường PHÍA MÁY CHỦ vào bundle trình duyệt — nơi `SESSION_SECRET` và
+ * `DATABASE_URL` không tồn tại. Kết quả: `env.ts` ném lỗi ngay lúc nạp module,
+ * error boundary chết trước khi kịp hiện, và MỌI trang đều log
+ * `unhandledRejection` ở console.
+ *
+ * (Không lộ bí mật nào — trình duyệt vốn không có chúng — nhưng lớp bắt lỗi
+ * cuối cùng của toàn ứng dụng thì hỏng, và đó là lúc cần nó nhất.)
+ *
+ * `NODE_ENV` thì khác: Next thay thẳng nó thành hằng số lúc build, ở cả hai phía.
+ */
+const isProduction = process.env.NODE_ENV === "production";
 
 /**
  * Điểm nối để đẩy lỗi ra hệ thống giám sát bên ngoài (Sentry, GlitchTip,
