@@ -251,7 +251,7 @@ sudo corepack enable
 # Postgres
 sudo apt install -y postgresql
 sudo -u postgres createuser --pwprompt appuser
-sudo -u postgres createdb -O appuser nextjs_prisma_base
+sudo -u postgres createdb -O appuser chotsan
 
 # Redis (bỏ qua nếu chỉ chạy 1 tiến trình)
 sudo apt install -y redis-server

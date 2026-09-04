@@ -1,6 +1,6 @@
 # Disaster Recovery Runbook
 
-Quy trình thực tế để khôi phục `nextjs_prisma_base` sau khi mất dữ liệu, deploy lỗi, hoặc VPS gặp
+Quy trình thực tế để khôi phục `chotsan` sau khi mất dữ liệu, deploy lỗi, hoặc VPS gặp
 sự cố. Lệnh dưới giả định bạn đang SSH vào VPS, đứng tại `$APP_DIR` (mặc định
 `/var/www/nextjs-base`, xem [`scripts/deploy-vps.sh`](../scripts/deploy-vps.sh)).
 

@@ -83,7 +83,7 @@ sai vì gói rẻ nhất đang hết hàng / không phải giá vào cửa thậ
 nhược điểm giống Vietnix: **quốc tế chỉ 1-10Mbps**. Đây có vẻ là mẫu số chung
 của VPS nội địa giá rẻ (bù lại bằng băng thông trong nước rộng rãi).
 
-⚠️ **Điểm quan trọng riêng cho project này**: `nextjs_prisma_base` vừa được
+⚠️ **Điểm quan trọng riêng cho project này**: `chotsan` vừa được
 thêm đăng nhập OAuth (Google/Github/Facebook/Apple) — mỗi lần user đăng nhập,
 server phải tự gọi ra **API quốc tế** của các hãng đó để đổi authorization
 code lấy token (xem `src/lib/oauth/client.ts`). Nếu sau này gửi email qua

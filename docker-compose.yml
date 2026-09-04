@@ -6,7 +6,7 @@ x-database-url: &database-url
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: nextjs_prisma_postgres
+    container_name: chotsan_postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -42,7 +42,7 @@ services:
     build:
       context: .
       target: migrator
-    container_name: nextjs_prisma_migrate
+    container_name: chotsan_migrate
     restart: "no"
     env_file:
       - path: .env
@@ -90,7 +90,7 @@ services:
     build:
       context: .
       target: runner
-    container_name: nextjs_prisma_web
+    container_name: chotsan_web
     restart: unless-stopped
     env_file:
       - path: .env
@@ -153,7 +153,7 @@ services:
   # không lỗi nào cả.
   redis:
     image: redis:7-alpine
-    container_name: nextjs_prisma_redis
+    container_name: chotsan_redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "no"]
     healthcheck:
@@ -168,7 +168,7 @@ services:
     build:
       context: .
       target: realtime
-    container_name: nextjs_prisma_realtime
+    container_name: chotsan_realtime
     restart: unless-stopped
 
     # CÔNG TẮC BẬT/TẮT.
@@ -224,7 +224,7 @@ services:
     build:
       context: .
       target: worker
-    container_name: nextjs_prisma_worker
+    container_name: chotsan_worker
     restart: unless-stopped
 
     # CÔNG TẮC BẬT/TẮT — cùng cơ chế với `realtime` ở trên.

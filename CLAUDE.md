@@ -4,11 +4,50 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 @AGENTS.md
 
-**Đọc [README.md](README.md) trước khi làm bất cứ gì** — nó đã giải thích rất kỹ kiến trúc bảo
+# ChốtSân
+
+Nền tảng **đặt sân thể thao** (cầu lông, bóng đá, tennis, pickleball, bóng rổ). Người chơi tìm và
+đặt sân, chủ sân quản lý lịch và doanh thu, quản trị viên vận hành nền tảng.
+
+Dựng trên bộ khung `nextjs_base` (đã sao chép vào đây, không phải submodule). Repo:
+`github.com/LoiPham2005/chotsan`.
+
+## Ba tài liệu phải đọc trước khi code
+
+| Tài liệu | Nội dung |
+|---|---|
+| [THIET_KE_LAI.md](THIET_KE_LAI.md) | **Vai trò, 21 bảng, 36 màn** — quyết định nền tảng, đọc đầu tiên |
+| [.claude/skills/chotsan-thiet-ke/SKILL.md](.claude/skills/chotsan-thiet-ke/SKILL.md) | **Mã màu, chữ, thành phần, responsive** — đọc trước khi viết bất kỳ giao diện nào |
+| [KE_HOACH_REFACTOR.md](KE_HOACH_REFACTOR.md) | Tám giai đoạn, thứ tự làm, nguyên tắc |
+
+Bản vẽ giao diện: [design/chotsan-giao-dien.html](design/chotsan-giao-dien.html) — mở bằng trình duyệt.
+
+## Bốn quyết định đã chốt, đừng bàn lại
+
+1. **Vai trò**: 3 nền tảng (`USER`/`ADMIN`/`SUPER_ADMIN`, seed 3 dòng) + 2 theo sân
+   (`OWNER`/`STAFF`, enum trên `VenueMember`, **không seed dòng nào**). Không có `MANAGER` —
+   thay bằng `VenueMember.permissions` để chủ sân tick thêm quyền cho từng người.
+2. **Mọi câu hỏi phân quyền có đúng một dạng**: `canOnVenue(userId, permission, venueId)`.
+   Không bao giờ `if (user.role === "OWNER")` — câu đó vô nghĩa vì không nói owner của sân nào.
+3. **Khung đặt sân bước 30 phút**, không phải 1 giờ. Toàn hệ thống.
+4. **21 bảng**, không phải 46 của bản cũ. Nhưng **bê nguyên** `EXCLUDE USING gist` (chống trùng
+   booking ở tầng database) và `@@unique([provider, externalEventId])` (idempotency webhook
+   thanh toán) — hai thứ này là lưới cuối cùng chặn trùng chỗ và trùng tiền.
+
+## Ba quyền KHÔNG BAO GIỜ tick được cho STAFF
+
+`payout:manage` (rút tiền) · `venue:delete` · `venue:transfer`. Giao diện phải **không có ô để
+tick**, không phải hiện rồi cảnh báo.
+
+---
+
+**Đọc [README.md](README.md) để hiểu bộ khung** — nó giải thích rất kỹ kiến trúc bảo
 mật (Server Action là endpoint công khai, kiểm quyền nhiều lớp độc lập), RBAC lai code/database,
 mô hình mật khẩu/token, deploy (Docker vs VPS bare-metal), realtime WebSocket, và REST API cho
-mobile — file CLAUDE.md này **không lặp lại** nội dung đó, chỉ bổ sung phần README chưa có và lệnh
-thao tác nhanh.
+mobile. README nói về **bộ khung**; phần trên nói về **dự án này**.
+
+⚠️ README và một phần CLAUDE.md bên dưới thừa hưởng từ bộ khung `nextjs_base`, còn nhắc tới trang
+demo và dữ liệu mẫu chưa bị xoá. Thấy chỗ nào không khớp ChốtSân thì tin ba tài liệu ở bảng trên.
 
 ## Lệnh hay dùng
 

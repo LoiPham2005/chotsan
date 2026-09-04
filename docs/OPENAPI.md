@@ -63,7 +63,7 @@ Dự án hỗ trợ **2 phong cách sinh mã nguồn Client** tùy theo nhu cầ
 
 #### 1. Chạy 1-Click:
 
-- **Đứng từ Backend (`nextjs_prisma_base`):**
+- **Đứng từ Backend (`chotsan`):**
   ```bash
   pnpm gen:flutter
   ```
@@ -122,7 +122,7 @@ Nếu bạn muốn dùng công cụ chính thức của tổ chức OpenAPI Tool
 
 #### 2. Lệnh sinh mã nguồn:
 
-Mở terminal tại thư mục gốc backend `nextjs_prisma_base` (đảm bảo backend đang chạy `pnpm dev`):
+Mở terminal tại thư mục gốc backend `chotsan` (đảm bảo backend đang chạy `pnpm dev`):
 
 - **Trên Linux / macOS (Bash / Zsh):**
 

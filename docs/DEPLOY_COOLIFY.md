@@ -123,7 +123,7 @@ thông báo chỉ rõ **tên biến nào** — đọc log là biết, đừng đ
 | `ADMIN_EMAIL`          | Tài khoản quản trị đầu tiên                                              |
 | `ADMIN_PASSWORD`       | Đặt mạnh. Ở production, thiếu là seed **dừng** chứ không tự đặt mặc định |
 | `POSTGRES_USER`        | Mặc định `postgres`                                                      |
-| `POSTGRES_DB`          | Mặc định `nextjs_prisma_base`                                            |
+| `POSTGRES_DB`          | Mặc định `chotsan`                                            |
 | `REALTIME_CORS_ORIGIN` | `https://<domain-that>` — thiếu thì trình duyệt chặn WebSocket vì CORS   |
 
 `REDIS_URL` **không cần điền**: compose đã set sẵn `redis://redis:6379` cho cả
@@ -415,7 +415,7 @@ có giao diện quản lý, khôi phục bằng vài cú bấm.
 **B. Giữ nguyên và tự đặt cron dump:**
 
 ```
-0 2 * * * docker exec nextjs_prisma_postgres pg_dump -U postgres nextjs_prisma_base | gzip > /var/backups/db-$(date +\%F).sql.gz
+0 2 * * * docker exec chotsan_postgres pg_dump -U postgres chotsan | gzip > /var/backups/db-$(date +\%F).sql.gz
 ```
 
 ⚠️ Dump nằm cùng máy với database thì **không phải backup** — nó chỉ cứu được
