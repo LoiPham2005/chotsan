@@ -273,8 +273,8 @@ Không phải ba màn. Là một màn hiện theo quyền — đúng như bản 
 
 | Màn            | Chức năng                                                                                                                    |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `/`            | Hero + ô tìm (môn, thành phố, ngày) · lưới môn thể thao · 6 sân nổi bật · 3 bước hoạt động · footer                          |
-| `/venues`      | Lọc (môn, quận, ngày, khung giờ, giá, tiện ích, rating) · sắp xếp · danh sách/bản đồ (Leaflet, pin theo môn)                 |
+| `/`            | Hero + ô tìm (môn, tỉnh/thành, ngày) · lưới môn thể thao · 6 sân nổi bật · 3 bước hoạt động · footer                         |
+| `/venues`      | Lọc (môn, phường/xã, ngày, khung giờ, giá, tiện ích, rating) · sắp xếp · danh sách/bản đồ (Leaflet, pin theo môn)            |
 | `/venues/[id]` | Gallery · tab Tổng quan/Sân&Giá/Đánh giá/Vị trí · **widget đặt sân** (chọn sân con → ngày → khung giờ → giá) · nút yêu thích |
 | `/vouchers`    | Voucher đang mở · nút lưu về ví                                                                                              |
 | `/info/[slug]` | **Một trang động** thay 6 trang tĩnh (giới thiệu, liên hệ, trợ giúp, 3 chính sách). Nội dung trong `Setting`                 |

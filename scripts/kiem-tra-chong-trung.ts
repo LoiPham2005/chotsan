@@ -36,8 +36,8 @@ async function main() {
       name: "Sân kiểm tra",
       sportId: sport.id,
       address: "1 Đường Test",
-      district: "Cầu Giấy",
-      city: "Hà Nội",
+      ward: "Phường Cầu Giấy",
+      province: "Hà Nội",
       holdMinutes: 10,
       status: "ACTIVE",
       hours: {

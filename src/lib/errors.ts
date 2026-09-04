@@ -566,6 +566,19 @@ export class VenueConfigError extends DomainError {
 }
 
 /**
+ * Cơ sở đang bị nền tảng khoá vì vi phạm.
+ *
+ * Tách khỏi "chủ sân tự tạm nghỉ" có chủ đích: gộp chung một trạng thái thì
+ * chủ sân bị khoá chỉ cần bấm "Mở bán lại" là gỡ được hình phạt.
+ */
+export class VenueAdminLockedError extends DomainError {
+  readonly code = "FORBIDDEN" as const;
+  constructor() {
+    super("Cơ sở đang bị nền tảng khoá. Liên hệ quản trị viên để được xử lý.");
+  }
+}
+
+/**
  * Chưa đủ điều kiện mở bán.
  *
  * Mang theo danh sách thứ còn thiếu để giao diện chỉ thẳng vào chỗ cần sửa,

@@ -204,6 +204,7 @@ export class BookingService {
     options: {
       reason?: string;
       cancelledBy?: string | null;
+      /** Đè chính sách của sân. Chỉ dùng khi nền tảng chủ động huỷ hộ. */
       freeCancelHours?: number;
       now?: Date;
     } = {},
@@ -217,10 +218,28 @@ export class BookingService {
       throw new BookingStateError("Lượt đặt đã diễn ra, không huỷ được");
     }
 
+    /*
+     * Chính sách huỷ là của TỪNG SÂN, không phải hằng số của hệ thống.
+     *
+     * Sân cầu lông trong ngõ cho huỷ trước 1 tiếng; sân bóng 11 người thuê cả
+     * buổi thì 24 tiếng cũng là sát. Trước đây con số 2 nằm cứng trong hàm này
+     * và không có chỗ nào khai khác đi được — mọi chủ sân đều phải theo một
+     * chính sách mà không ai chọn.
+     */
+    const venue = await this.db.venue.findUnique({
+      where: { id: booking.venueId },
+      select: { freeCancelHours: true, cancelFeePercent: true },
+    });
+
+    const freeCancelHours = options.freeCancelHours ?? venue?.freeCancelHours ?? 2;
     const now = options.now ?? new Date();
-    const freeUntil = new Date(
-      booking.startAt.getTime() - (options.freeCancelHours ?? 2) * 60 * 60_000,
-    );
+    const freeUntil = new Date(booking.startAt.getTime() - freeCancelHours * 60 * 60_000);
+    const refundable = now <= freeUntil;
+
+    // Huỷ trễ: khách mất một phần, phần còn lại mới hoàn. `cancelFeePercent`
+    // để trống = mất trắng, vì đó là mặc định của phần lớn sân hiện nay.
+    const feePercent = refundable ? 0 : (venue?.cancelFeePercent ?? 100);
+    const refundableAmount = Math.round((booking.total * (100 - feePercent)) / 100);
 
     const updated = await this.db.booking.update({
       where: { id: bookingId },
@@ -233,7 +252,7 @@ export class BookingService {
       },
     });
 
-    return { booking: updated, refundable: now <= freeUntil, freeUntil };
+    return { booking: updated, refundable, freeUntil, freeCancelHours, refundableAmount };
   }
 
   /**

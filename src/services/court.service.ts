@@ -30,7 +30,9 @@ export class CourtService {
   async create(input: {
     venueId: string;
     name: string;
-    surface?: CourtSurface;
+    /** Vật liệu mặt sân. Để trống = chưa khai; đừng đoán bừa. */
+    surface?: CourtSurface | null;
+    isIndoor?: boolean;
     note?: string | null;
     sortOrder?: number;
   }) {
@@ -48,7 +50,8 @@ export class CourtService {
         // thể sửa sau; bắt khai lại môn cho từng sân là bắt gõ thừa 10 lần.
         sportId: venue.sportId,
         name: input.name.trim(),
-        surface: input.surface ?? "INDOOR",
+        surface: input.surface ?? null,
+        isIndoor: input.isIndoor ?? false,
         note: input.note ?? null,
         sortOrder: input.sortOrder ?? 0,
       },
@@ -59,7 +62,8 @@ export class CourtService {
     courtId: string,
     input: Partial<{
       name: string;
-      surface: CourtSurface;
+      surface: CourtSurface | null;
+      isIndoor: boolean;
       note: string | null;
       sortOrder: number;
       isActive: boolean;
@@ -281,6 +285,7 @@ export class CourtService {
         id: true,
         name: true,
         surface: true,
+        isIndoor: true,
         note: true,
         isActive: true,
         sortOrder: true,

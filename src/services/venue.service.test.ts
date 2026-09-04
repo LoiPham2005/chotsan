@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { VenueConfigError, VenueNotFoundError, VenueNotReadyError } from "@/lib/errors";
+import {
+  VenueAdminLockedError,
+  VenueConfigError,
+  VenueNotFoundError,
+  VenueNotReadyError,
+} from "@/lib/errors";
 import { VenueService } from "./venue.service";
 
 /**
@@ -12,7 +17,7 @@ import { VenueService } from "./venue.service";
 const VENUE = { id: "v1", slug: "san-abc", name: "Sân ABC" };
 
 type Options = {
-  venue?: { id: string } | null;
+  venue?: { id: string; status?: string } | null;
   slugTaken?: string[];
   counts?: { hours: number; courts: number; priceRules: number };
 };
@@ -32,10 +37,15 @@ function createDb(options: Options = {}) {
         Promise.resolve(
           "venue" in options
             ? options.venue && {
+                status: "ACTIVE",
                 ...options.venue,
                 _count: options.counts ?? { hours: 7, courts: 3, priceRules: 2 },
               }
-            : { ...VENUE, _count: options.counts ?? { hours: 7, courts: 3, priceRules: 2 } },
+            : {
+                ...VENUE,
+                status: "ACTIVE",
+                _count: options.counts ?? { hours: 7, courts: 3, priceRules: 2 },
+              },
         ),
       ),
       findUnique: vi.fn(({ where }: { where: { slug: string } }) =>
@@ -84,8 +94,8 @@ describe("create — tạo cơ sở", () => {
       name: "Sân ABC",
       sportId: "s1",
       address: "1 Nguyễn Trãi",
-      district: "Thanh Xuân",
-      city: "Hà Nội",
+      ward: "Phường Thanh Xuân",
+      province: "Hà Nội",
       ownerId: "u1",
     });
 
@@ -105,8 +115,8 @@ describe("create — tạo cơ sở", () => {
       name: "Sân ABC",
       sportId: "s1",
       address: "1 Nguyễn Trãi",
-      district: "Thanh Xuân",
-      city: "Hà Nội",
+      ward: "Phường Thanh Xuân",
+      province: "Hà Nội",
       ownerId: "u1",
     });
 
@@ -119,8 +129,8 @@ describe("create — tạo cơ sở", () => {
       name: "Sân Cầu Lông Đại Việt",
       sportId: "s1",
       address: "x",
-      district: "y",
-      city: "z",
+      ward: "y",
+      province: "z",
       ownerId: "u1",
     });
 
@@ -133,8 +143,8 @@ describe("create — tạo cơ sở", () => {
       name: "Sân ABC",
       sportId: "s1",
       address: "x",
-      district: "y",
-      city: "z",
+      ward: "y",
+      province: "z",
       ownerId: "u1",
     });
 
@@ -147,8 +157,8 @@ describe("create — tạo cơ sở", () => {
       name: "!!! ???",
       sportId: "s1",
       address: "x",
-      district: "y",
-      city: "z",
+      ward: "y",
+      province: "z",
       ownerId: "u1",
     });
 
@@ -198,6 +208,49 @@ describe("setStatus — mở bán", () => {
     await new VenueService(db).setStatus("v1", "SUSPENDED");
 
     expect(mock.venue.update.mock.calls[0]![0].data.status).toBe("SUSPENDED");
+  });
+
+  /**
+   * Trước đây chỉ có một trạng thái `SUSPENDED` cho cả "chủ sân tự tạm nghỉ"
+   * lẫn "nền tảng khoá vì vi phạm" — nghĩa là chủ sân bị khoá chỉ cần bấm
+   * "Mở bán lại" là gỡ được hình phạt. Bản cũ tách hai trạng thái, và đó là
+   * điều đúng.
+   */
+  it("chủ sân KHÔNG tự gỡ được lệnh khoá của nền tảng", async () => {
+    const { db, mock } = createDb({ venue: { id: "v1", status: "ADMIN_LOCKED" } });
+
+    await expect(new VenueService(db).setStatus("v1", "ACTIVE")).rejects.toBeInstanceOf(
+      VenueAdminLockedError,
+    );
+    expect(mock.venue.update).not.toHaveBeenCalled();
+  });
+
+  it("chủ sân cũng không tự KHOÁ được — khoá là việc của nền tảng", async () => {
+    const { db } = createDb();
+
+    await expect(new VenueService(db).setStatus("v1", "ADMIN_LOCKED")).rejects.toBeInstanceOf(
+      VenueAdminLockedError,
+    );
+  });
+
+  it("admin thì gỡ được", async () => {
+    const { db, mock } = createDb({ venue: { id: "v1", status: "ADMIN_LOCKED" } });
+    await new VenueService(db).setStatus("v1", "ACTIVE", { byAdmin: true });
+
+    expect(mock.venue.update.mock.calls[0]![0].data.status).toBe("ACTIVE");
+  });
+
+  it("đóng cửa thì ghi lý do cho khách đọc, mở lại thì xoá", async () => {
+    // Khách đang xem sân cần biết VÌ SAO sân đóng, không phải chỉ thấy
+    // "hiện không nhận đặt".
+    const { db, mock } = createDb();
+    const service = new VenueService(db);
+
+    await service.setStatus("v1", "UNDER_MAINTENANCE", { inactiveNote: "Sửa mặt sân tới 25/9" });
+    expect(mock.venue.update.mock.calls[0]![0].data.inactiveNote).toBe("Sửa mặt sân tới 25/9");
+
+    await service.setStatus("v1", "ACTIVE");
+    expect(mock.venue.update.mock.calls[1]![0].data.inactiveNote).toBeNull();
   });
 });
 

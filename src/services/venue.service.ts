@@ -1,5 +1,10 @@
 import type { Prisma, PrismaClient, VenueStatus } from "@prisma/client";
-import { VenueConfigError, VenueNotFoundError, VenueNotReadyError } from "@/lib/errors";
+import {
+  VenueAdminLockedError,
+  VenueConfigError,
+  VenueNotFoundError,
+  VenueNotReadyError,
+} from "@/lib/errors";
 import { slugify } from "@/lib/format";
 import { prisma } from "@/lib/prisma";
 import { isSlotAligned, MINUTES_PER_DAY, SLOT_MINUTES } from "@/lib/slots";
@@ -42,11 +47,15 @@ export class VenueService {
   async create(input: {
     name: string;
     sportId: string;
+    /** Số nhà + tên đường. */
     address: string;
-    district: string;
-    city: string;
+    /** Phường/xã — cấp hành chính thứ hai sau cải cách 01/07/2025. */
+    ward: string;
+    /** Tỉnh/thành phố. */
+    province: string;
     ownerId: string;
-    ward?: string | null;
+    wardCode?: string | null;
+    provinceCode?: string | null;
     phone?: string | null;
     description?: string | null;
     holdMinutes?: number | null;
@@ -60,9 +69,10 @@ export class VenueService {
           name: input.name.trim(),
           sportId: input.sportId,
           address: input.address.trim(),
-          ward: input.ward ?? null,
-          district: input.district.trim(),
-          city: input.city.trim(),
+          ward: input.ward.trim(),
+          province: input.province.trim(),
+          wardCode: input.wardCode ?? null,
+          provinceCode: input.provinceCode ?? null,
           phone: input.phone ?? null,
           description: input.description ?? null,
           holdMinutes: input.holdMinutes ?? null,
@@ -86,15 +96,19 @@ export class VenueService {
       name: string;
       description: string | null;
       address: string;
-      ward: string | null;
-      district: string;
-      city: string;
+      ward: string;
+      province: string;
+      wardCode: string | null;
+      provinceCode: string | null;
+      inactiveNote: string | null;
       phone: string | null;
       email: string | null;
       amenities: string[];
       lat: number | null;
       lng: number | null;
       holdMinutes: number | null;
+      freeCancelHours: number | null;
+      cancelFeePercent: number | null;
       bankName: string | null;
       bankAccountNumber: string | null;
       bankAccountName: string | null;
@@ -108,15 +122,27 @@ export class VenueService {
   /**
    * Đổi trạng thái hiển thị.
    *
-   * Chặn `ACTIVE` khi sân chưa đủ ba thứ tối thiểu — giờ mở cửa, ít nhất một
-   * sân con đang bật, và một luật giá. Thiếu bất kỳ thứ nào thì lưới đặt sân
-   * hiện ra trống trơn hoặc giá 0đ, và khách nghĩ app hỏng.
+   * Hai phép kiểm độc lập:
+   *
+   * 1. **`ADMIN_LOCKED` chỉ admin gỡ được.** Bản cũ tách riêng trạng thái này
+   *    và đó là điều đúng: gộp chung một `SUSPENDED` thì chủ sân bị khoá vì vi
+   *    phạm chỉ cần bấm "Mở bán lại" là xong — hình phạt không tồn tại.
+   *    Người gọi phải nói rõ `byAdmin: true`, không suy ra từ vai trò ở đây.
+   *
+   * 2. **`ACTIVE` cần đủ giờ mở cửa, một sân con đang bật, và một luật giá.**
+   *    Thiếu thứ nào thì lưới đặt sân hiện ra trống trơn hoặc giá 0đ, và khách
+   *    nghĩ app hỏng.
    */
-  async setStatus(venueId: string, status: VenueStatus) {
+  async setStatus(
+    venueId: string,
+    status: VenueStatus,
+    options: { byAdmin?: boolean; inactiveNote?: string | null } = {},
+  ) {
     const venue = await this.db.venue.findFirst({
       where: { id: venueId, deletedAt: null },
       select: {
         id: true,
+        status: true,
         _count: {
           select: {
             hours: { where: { isClosed: false } },
@@ -129,6 +155,11 @@ export class VenueService {
 
     if (!venue) throw new VenueNotFoundError();
 
+    const dangBiKhoa = venue.status === "ADMIN_LOCKED";
+    if ((dangBiKhoa || status === "ADMIN_LOCKED") && !options.byAdmin) {
+      throw new VenueAdminLockedError();
+    }
+
     if (status === "ACTIVE") {
       const thieu: string[] = [];
       if (venue._count.hours === 0) thieu.push("giờ mở cửa");
@@ -138,7 +169,16 @@ export class VenueService {
       if (thieu.length > 0) throw new VenueNotReadyError(thieu);
     }
 
-    return this.db.venue.update({ where: { id: venueId }, data: { status } });
+    return this.db.venue.update({
+      where: { id: venueId },
+      data: {
+        status,
+        // Khách đang xem sân cần biết VÌ SAO sân đóng, chứ không phải chỉ thấy
+        // "hiện không nhận đặt". Mở bán lại thì xoá ghi chú.
+        inactiveNote:
+          status === "ACTIVE" ? null : "inactiveNote" in options ? options.inactiveNote : undefined,
+      },
+    });
   }
 
   /**
@@ -195,8 +235,10 @@ export class VenueService {
         description: true,
         address: true,
         ward: true,
-        district: true,
-        city: true,
+        province: true,
+        inactiveNote: true,
+        freeCancelHours: true,
+        cancelFeePercent: true,
         lat: true,
         lng: true,
         phone: true,
@@ -212,7 +254,7 @@ export class VenueService {
         courts: {
           where: { isActive: true, deletedAt: null },
           orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
-          select: { id: true, name: true, surface: true, note: true },
+          select: { id: true, name: true, surface: true, isIndoor: true, note: true },
         },
       },
     });
@@ -228,8 +270,8 @@ export class VenueService {
   async search(params: {
     q?: string;
     sportKey?: string;
-    city?: string;
-    district?: string;
+    province?: string;
+    ward?: string;
     maxPricePerSlot?: number;
     page?: number;
     limit?: number;
@@ -241,8 +283,8 @@ export class VenueService {
       status: "ACTIVE",
       deletedAt: null,
       ...(params.sportKey ? { sport: { key: params.sportKey } } : {}),
-      ...(params.city ? { city: params.city } : {}),
-      ...(params.district ? { district: params.district } : {}),
+      ...(params.province ? { province: params.province } : {}),
+      ...(params.ward ? { ward: params.ward } : {}),
       ...(params.q
         ? {
             OR: [
@@ -269,8 +311,8 @@ export class VenueService {
           slug: true,
           name: true,
           address: true,
-          district: true,
-          city: true,
+          ward: true,
+          province: true,
           ratingAvg: true,
           ratingCount: true,
           sport: { select: { key: true, name: true } },
@@ -313,8 +355,8 @@ export class VenueService {
             slug: true,
             name: true,
             status: true,
-            city: true,
-            district: true,
+            province: true,
+            ward: true,
             sport: { select: { key: true, name: true } },
           },
         },

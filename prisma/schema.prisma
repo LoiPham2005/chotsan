@@ -345,7 +345,11 @@ enum VenueStatus {
   DRAFT
   PENDING
   ACTIVE
+  // Chủ sân tự tạm nghỉ — chủ sân tự mở lại được.
   SUSPENDED
+  UNDER_MAINTENANCE
+  // ⚠️ Admin khoá vì vi phạm. CHỈ admin gỡ được — xem VenueService.setStatus.
+  ADMIN_LOCKED
 }
 
 model Venue {
@@ -354,10 +358,13 @@ model Venue {
   name              String
   description       String?
   status            VenueStatus    @default(DRAFT)
+  // ⚠️ Hai cấp: phường/xã → tỉnh/thành. Cấp quận/huyện đã bỏ từ 01/07/2025.
   address           String
-  ward              String?
-  district          String
-  city              String
+  ward              String
+  province          String
+  wardCode          String?        @map("ward_code")
+  provinceCode      String?        @map("province_code")
+  inactiveNote      String?        @map("inactive_note")
   lat               Float?
   lng               Float?
   phone             String?
@@ -368,6 +375,9 @@ model Venue {
   bankAccountName   String?        @map("bank_account_name")
   commissionRate    Decimal?       @map("commission_rate") @db.Decimal(5, 2)
   holdMinutes       Int?           @map("hold_minutes")
+  // Chính sách huỷ RIÊNG của từng sân. Để trống = theo mặc định nền tảng.
+  freeCancelHours   Int?           @map("free_cancel_hours")
+  cancelFeePercent  Int?           @map("cancel_fee_percent")
   ratingAvg         Decimal        @default(0) @map("rating_avg") @db.Decimal(3, 2)
   ratingCount       Int            @default(0) @map("rating_count")
   sportId           String         @map("sport_id")
@@ -386,20 +396,23 @@ model Venue {
   payouts           Payout[]
   earnings          OwnerEarning[]
 
-  @@index([status, city, district])
+  @@index([status, province, ward])
   @@index([sportId, status])
   @@index([lat, lng])
   @@map("venues")
 }
 
 model VenueImage {
-  id        String   @id @default(cuid())
-  venueId   String   @map("venue_id")
-  venue     Venue    @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  url       String
-  isPrimary Boolean  @default(false) @map("is_primary")
-  sortOrder Int      @default(0) @map("sort_order")
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  id         String   @id @default(cuid())
+  venueId    String   @map("venue_id")
+  venue      Venue    @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  url        String
+  // Khoá đối tượng trên kho lưu trữ. Thiếu nó thì xoá dòng này xong file vẫn
+  // nằm lại trên S3/R2 vĩnh viễn — và vẫn tính tiền.
+  storageKey String?  @map("storage_key")
+  isPrimary  Boolean  @default(false) @map("is_primary")
+  sortOrder  Int      @default(0) @map("sort_order")
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([venueId, sortOrder])
   @@map("venue_images")
@@ -447,14 +460,16 @@ model VenueMember {
   @@map("venue_members")
 }
 
+// Chỉ VẬT LIỆU mặt sân. Trong nhà/ngoài trời là chiều riêng (`Court.isIndoor`)
+// — "cỏ nhân tạo trong nhà" là chuyện có thật, gộp một enum là không tả được.
 enum CourtSurface {
-  INDOOR
-  OUTDOOR
-  COVERED
-  ARTIFICIAL_GRASS
   NATURAL_GRASS
+  ARTIFICIAL_GRASS
   WOOD
+  RUBBER
   CONCRETE
+  CLAY
+  EPOXY
 }
 
 model Court {
@@ -464,7 +479,9 @@ model Court {
   sportId   String          @map("sport_id")
   sport     Sport           @relation(fields: [sportId], references: [id])
   name      String
-  surface   CourtSurface    @default(INDOOR)
+  // Để trống = chưa khai. Thà trống còn hơn đoán bừa một mặt sân sai.
+  surface   CourtSurface?
+  isIndoor  Boolean         @default(false) @map("is_indoor")
   note      String?
   isActive  Boolean         @default(true) @map("is_active")
   sortOrder Int             @default(0) @map("sort_order")
@@ -545,43 +562,47 @@ enum BookingSource {
 }
 
 model Booking {
-  id            String              @id @default(cuid())
-  code          String              @unique
-  venueId       String              @map("venue_id")
-  venue         Venue               @relation(fields: [venueId], references: [id])
-  courtId       String              @map("court_id")
-  court         Court               @relation(fields: [courtId], references: [id])
-  userId        String?             @map("user_id")
-  user          User?               @relation(fields: [userId], references: [id])
-  customerName  String              @map("customer_name")
-  customerPhone String              @map("customer_phone")
-  customerNote  String?             @map("customer_note")
-  startAt       DateTime            @map("start_at") @db.Timestamptz(3)
-  endAt         DateTime            @map("end_at") @db.Timestamptz(3)
-  slotCount     Int                 @map("slot_count")
-  status        BookingStatus       @default(HOLDING)
-  source        BookingSource       @default(WEB)
-  subtotal      Int
-  discountTotal Int                 @default(0) @map("discount_total")
-  total         Int
-  holdExpiresAt DateTime?           @map("hold_expires_at") @db.Timestamptz(3)
-  checkedInAt   DateTime?           @map("checked_in_at") @db.Timestamptz(3)
-  cancelledAt   DateTime?           @map("cancelled_at") @db.Timestamptz(3)
-  cancelReason  String?             @map("cancel_reason")
-  cancelledBy   String?             @map("cancelled_by")
-  createdBy     String?             @map("created_by")
-  createdAt     DateTime            @default(now()) @db.Timestamptz(3)
-  updatedAt     DateTime            @updatedAt @db.Timestamptz(3)
-  payments      Payment[]
-  redemptions   VoucherRedemption[]
-  earning       OwnerEarning?
-  review        Review?
-  disputes      Dispute[]
+  id               String              @id @default(cuid())
+  code             String              @unique
+  venueId          String              @map("venue_id")
+  venue            Venue               @relation(fields: [venueId], references: [id])
+  courtId          String              @map("court_id")
+  court            Court               @relation(fields: [courtId], references: [id])
+  userId           String?             @map("user_id")
+  user             User?               @relation(fields: [userId], references: [id])
+  customerName     String              @map("customer_name")
+  customerPhone    String              @map("customer_phone")
+  customerNote     String?             @map("customer_note")
+  startAt          DateTime            @map("start_at") @db.Timestamptz(3)
+  endAt            DateTime            @map("end_at") @db.Timestamptz(3)
+  slotCount        Int                 @map("slot_count")
+  status           BookingStatus       @default(HOLDING)
+  source           BookingSource       @default(WEB)
+  subtotal         Int
+  discountTotal    Int                 @default(0) @map("discount_total")
+  total            Int
+  holdExpiresAt    DateTime?           @map("hold_expires_at") @db.Timestamptz(3)
+  checkedInAt      DateTime?           @map("checked_in_at") @db.Timestamptz(3)
+  cancelledAt      DateTime?           @map("cancelled_at") @db.Timestamptz(3)
+  cancelReason     String?             @map("cancel_reason")
+  cancelledBy      String?             @map("cancelled_by")
+  // Nhóm các lượt của một lịch cố định ("thứ 3 hàng tuần"). Cột trước, tính
+  // năng sau — thêm cột vào bảng đã có triệu dòng đắt hơn nhiều.
+  recurringGroupId String?             @map("recurring_group_id")
+  createdBy        String?             @map("created_by")
+  createdAt        DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime            @updatedAt @db.Timestamptz(3)
+  payments         Payment[]
+  redemptions      VoucherRedemption[]
+  earning          OwnerEarning?
+  review           Review?
+  disputes         Dispute[]
 
   @@index([venueId, startAt])
   @@index([courtId, startAt])
   @@index([userId, startAt])
   @@index([status, holdExpiresAt])
+  @@index([recurringGroupId])
   @@map("bookings")
 }
 
@@ -676,9 +697,12 @@ model Payment {
 
   receivedBy PaymentReceiver @default(PLATFORM) @map("received_by")
 
-  declaredAt    DateTime? @map("declared_at") @db.Timestamptz(3)
-  declaredNote  String?   @map("declared_note")
-  proofImageUrl String?   @map("proof_image_url")
+  declaredAt     DateTime? @map("declared_at") @db.Timestamptz(3)
+  // Số tiền KHÁCH KHAI đã chuyển. Lệch với `amount` là dấu hiệu đầu tiên của
+  // chuyển thiếu hoặc ảnh chụp màn hình của giao dịch khác.
+  declaredAmount Int?      @map("declared_amount")
+  declaredNote   String?   @map("declared_note")
+  proofImageUrl  String?   @map("proof_image_url")
 
   reviewedBy   String?   @map("reviewed_by")
   reviewedAt   DateTime? @map("reviewed_at") @db.Timestamptz(3)

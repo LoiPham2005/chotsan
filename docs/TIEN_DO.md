@@ -3,7 +3,7 @@
 Cập nhật: **04/09/2026**. Kế hoạch đầy đủ ở [KE_HOACH_REFACTOR.md](KE_HOACH_REFACTOR.md); tệp này
 chỉ nói **đã làm được gì, còn gì**, để mở ra là biết đứng ở đâu.
 
-Số liệu hiện tại: **483 test / 43 tệp xanh**, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
+Số liệu hiện tại: **494 test / 43 tệp xanh**, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
 trên database thật.
 
 ## Bảng tổng
@@ -73,6 +73,36 @@ Script này **đã bắt được hai lỗi mà 440 unit test không thấy** �
 2. **Nối UI vào service** (GĐ5).
 3. **Realtime** (GĐ6) — đẩy trạng thái khung giờ khi có người đặt, để hai người cùng xem một sân
    thấy ngay. Cron đã xong.
+
+## Đã học được gì từ bản cũ
+
+So `prisma/schema.prisma` với `../sports_booking/backend/prisma/schema.prisma` (bản cũ, 46 bảng)
+tìm ra sáu chỗ bản cũ làm đúng mà bản này làm sai hoặc bỏ sót. Đã sửa hết trong migration
+`20260904140000_hoc_tu_ban_cu`:
+
+| Học được                             | Bản này trước đó                                         |
+| ------------------------------------ | -------------------------------------------------------- |
+| Địa chỉ hai cấp phường/xã → tỉnh     | Bắt buộc `district` — cấp đã bỏ từ 01/07/2025            |
+| Tách `ADMIN_LOCKED` khỏi `SUSPENDED` | Chủ sân bị khoá tự bấm "Mở bán" là gỡ được hình phạt     |
+| `pg_trgm` khai trong schema          | Index trgm bị `prisma migrate dev` xoá → `Seq Scan`      |
+| `VenueImage.storageKey`              | Xoá dòng xong file vẫn nằm trên S3, vẫn tính tiền        |
+| `cancelPolicyJson` theo từng sân     | `freeCancelHours` là hằng số 2 nằm cứng trong hàm        |
+| `indoor` tách khỏi `surface`         | Enum gộp hai chiều, không tả nổi "cỏ nhân tạo trong nhà" |
+| `recurringGroupId`                   | Không có chỗ nhóm lịch đặt cố định hàng tuần             |
+
+Kèm 3 ràng buộc database mới mà **cả hai bản đều thiếu**: một chủ cho mỗi cơ sở
+(`venue_members_mot_chu_cho_moi_co_so`), 7 ràng buộc `CHECK` (điểm sao 1–5, tiền không âm, giờ
+không ngược), và index `pg_trgm` cho tìm kiếm.
+
+**Còn nợ, chưa làm** (cần quyết định sản phẩm, không phải lỗi):
+
+- **`PlatformInvoice`** — bản cũ giải bài toán dòng tiền bằng cách cho tiền đi thẳng vào tài
+  khoản sân rồi nền tảng xuất hoá đơn hoa hồng cuối tháng. Đây chính là câu trả lời cho câu hỏi
+  còn treo bên dưới.
+- **Đặt sân cố định** — cột `recurringGroupId` đã có, tính năng chưa.
+- **`NotificationPreference`** — tắt/bật từng loại thông báo theo kênh.
+- **`AppVersionConfig`** — chặn phiên bản app cũ, cần trước khi phát hành Flutter (GĐ7).
+- **Danh mục tiện ích** — hiện là `String[]` tự do; bản cũ có bảng `Amenity` (có icon, lọc chuẩn).
 
 ## Một quyết định còn chờ
 

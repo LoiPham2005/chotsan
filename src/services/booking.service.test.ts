@@ -65,7 +65,7 @@ const BOOKING = {
 
 type Options = {
   booking?: (Partial<typeof BOOKING> & { id: string }) | null;
-  venue?: { holdMinutes: number } | null;
+  venue?: { holdMinutes?: number; freeCancelHours?: number; cancelFeePercent?: number } | null;
   /** Lỗi mà `booking.create` sẽ ném ra, theo thứ tự từng lần gọi. */
   createErrors?: (Error | null)[];
   updateError?: Error | null;
@@ -81,6 +81,11 @@ function createDb(options: Options = {}) {
       findFirst: vi
         .fn()
         .mockResolvedValue("venue" in options ? options.venue : { holdMinutes: 10 }),
+      findUnique: vi
+        .fn()
+        .mockResolvedValue(
+          "venue" in options ? options.venue : { freeCancelHours: null, cancelFeePercent: null },
+        ),
     },
     booking: {
       create: vi.fn(({ data }: { data: Record<string, unknown> }) => {
@@ -369,15 +374,64 @@ describe("cancel — huỷ", () => {
     expect(result.refundable).toBe(false);
   });
 
-  it("mốc hoàn tiền theo cấu hình của sân, không cứng 2 tiếng", async () => {
-    const { db } = createDb();
-    const result = await new BookingService(db, createAvailability()).cancel("b1", {
-      now: NOW,
-      freeCancelHours: 24,
-    });
+  it("mốc hoàn tiền lấy từ CHÍNH SÁCH CỦA SÂN, không cứng 2 tiếng", async () => {
+    // Sân cầu lông trong ngõ cho huỷ trước 1 tiếng; sân bóng 11 người thuê cả
+    // buổi thì 24 tiếng cũng là sát. Một hằng số cho mọi sân là sai với cả hai.
+    const { db } = createDb({ venue: { freeCancelHours: 24 } });
+    const result = await new BookingService(db, createAvailability()).cancel("b1", { now: NOW });
 
+    expect(result.freeCancelHours).toBe(24);
     // Hạn huỷ miễn phí lùi về hôm trước, nên huỷ lúc 10:00 hôm nay là muộn.
     expect(result.refundable).toBe(false);
+  });
+
+  it("sân chưa khai chính sách thì dùng mặc định 2 tiếng", async () => {
+    const { db } = createDb({ venue: { freeCancelHours: undefined } });
+    const result = await new BookingService(db, createAvailability()).cancel("b1", { now: NOW });
+
+    expect(result.freeCancelHours).toBe(2);
+  });
+
+  it("tham số truyền vào ĐÈ chính sách của sân — dùng khi nền tảng huỷ hộ", async () => {
+    const { db } = createDb({ venue: { freeCancelHours: 24 } });
+    const result = await new BookingService(db, createAvailability()).cancel("b1", {
+      now: NOW,
+      freeCancelHours: 1,
+    });
+
+    expect(result.freeCancelHours).toBe(1);
+    expect(result.refundable).toBe(true);
+  });
+
+  it("huỷ trễ mà sân cho giữ lại một phần thì tính đúng số hoàn", async () => {
+    // Mất trắng là mặc định, nhưng sân nào cho hoàn 50% thì phải ra 50%.
+    const { db } = createDb({ venue: { freeCancelHours: 2, cancelFeePercent: 30 } });
+    const satGio = new Date("2026-09-04T11:00:00Z"); // 18:00 VN, trước giờ đá 1 tiếng
+
+    const result = await new BookingService(db, createAvailability()).cancel("b1", {
+      now: satGio,
+    });
+
+    expect(result.refundable).toBe(false);
+    expect(result.refundableAmount).toBe(252_000); // 360k − 30%
+  });
+
+  it("huỷ trễ mà sân không khai phí thì mất trắng", async () => {
+    const { db } = createDb();
+    const satGio = new Date("2026-09-04T11:00:00Z");
+
+    const result = await new BookingService(db, createAvailability()).cancel("b1", {
+      now: satGio,
+    });
+
+    expect(result.refundableAmount).toBe(0);
+  });
+
+  it("huỷ sớm thì hoàn nguyên tiền", async () => {
+    const { db } = createDb();
+    const result = await new BookingService(db, createAvailability()).cancel("b1", { now: NOW });
+
+    expect(result.refundableAmount).toBe(360_000);
   });
 
   it("không huỷ lượt khách đã tới sân hoặc đã đá xong", async () => {

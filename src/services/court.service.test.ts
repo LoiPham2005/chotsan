@@ -74,7 +74,34 @@ describe("create — thêm sân con", () => {
     expect(mock.court.create.mock.calls[0]![0].data).toMatchObject({
       sportId: "s1",
       name: "Sân 1",
-      surface: "INDOOR",
+    });
+  });
+
+  it("KHÔNG đoán mặt sân khi chưa khai — để trống là trạng thái thật", async () => {
+    // Trước đây mặc định "INDOOR", mà trong-nhà không phải một loại mặt sân.
+    // Đoán bừa thì mọi sân đều hiện sai vật liệu và không ai đi sửa lại.
+    const { db, mock } = createDb();
+    await new CourtService(db).create({ venueId: "v1", name: "Sân 1" });
+
+    expect(mock.court.create.mock.calls[0]![0].data).toMatchObject({
+      surface: null,
+      isIndoor: false,
+    });
+  });
+
+  it("cỏ nhân tạo TRONG NHÀ tả được — hai chiều độc lập", async () => {
+    // Enum cũ gộp INDOOR/OUTDOOR chung với vật liệu nên ca này không tả nổi.
+    const { db, mock } = createDb();
+    await new CourtService(db).create({
+      venueId: "v1",
+      name: "Sân 1",
+      surface: "ARTIFICIAL_GRASS",
+      isIndoor: true,
+    });
+
+    expect(mock.court.create.mock.calls[0]![0].data).toMatchObject({
+      surface: "ARTIFICIAL_GRASS",
+      isIndoor: true,
     });
   });
 

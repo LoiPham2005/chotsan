@@ -189,6 +189,45 @@ originalCode = "23P01"`. Đó là lý do có hàm thứ hai.
 database thật (tự tạo sân riêng rồi tự xoá). Chính lệnh này đã bắt được hai lỗi mà 440 unit test
 không thấy.
 
+## 11. `prisma migrate dev` XOÁ mọi index/ràng buộc viết tay mà nó không biết
+
+Prisma sinh migration bằng cách so schema với **trạng thái do chính nó quản lý**. Mọi thứ viết
+tay bằng SQL — index GIN/GiST, `EXCLUDE`, partial unique index, `CHECK` — không có trong
+`schema.prisma`, nên nó coi là **dư thừa** và thêm `DROP INDEX` vào migration mới.
+
+Đã xảy ra thật ở dự án này: ba index `pg_trgm` tạo ở migration `20260903000001_search_index` bị
+xoá sạch ở `20260904041510_chotsan_nghiep_vu` (`DROP INDEX "users_email_trgm_idx"`…). Hậu quả im
+lặng hoàn toàn: `pnpm check` xanh, test xanh, chỉ có mọi truy vấn tìm kiếm âm thầm chuyển thành
+`Seq Scan`. Phát hiện ra khi so với schema bản cũ — bản cũ khai `extensions = [pg_trgm]` ngay
+trong `schema.prisma` nên Prisma biết và không đụng vào.
+
+**Quy trình bắt buộc khi sửa `schema.prisma`:**
+
+```bash
+# 1. Sinh SQL nhưng KHÔNG áp
+pnpm exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script \
+  > prisma/migrations/<timestamp>_<ten>/migration.sql
+
+# 2. ĐỌC file vừa sinh, xoá mọi DROP INDEX / DROP CONSTRAINT đụng vào ràng buộc viết tay
+# 3. Áp
+pnpm exec prisma migrate deploy
+```
+
+⚠️ **Đừng dùng `prisma migrate dev`** trên dự án này. Nó vừa sinh vừa áp, nên tới lúc nhìn thấy
+SQL thì index đã bị xoá rồi.
+
+**Danh sách ràng buộc viết tay phải bảo vệ** (kiểm bằng `pnpm db:check-conflict` sau mỗi lần
+migrate):
+
+| Ràng buộc                                          | Chặn điều gì                            |
+| -------------------------------------------------- | --------------------------------------- |
+| `bookings_khong_trung_khung_gio` (EXCLUDE)         | Hai người đặt cùng một khung            |
+| `payments_mot_giao_dich_song_cho_moi_booking`      | Thu tiền hai lần cho một lượt đặt       |
+| `venue_members_mot_chu_cho_moi_co_so`              | Cơ sở có hai chủ, hoặc không chủ nào    |
+| `venues_name_trgm_idx`, `venues_address_trgm_idx`  | Tìm sân thành quét toàn bảng            |
+| `users_email_active_key`, `users_phone_active_key` | Trùng email/sđt giữa tài khoản còn sống |
+| 7 ràng buộc `CHECK`                                | Điểm sao ngoài 1–5, tiền âm, giờ ngược  |
+
 ## Lưu ý chung khi code
 
 - **Ưu tiên `pnpm typecheck`/`pnpm test` qua terminal hơn tin theo IDE** khi vừa đổi
@@ -200,3 +239,5 @@ không thấy.
   thức cho mọi cột.
 - **Ràng buộc chạy đua (trùng chỗ, trùng tiền) phải kiểm bằng `pnpm db:check-conflict`**, không
   chỉ bằng unit test — xem gotcha #10.
+- **Không chạy `prisma migrate dev`** — nó xoá index viết tay. Dùng `migrate diff` + đọc SQL +
+  `migrate deploy`, xem gotcha #11.
