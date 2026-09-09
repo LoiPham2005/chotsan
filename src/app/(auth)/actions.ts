@@ -16,6 +16,7 @@ import { z } from "zod";
 import { createSession, destroySession } from "@/lib/auth";
 import { logger } from "@/lib/logger";
 import { RATE_LIMITS, rateLimit, resetRateLimit } from "@/lib/rate-limit";
+import { landingPathFor } from "@/lib/landing";
 import { safeRedirectPath } from "@/lib/safe-redirect";
 import {
   forgotPasswordSchema,
@@ -135,8 +136,18 @@ export async function loginAction(
    * KHÔNG giữ lại cookie phiên vừa được đặt trong cùng response — nghĩa là
    * không ai đăng nhập nổi, mà nhật ký máy chủ vẫn ghi "User logged in".
    */
+  /*
+   * `?next=` LUÔN THẮNG.
+   *
+   * Người dùng bấm vào một link cụ thể rồi bị chặn ở cửa — đưa họ về đúng chỗ
+   * đó, không phải về màn mặc định của vai. Chỉ khi không có `next` mới hỏi
+   * "vai này làm việc ở đâu".
+   */
+  const next = formData.get("next");
+  const dich = typeof next === "string" && next ? next : await landingPathFor(user.id);
+
   // redirect() hoạt động bằng cách ném exception — phải nằm ngoài mọi try/catch.
-  redirect(safeRedirectPath(formData.get("next"), "/"));
+  redirect(safeRedirectPath(dich, "/"));
 }
 
 /**
@@ -199,8 +210,18 @@ export async function verifyTwoFactorAction(
   });
   logger.info("User logged in with 2FA", { userId: user.id });
 
+  /*
+   * `?next=` LUÔN THẮNG.
+   *
+   * Người dùng bấm vào một link cụ thể rồi bị chặn ở cửa — đưa họ về đúng chỗ
+   * đó, không phải về màn mặc định của vai. Chỉ khi không có `next` mới hỏi
+   * "vai này làm việc ở đâu".
+   */
+  const next = formData.get("next");
+  const dich = typeof next === "string" && next ? next : await landingPathFor(user.id);
+
   // redirect() hoạt động bằng cách ném exception — phải nằm ngoài mọi try/catch.
-  redirect(safeRedirectPath(formData.get("next"), "/"));
+  redirect(safeRedirectPath(dich, "/"));
 }
 
 export async function registerAction(

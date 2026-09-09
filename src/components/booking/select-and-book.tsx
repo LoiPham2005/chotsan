@@ -5,7 +5,8 @@ import { useFormStatus } from "react-dom";
 import { holdBookingAction, type HoldBookingState } from "@/app/(public)/venues/[slug]/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { DaySummaryStrip, SlotGrid, type SlotSelection } from "@/components/booking/slot-grid";
+import Link from "next/link";
+import { SlotGrid, type SlotSelection } from "@/components/booking/slot-grid";
 import { timeRangeLabel } from "@/lib/date";
 import { formatVnd } from "@/lib/slots";
 import type { DayAvailability } from "@/services/availability.service";
@@ -32,10 +33,15 @@ export function SelectAndBook({
   day,
   venueId,
   date,
+  nguoiDung,
+  duongDanHienTai,
 }: {
   day: DayAvailability;
   venueId: string;
   date: string;
+  /** `null` = chưa đăng nhập. */
+  nguoiDung: { ten: string; soDienThoai: string | null } | null;
+  duongDanHienTai: string;
 }) {
   const [selection, setSelection] = useState<SlotSelection | null>(null);
   const [state, formAction] = useActionState<HoldBookingState, FormData>(holdBookingAction, {});
@@ -52,8 +58,6 @@ export function SelectAndBook({
 
   return (
     <>
-      <DaySummaryStrip day={day} className="mb-3" />
-
       <SlotGrid day={day} onSelect={setSelection} />
 
       {state.error && (
@@ -81,64 +85,79 @@ export function SelectAndBook({
               <p className="text-lg font-bold text-brand">{formatVnd(estimate)}</p>
             </div>
 
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <div>
-                <label htmlFor="customerName" className="sr-only">
-                  Tên của bạn
-                </label>
-                <Input
-                  id="customerName"
-                  name="customerName"
-                  placeholder="Tên của bạn"
-                  required
-                  maxLength={80}
-                  autoComplete="name"
-                  aria-describedby={state.fields?.customerName ? "failed-ten" : undefined}
-                />
-                {state.fields?.customerName && (
-                  <p id="failed-ten" className="mt-1 text-xs text-danger">
-                    {state.fields.customerName[0]}
-                  </p>
-                )}
+            {/*
+              CHƯA ĐĂNG NHẬP THÌ DẪN TỚI ĐĂNG NHẬP, KHÔNG HỎI TÊN VÀ SỐ.
+
+              Bản đầu cho đặt không cần tài khoản. Đó là luồng làm dở: lượt đặt
+              ấy mang `userId: null` nên không bao giờ hiện ở "Lượt đặt của tôi"
+              và khách không tự huỷ được — mất cái link chứa mã là mất đường vào
+              chính lượt đặt của mình.
+            */}
+            {nguoiDung === null ? (
+              <div className="mt-3">
+                <Button asChild size="lg" className="w-full shadow-chon">
+                  <Link href={`/login?next=${encodeURIComponent(duongDanHienTai)}`}>
+                    Đăng nhập để đặt sân
+                  </Link>
+                </Button>
+                <p className="mt-2 text-center text-xs text-muted">
+                  Có tài khoản thì xem lại và huỷ lượt đặt bất cứ lúc nào.{" "}
+                  <Link
+                    href={`/register?next=${encodeURIComponent(duongDanHienTai)}`}
+                    className="font-medium text-brand hover:underline"
+                  >
+                    Đăng ký
+                  </Link>
+                </p>
               </div>
-
-              <div>
-                <label htmlFor="customerPhone" className="sr-only">
-                  Số điện thoại
-                </label>
-                <Input
-                  id="customerPhone"
-                  name="customerPhone"
-                  type="tel"
-                  inputMode="numeric"
-                  placeholder="Số điện thoại"
-                  required
-                  autoComplete="tel"
-                  aria-describedby={state.fields?.customerPhone ? "failed-sdt" : undefined}
-                />
-                {state.fields?.customerPhone && (
-                  <p id="failed-sdt" className="mt-1 text-xs text-danger">
-                    {state.fields.customerPhone[0]}
-                  </p>
+            ) : (
+              <>
+                {/*
+                  Hồ sơ đã có số thì KHÔNG hỏi lại. Bắt gõ lại thứ hệ thống đã
+                  biết là thêm thao tác cho một việc lặp hằng tuần.
+                */}
+                {nguoiDung.soDienThoai === null && (
+                  <div className="mt-3">
+                    <label htmlFor="customerPhone" className="mb-1 block text-sm text-muted">
+                      Số điện thoại để sân gọi khi có việc
+                    </label>
+                    <Input
+                      id="customerPhone"
+                      name="customerPhone"
+                      type="tel"
+                      inputMode="numeric"
+                      placeholder="0987654321"
+                      required
+                      autoComplete="tel"
+                      aria-describedby={state.fields?.customerPhone ? "loi-sdt" : undefined}
+                    />
+                    {state.fields?.customerPhone && (
+                      <p id="loi-sdt" className="mt-1 text-xs text-danger">
+                        {state.fields.customerPhone[0]}
+                      </p>
+                    )}
+                  </div>
                 )}
-              </div>
-            </div>
 
-            <div className="mt-2 flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setSelection(null)}
-                className="shrink-0"
-              >
-                Bỏ chọn
-              </Button>
-              <SubmitBookingButton />
-            </div>
+                <div className="mt-3 flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setSelection(null)}
+                    className="shrink-0"
+                  >
+                    Bỏ chọn
+                  </Button>
+                  <SubmitBookingButton />
+                </div>
 
-            <p className="mt-2 text-center text-xs text-muted">
-              Chỗ được giữ 10 phút để bạn thanh toán. Chưa trừ tiền ở bước này.
-            </p>
+                <p className="mt-2 text-center text-xs text-muted">
+                  Đặt với tên <strong>{nguoiDung.ten}</strong>
+                  {nguoiDung.soDienThoai && ` · ${nguoiDung.soDienThoai}`}. Chỗ được giữ 10 phút,
+                  chưa trừ tiền ở bước này.
+                </p>
+              </>
+            )}
           </div>
         </form>
       )}

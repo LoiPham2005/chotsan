@@ -1,6 +1,6 @@
 import Link from "next/link";
+import { logoutAction } from "@/app/logout-action";
 import { getCurrentUser } from "@/lib/auth";
-import { apiPath } from "@/lib/api/version";
 import { Logo } from "@/components/layout/logo";
 import { Button } from "@/components/ui/button";
 import { permissionService } from "@/services/permission.service";
@@ -88,7 +88,13 @@ export async function Header() {
               >
                 {user.fullName ?? user.email}
               </Link>
-              <form action={apiPath("/auth/logout")} method="POST">
+              {/*
+                Server Action, KHÔNG phải `/api/v1/auth/logout`. Endpoint đó là
+                của mobile: nó đòi body JSON kèm refresh token, còn form HTML
+                gửi lên rỗng — kết quả là người dùng nhìn thấy một trang JSON
+                báo lỗi và vẫn đang đăng nhập.
+              */}
+              <form action={logoutAction}>
                 <Button size="sm" variant="outline" type="submit">
                   Đăng xuất
                 </Button>

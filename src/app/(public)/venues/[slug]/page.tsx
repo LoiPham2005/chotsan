@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { SelectAndBook } from "@/components/booking/select-and-book";
 import { SportIcon, sportStyle } from "@/components/venue/sport-icon";
 import { DateStrip } from "@/components/booking/date-strip";
+import { getCurrentUser } from "@/lib/auth";
 import { parseDateKey, dateKey, fullDateLabel } from "@/lib/date";
 import { formatHhMm } from "@/lib/slots";
 import { availabilityService } from "@/services/availability.service";
@@ -12,7 +13,7 @@ const WEEKDAY_NAMES = ["Chủ nhật", "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5
 
 type Props = {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ days?: string }>;
+  searchParams: Promise<{ date?: string }>;
 };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -40,9 +41,12 @@ export default async function VenueDetailPage({ params, searchParams }: Props) {
 
   if (!venue) notFound();
 
-  const days = parseDateKey(query.days);
-  const key = dateKey(days);
-  const lich = await availabilityService.forDay(venue.id, days);
+  // Tham số URL là `?date=` — cùng tên với thứ `DateStrip` sinh ra. Trước đây
+  // trang đọc `?days=` nên bấm chọn ngày không có tác dụng gì.
+  const nguoiDung = await getCurrentUser();
+  const date = parseDateKey(query.date);
+  const key = dateKey(date);
+  const lich = await availabilityService.forDay(venue.id, date);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
@@ -116,11 +120,11 @@ export default async function VenueDetailPage({ params, searchParams }: Props) {
             Chọn khung giờ
           </h2>
           <p className="mt-0.5 text-sm text-muted">
-            {fullDateLabel(days)} · kéo qua nhiều ô liền nhau để đặt dài hơn
+            {fullDateLabel(date)} · kéo qua nhiều ô liền nhau để đặt dài hơn
           </p>
 
           <div className="mt-3">
-            <DateStrip basePath={`/venue/${venue.slug}`} selected={days} />
+            <DateStrip basePath={`/venue/${venue.slug}`} selected={date} />
           </div>
 
           <div className="mt-4">
@@ -129,7 +133,20 @@ export default async function VenueDetailPage({ params, searchParams }: Props) {
                 Sân nghỉ ngày này. Chọn ngày khác giúp bạn nhé.
               </p>
             ) : (
-              <SelectAndBook day={lich} venueId={venue.id} date={key} />
+              <SelectAndBook
+                day={lich}
+                venueId={venue.id}
+                date={key}
+                duongDanHienTai={`/venues/${venue.slug}?date=${key}`}
+                nguoiDung={
+                  nguoiDung
+                    ? {
+                        ten: nguoiDung.fullName ?? nguoiDung.email ?? "Bạn",
+                        soDienThoai: nguoiDung.phone,
+                      }
+                    : null
+                }
+              />
             )}
           </div>
         </section>

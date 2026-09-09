@@ -47,10 +47,21 @@ test.describe("Chủ sân", () => {
     await page.goto(`/manage/${venueId}/payments`);
 
     await expect(page.getByRole("heading", { name: "Chờ duyệt tiền" })).toBeVisible();
-    // Câu nhắc này là thứ chặn chủ sân bấm duyệt theo lời khai của khách.
+
+    /*
+     * Hàng chờ có thể TRỐNG — lần chạy trước đã duyệt hết, hoặc chưa ai khai
+     * chuyển khoản. Cả hai đều là trạng thái hợp lệ, nên bài này kiểm theo
+     * nhánh chứ không đòi phải luôn có khoản chờ.
+     */
     const coKhoan = await page.getByRole("button", { name: /Đã nhận đủ tiền/ }).count();
+
     if (coKhoan > 0) {
-      await expect(page.getByText(/Lời khai của khách không phải bằng chứng/)).toBeVisible();
+      // Câu nhắc này là thứ chặn chủ sân bấm duyệt theo lời khai của khách.
+      await expect(
+        page.getByText(/Lời khai của khách không phải bằng chứng/).first(),
+      ).toBeVisible();
+    } else {
+      await expect(page.getByText("Không có khoản nào đang chờ")).toBeVisible();
     }
   });
 

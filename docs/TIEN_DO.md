@@ -3,7 +3,7 @@
 Cập nhật: **04/09/2026**. Kế hoạch đầy đủ ở [KE_HOACH_REFACTOR.md](KE_HOACH_REFACTOR.md); tệp này
 chỉ nói **đã làm được gì, còn gì**, để mở ra là biết đứng ở đâu.
 
-Số liệu hiện tại: **555 unit test / 49 tệp** + **28 bài e2e Playwright** — tất cả xanh, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
+Số liệu hiện tại: **555 unit test / 49 tệp** + **37 bài e2e Playwright** — tất cả xanh, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
 trên database thật.
 
 ## Bảng tổng
@@ -117,6 +117,30 @@ nóng nhất cho một cột toàn NULL). Cả ba thêm lại sau bằng một m
 Chọn thế vì nền tảng không giữ tiền của người khác — giữ hộ tiền là bước vào phạm vi trung gian
 thanh toán, kèm ràng buộc pháp lý và vốn. Đổi lại phải đi ĐÒI hoa hồng, nhưng có sẵn đòn bẩy: quá
 hạn thì khoá sân. Đây cũng là cách bản cũ (`PlatformInvoice`) đã làm.
+
+### Đích sau khi đăng nhập — theo VAI, không phải một đích chung
+
+| Vai                 | Về đâu             | Vì sao                                                  |
+| ------------------- | ------------------ | ------------------------------------------------------- |
+| Quản trị nền tảng   | `/venue-approvals` | Chủ sân nộp hồ sơ đang chờ; đây là việc gấp nhất        |
+| Chủ sân · nhân viên | `/manage`          | Một sân thì vào thẳng lịch hôm nay, không phải bấm thêm |
+| Khách               | `/`                | Đúng là trang họ cần                                    |
+
+`?next=` **luôn thắng**: bấm vào một link cụ thể rồi bị chặn ở cửa thì phải quay lại đúng chỗ đó.
+
+Xem `src/lib/landing.ts`. Cố ý KHÔNG gọi hàm này trong `src/proxy.ts` — proxy chạy trước mọi
+request trang, còn hàm đó hỏi database bốn lần.
+
+### Đặt sân BẮT BUỘC đăng nhập
+
+Bản đầu cho khách vãng lai đặt không cần tài khoản. Đó là luồng làm dở: lượt đặt ấy mang
+`userId: null` nên **không bao giờ hiện ở "Lượt đặt của tôi" và khách không tự huỷ được** — mất
+cái link chứa mã là mất đường vào chính lượt đặt của mình.
+
+Nay chưa đăng nhập thì nút chuyển thành "Đăng nhập để đặt sân", kèm `?next=` giữ nguyên sân và
+ngày đang xem. Đã đăng nhập thì KHÔNG hỏi lại tên; số điện thoại chỉ hỏi khi hồ sơ chưa có.
+
+Đặt hộ tại quầy vẫn giữ tên + số rời (`source: COUNTER`) — luồng khác, do nhân viên sân thao tác.
 
 **Đã làm xong**: bảng `PlatformInvoice` (`@@unique([venueId, periodStart])` chống xuất trùng),
 `InvoiceService`, cron xuất hoá đơn 02:00 mùng 1 hằng tháng và đánh dấu quá hạn 04:00 mỗi ngày,

@@ -13,6 +13,34 @@ import { expect, test } from "@playwright/test";
 
 const DEV_PASSWORD = "matkhau123";
 
+/**
+ * Đăng nhập nhanh — kiểm nó KHÔNG tồn tại ở bản production.
+ *
+ * Bộ e2e chạy trên `pnpm build && pnpm start`, tức đúng bản người dùng thật
+ * nhận được. Đó là chỗ duy nhất kiểm được tính chất đáng giá của khối này:
+ * bốn tài khoản có mật khẩu nằm công khai trong mã nguồn phải BIẾN MẤT hoàn
+ * toàn, không chỉ bị ẩn bằng CSS.
+ */
+test.describe("Đăng nhập nhanh chỉ có ở dev", () => {
+  test("bản production KHÔNG có khối đăng nhập nhanh", async ({ page }) => {
+    await page.goto("/login");
+
+    await expect(page.getByText("Chỉ có ở môi trường dev")).toHaveCount(0);
+    // Cả email lẫn mật khẩu mẫu đều không được lọt vào HTML.
+    await expect(page.getByText("chusan@dev.local")).toHaveCount(0);
+    expect(await page.content()).not.toContain("matkhau123");
+  });
+
+  test("endpoint đăng nhập nhanh trả 404 trên production", async ({ request }) => {
+    const response = await request.post("/api/dev/quick-login", {
+      form: { identifier: "chusan@dev.local", password: "matkhau123" },
+      maxRedirects: 0,
+    });
+
+    expect(response.status()).toBe(404);
+  });
+});
+
 test.describe("Đăng nhập", () => {
   test("đăng nhập bằng EMAIL rồi vào được trang cần quyền", async ({ page }) => {
     await page.goto("/login");
@@ -21,10 +49,9 @@ test.describe("Đăng nhập", () => {
     await page.getByLabel("Mật khẩu").fill(DEV_PASSWORD);
     await page.getByRole("button", { name: "Đăng nhập", exact: true }).click();
 
-    // Đích mặc định là "/" — trang MỌI người đăng nhập đều mở được. Bộ khung
-    // để lại "/users" (cần quyền `user:read`) nên ai không phải quản trị viên
-    // là rơi vào 404 ngay sau khi đăng nhập thành công. Xem GOTCHAS #12.
-    await expect(page).toHaveURL(/\/$/);
+    // Mỗi vai về đúng chỗ làm việc của mình: quản trị viên vào thẳng hàng chờ
+    // duyệt cơ sở, không phải trang chủ bán hàng. Xem `src/lib/landing.ts`.
+    await expect(page).toHaveURL(/\/venue-approvals/);
     // Thanh điều hướng đổi sang trạng thái đã đăng nhập — đó là bằng chứng
     // cookie phiên tới được trình duyệt, không chỉ được đặt ở máy chủ.
     await expect(page.getByRole("button", { name: "Đăng xuất" })).toBeVisible();

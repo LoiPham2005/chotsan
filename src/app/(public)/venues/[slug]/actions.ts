@@ -2,20 +2,29 @@
 
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { definePublicAction } from "@/lib/define-action";
+import { defineAuthedAction } from "@/lib/define-action";
 import { DomainError } from "@/lib/errors";
 import { fromDateKey } from "@/lib/date";
 import { bookingService } from "@/services/booking.service";
+import { userService } from "@/services/user.service";
 
 /**
  * Giữ chỗ từ màn đặt sân của khách.
  *
  * ---
- * CÔNG KHAI CÓ CHỦ ĐÍCH
+ * PHẢI ĐĂNG NHẬP MỚI ĐẶT ĐƯỢC
  *
- * Khách vãng lai phải đặt được mà không cần tài khoản — bắt đăng ký trước khi
- * biết còn chỗ hay không là cách chắc chắn để mất khách. Đổi lại action này có
- * trần chống dội, vì dội nó nghĩa là khoá sạch khung giờ của một sân.
+ * Bản đầu cho khách vãng lai đặt không cần tài khoản, và đó là một luồng làm
+ * dở: lượt đặt ấy mang `userId: null`, nên nó KHÔNG BAO GIỜ hiện ở màn "Lượt
+ * đặt của tôi" và khách không tự huỷ được — họ chỉ còn cái link chứa mã, mất
+ * link là mất đường vào chính lượt đặt của mình.
+ *
+ * Chưa kể tiền: giữ chỗ 10 phút rồi chuyển khoản, và khi có tranh chấp thì
+ * phải biết ai là người đặt. Một số điện thoại gõ vào ô trống không chứng minh
+ * được gì.
+ *
+ * Đặt HỘ khách tại quầy vẫn giữ tên + số điện thoại rời (`source: COUNTER`) —
+ * đó là luồng khác, do nhân viên sân thao tác.
  *
  * ---
  * MỌI THỨ TỪ FORM ĐỀU LÀ CHUỖI VÀ ĐỀU KHÔNG ĐÁNG TIN
@@ -38,19 +47,24 @@ const schema = z.object({
     .int()
     .min(0)
     .max(24 * 60),
-  customerName: z.string().trim().min(2, "Cho biết tên để sân gọi khi cần").max(80),
+  /**
+   * Số điện thoại — chỉ hỏi khi hồ sơ chưa có.
+   *
+   * Sân cần gọi được cho khách khi có việc (mưa, mất điện, khách tới muộn).
+   * Hồ sơ có sẵn thì dùng luôn, không bắt gõ lại thứ hệ thống đã biết.
+   */
   customerPhone: z
     .string()
     .trim()
-    .regex(/^0\d{9}$/, "Số điện thoại phải có 10 số, bắt đầu bằng 0"),
+    .regex(/^0\d{9,10}$/, "Số điện thoại 10–11 số, bắt đầu bằng 0")
+    .optional()
+    .or(z.literal("")),
   customerNote: z.string().trim().max(300).optional(),
 });
 
 export type HoldBookingState = { error?: string; fields?: Record<string, string[]> };
 
-export const holdBookingAction = definePublicAction(
-  "Khách vãng lai phải đặt được sân mà không cần tài khoản",
-  { key: "hold-booking", limit: 10, windowSeconds: 60 },
+export const holdBookingAction = defineAuthedAction(
   async (ctx, _state: HoldBookingState, formData: FormData): Promise<HoldBookingState> => {
     const parsed = schema.safeParse(Object.fromEntries(formData));
 
@@ -79,6 +93,15 @@ export const holdBookingAction = definePublicAction(
       return { error: "Khung giờ không hợp lệ" };
     }
 
+    const nguoiDat = await userService.findById(ctx.actorId);
+    if (!nguoiDat) return { error: "Không đọc được hồ sơ của bạn. Đăng nhập lại giúp bạn nhé." };
+
+    // Số trong hồ sơ là nguồn chính; ô nhập chỉ dùng khi hồ sơ chưa có số.
+    const soDienThoai = nguoiDat.phone ?? input.customerPhone;
+    if (!soDienThoai) {
+      return { error: "Cho biết số điện thoại để sân gọi được khi có việc" };
+    }
+
     let code: string;
 
     try {
@@ -88,8 +111,11 @@ export const holdBookingAction = definePublicAction(
         date: fromDateKey(input.date),
         startMinute: input.startMinute,
         endMinute: input.endMinute,
-        customerName: input.customerName,
-        customerPhone: input.customerPhone,
+        // Vẫn ghi tên + số vào lượt đặt: nhân viên trực sân đọc DÒNG LỊCH, không
+        // đi tra hồ sơ từng người. Và hồ sơ đổi tên sau này thì lượt đặt cũ vẫn
+        // giữ đúng tên lúc đặt.
+        customerName: nguoiDat.fullName ?? nguoiDat.email ?? "Khách",
+        customerPhone: soDienThoai,
         customerNote: input.customerNote ?? null,
         userId: ctx.actorId,
         source: "WEB",

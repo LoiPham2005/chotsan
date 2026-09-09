@@ -295,6 +295,33 @@ giữ nó HẸP nhưng phải phủ đủ mỗi form có Server Action.
 hiện ra được, thay vì `{ fields }` mà giao diện không vẽ ô nào. Im lặng là trạng thái tệ nhất —
 người dùng bấm lại năm lần rồi bỏ đi.
 
+## 14. Nút đăng xuất của web KHÔNG được gọi `/api/v1/auth/logout`
+
+Bấm "Đăng xuất" và trình duyệt hiện ra một trang JSON thô:
+
+```json
+{ "error": { "code": "VALIDATION_ERROR", "message": "Body phải là JSON hợp lệ" } }
+```
+
+— còn người dùng thì **vẫn đang đăng nhập**, chỉ là không biết.
+
+Nguyên nhân: header dùng `<form action={apiPath("/auth/logout")} method="POST">`. Endpoint đó là
+của MOBILE — nó nhận Bearer token và một body JSON chứa refresh token cần thu hồi. Form HTML gửi
+body rỗng, nên nó từ chối, và trình duyệt đứng lại ở chính response đó.
+
+**Luật chung**: hai bề mặt dùng chung TẦNG NGHIỆP VỤ, không dùng chung endpoint.
+
+|           | Web                      | Mobile                                       |
+| --------- | ------------------------ | -------------------------------------------- |
+| Giữ phiên | cookie `httpOnly`        | cặp access + refresh token                   |
+| Đăng xuất | Server Action xoá cookie | `POST /api/v1/auth/logout` kèm refresh token |
+
+Xem `src/app/logout-action.ts`. Trước khi nối một nút của web vào `/api/v1/**`, hỏi: bề mặt này
+giữ phiên bằng gì?
+
+⚠️ **Đây là lỗi im lặng với người dùng đã đăng nhập** — họ tưởng đã thoát, nhất là trên máy dùng
+chung. Bộ e2e giờ có bài chặn nó tái diễn (`phan-quyen.spec.ts` → "Đăng xuất").
+
 ## Lưu ý chung khi code
 
 - **Ưu tiên `pnpm typecheck`/`pnpm test` qua terminal hơn tin theo IDE** khi vừa đổi

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { OAuthButtons, OAuthErrorBanner } from "../oauth-buttons";
+import { DangNhapNhanh } from "./dang-nhap-nhanh";
 import { LoginForm } from "./login-form";
 import { PasskeyButton } from "./passkey-button";
 
@@ -48,6 +49,8 @@ export default async function LoginPage({
         <p style={{ marginTop: 8, fontSize: "0.9rem", color: "var(--text-muted)" }}>
           Chưa có tài khoản? <Link href="/register">Đăng ký</Link>
         </p>
+
+        <DangNhapNhanh nextPath={next} />
       </div>
     </main>
   );

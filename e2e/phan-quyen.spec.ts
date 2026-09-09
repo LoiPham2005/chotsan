@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { dangNhap, moSanDauTien, TAI_KHOAN } from "./tro-giup";
+import { dangNhap, MAT_KHAU, moSanDauTien, TAI_KHOAN } from "./tro-giup";
 
 /**
  * Ranh giới phân quyền, kiểm trên trình duyệt thật.
@@ -32,6 +32,66 @@ test.describe("Chưa đăng nhập", () => {
   });
 
   test("vào lượt đặt của tôi cũng bị đá về /login", async ({ page }) => {
+    await page.goto("/account/bookings");
+    await expect(page).toHaveURL(/\/login/);
+  });
+});
+
+/**
+ * Đăng nhập xong về đâu.
+ *
+ * Một đích chung cho mọi vai là sai với gần hết mọi người: quản trị viên đăng
+ * nhập để duyệt cơ sở, chủ sân để xem lịch hôm nay. Ném tất cả về trang chủ
+ * bán hàng là bắt họ tự đi tìm đường mỗi lần.
+ */
+test.describe("Đích sau khi đăng nhập", () => {
+  const DICH: [string, RegExp][] = [
+    [TAI_KHOAN.quanTri, /\/venue-approvals/],
+    [TAI_KHOAN.chuSan, /\/manage/],
+    [TAI_KHOAN.nhanVien, /\/manage/],
+    [TAI_KHOAN.khach, /\/$/],
+  ];
+
+  for (const [email, mong] of DICH) {
+    test(`${email} → ${String(mong)}`, async ({ page }) => {
+      await dangNhap(page, email);
+      await expect(page).toHaveURL(mong);
+    });
+  }
+
+  test("`?next=` LUÔN thắng đích mặc định của vai", async ({ page }) => {
+    // Người dùng bấm vào một link cụ thể rồi bị chặn ở cửa — phải đưa họ về
+    // đúng chỗ đó, không phải về màn mặc định của vai.
+    await page.goto("/login?next=%2Fvenues%2Fcau-long-thanh-cong");
+    await page.locator('input[name="identifier"]').fill(TAI_KHOAN.quanTri);
+    await page.locator('input[name="password"]').fill(MAT_KHAU);
+    await page.getByRole("button", { name: "Đăng nhập", exact: true }).click();
+
+    await page.waitForURL(/\/venues\/cau-long-thanh-cong/, { timeout: 30_000 });
+  });
+});
+
+test.describe("Đăng xuất", () => {
+  test("xoá phiên và không vào lại được khu cần đăng nhập", async ({ page, context }) => {
+    await dangNhap(page, TAI_KHOAN.khach);
+    await expect(page.getByRole("button", { name: "Đăng xuất" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Đăng xuất" }).click();
+
+    // Chờ THAY ĐỔI TRẠNG THÁI, không chờ URL: `dangNhap` đã đưa về "/" rồi,
+    // nên `waitForURL(/\/$/)` khớp ngay lập tức và bài chạy tiếp trước khi
+    // đăng xuất kịp xong.
+    await expect(page.getByRole("link", { name: "Đăng nhập" })).toBeVisible({ timeout: 30_000 });
+
+    /*
+     * Trước đây nút này POST thẳng vào `/api/v1/auth/logout` — endpoint của
+     * MOBILE, đòi body JSON kèm refresh token. Form HTML gửi lên rỗng nên
+     * trình duyệt đứng lại ở một trang JSON báo lỗi, và người dùng VẪN đang
+     * đăng nhập mà tưởng đã thoát.
+     */
+    const conPhien = (await context.cookies()).some((c) => c.name === "session" && c.value !== "");
+    expect(conPhien, "cookie phiên phải bị xoá").toBe(false);
+
     await page.goto("/account/bookings");
     await expect(page).toHaveURL(/\/login/);
   });

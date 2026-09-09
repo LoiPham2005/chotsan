@@ -269,6 +269,28 @@ export function SlotGrid({ day, onSelect, hoursPerPage = 7, className }: Props) 
                         {formatVndShort(price)}/30p
                       </div>
                     )}
+
+                    {/*
+                      Giờ CHÍNH XÁC của từng ô, ngay dưới tiêu đề giờ.
+
+                      Một tiêu đề "17:00" trải trên hai ô 30 phút thì không ai
+                      biết ô nào là 17:00, ô nào là 17:30 — phải đếm nhẩm từ mép
+                      trái. Hai tầng nhãn cho hai kiểu đọc: liếc theo giờ, và
+                      chỉ đúng vào ô muốn đặt.
+                    */}
+                    <div className="mt-1 grid grid-cols-2 gap-[3px]">
+                      {minutes.map((minute) => (
+                        <span
+                          key={minute}
+                          className={cn(
+                            "text-[10px] font-semibold leading-none tabular-nums",
+                            peak ? "text-peak-text/70" : "text-subtle",
+                          )}
+                        >
+                          {formatHhMm(minute)}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 );
               })}

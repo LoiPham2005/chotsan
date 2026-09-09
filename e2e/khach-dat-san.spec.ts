@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { dangNhap, TAI_KHOAN } from "./tro-giup";
 
 /**
  * Luồng khách đặt sân — từ trang chủ tới màn thanh toán.
@@ -48,7 +49,28 @@ test.describe("Khách đặt sân", () => {
     await expect(page.locator("button[aria-pressed]").first()).toBeVisible();
   });
 
-  test("chọn khung giờ rồi đặt — tới được màn thanh toán kèm mã QR", async ({ page }) => {
+  test("chưa đăng nhập thì được dẫn tới đăng nhập, KHÔNG hỏi tên và số", async ({ page }) => {
+    await page.goto("/venues/cau-long-thanh-cong");
+
+    const oTrong = page.locator('button[aria-pressed="false"]:not([disabled])').first();
+    await expect(oTrong).toBeVisible({ timeout: 20_000 });
+    await oTrong.click();
+
+    // Đặt không cần tài khoản là luồng làm dở: lượt đặt mang `userId: null` nên
+    // không bao giờ hiện ở "Lượt đặt của tôi" và khách không tự huỷ được.
+    await expect(page.getByRole("link", { name: "Đăng nhập để đặt sân" })).toBeVisible();
+    await expect(page.locator('input[name="customerName"]')).toHaveCount(0);
+
+    // Đường quay lại phải giữ nguyên sân và ngày đang xem.
+    const href = await page
+      .getByRole("link", { name: "Đăng nhập để đặt sân" })
+      .getAttribute("href");
+    expect(href).toContain("next=");
+    expect(decodeURIComponent(href ?? "")).toContain("/venues/cau-long-thanh-cong");
+  });
+
+  test("đăng nhập rồi đặt — tới màn thanh toán kèm mã QR", async ({ page }) => {
+    await dangNhap(page, TAI_KHOAN.khach);
     await page.goto("/venues/cau-long-thanh-cong");
 
     const oTrong = page.locator('button[aria-pressed="false"]:not([disabled])').first();
@@ -58,8 +80,10 @@ test.describe("Khách đặt sân", () => {
     // Thanh tóm tắt phải hiện ngay, kèm giá tạm tính.
     await expect(page.getByRole("button", { name: "Bỏ chọn" })).toBeVisible();
 
-    await page.locator('input[name="customerName"]').fill("Khách E2E");
-    await page.locator('input[name="customerPhone"]').fill("0912345678");
+    // Không hỏi lại tên: hồ sơ đã có. Số điện thoại chỉ hỏi khi hồ sơ thiếu.
+    const oSoDienThoai = page.locator('input[name="customerPhone"]');
+    if ((await oSoDienThoai.count()) > 0) await oSoDienThoai.fill("0912345678");
+
     await page.getByRole("button", { name: "Đặt sân" }).click();
 
     await page.waitForURL(/\/bookings\/[A-Z0-9]+/, { timeout: 30_000 });
