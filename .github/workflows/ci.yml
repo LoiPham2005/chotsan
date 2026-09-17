@@ -48,7 +48,7 @@ jobs:
       # package.json, nên CI và máy dev không thể lệch nhau.
       - uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -139,7 +139,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -188,7 +188,7 @@ jobs:
       # Không cache pnpm ở đây: job này không chạy `pnpm install`, nên store
       # của pnpm không tồn tại — `cache: pnpm` sẽ làm bước "Post Run" thất bại
       # vì "path does not exist", kéo cả job đỏ dù `pnpm audit` đã chạy đúng.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       # ĐỎ khi có lỗ hổng mức high trở lên trong dependency production. Bản trước
