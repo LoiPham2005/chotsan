@@ -1,26 +1,19 @@
 "use client";
 
-import { createContext, useActionState, useContext } from "react";
+import { createContext, useActionState, useContext, useState } from "react";
 import { useFormStatus } from "react-dom";
 import {
   cancelBookingAction,
   checkInAction,
   type ManageState,
 } from "@/app/(manage)/manage/[venueId]/actions";
+import { useActionNotice } from "@/components/booking/action-notice";
 import { Button } from "@/components/ui/button";
+import { ConfirmButton } from "@/components/ui/confirm-button";
+import { Input } from "@/components/ui/input";
+import { bookingStatusBadge } from "@/lib/booking-status";
 import { timeOfDay } from "@/lib/date";
 import { formatVnd } from "@/lib/slots";
-
-/** Nhãn + màu cho từng trạng thái lượt đặt. Màu KHÔNG mang thông tin một mình. */
-const STATUS: Record<string, { text: string; className: string }> = {
-  HOLDING: { text: "Chờ trả tiền", className: "bg-peak-tint text-peak-text ring-peak-line" },
-  CONFIRMED: { text: "Đã trả tiền", className: "bg-brand-tint text-brand-hover ring-brand-line" },
-  CHECKED_IN: { text: "Đã tới sân", className: "bg-sky-50 text-sky-700 ring-sky-200" },
-  COMPLETED: { text: "Xong", className: "bg-elevated text-muted ring-line" },
-  CANCELLED: { text: "Đã huỷ", className: "bg-elevated text-subtle ring-line" },
-  EXPIRED: { text: "Hết hạn giữ", className: "bg-elevated text-subtle ring-line" },
-  NO_SHOW: { text: "Không tới", className: "bg-red-50 text-red-700 ring-red-200" },
-};
 
 export type BookingRowData = {
   id: string;
@@ -28,12 +21,41 @@ export type BookingRowData = {
   courtName: string;
   customerName: string;
   customerPhone: string;
+  customerNote: string | null;
   startAt: string;
   endAt: string;
   status: string;
+  /** Chỗ giữ đã quá hạn mà cron chưa đổi trạng thái — tính ở service. */
+  holdExpired: boolean;
   source: string;
   total: number;
 };
+
+/**
+ * Sân đang xem + quyền thao tác của người đang xem — chung cho mọi dòng.
+ *
+ * Lấy từ context thay vì truyền xuống từng dòng: một ngày bận có ~200 lượt
+ * đặt; truyền cùng một chuỗi vào 200 component là 200 chỗ có thể truyền nhầm
+ * sân — mà nhầm sân ở đây nghĩa là huỷ nhầm lượt đặt của sân khác.
+ *
+ * Quyền do TRANG tính (`canOnVenue`) rồi đưa xuống: nhân viên không có
+ * `booking:cancel` mà vẫn thấy nút "Huỷ" là bấm vào chỉ để đọc "không có
+ * quyền". Action vẫn tự kiểm lại — đây chỉ là không bày ra thứ không dùng được.
+ */
+type RowsContext = { venueId: string; canCancel: boolean; canCheckIn: boolean };
+
+const BookingRowsContext = createContext<RowsContext>({
+  venueId: "",
+  canCancel: false,
+  canCheckIn: false,
+});
+
+export function BookingRowsProvider({
+  children,
+  ...value
+}: RowsContext & { children: React.ReactNode }) {
+  return <BookingRowsContext.Provider value={value}>{children}</BookingRowsContext.Provider>;
+}
 
 /**
  * Một dòng lượt đặt trên lịch của chủ sân.
@@ -44,47 +66,35 @@ export type BookingRowData = {
  * Người trực sân cầm điện thoại. Việc họ làm nhiều nhất với một lượt đặt là
  * gọi cho khách — bắt họ chọn-rồi-chép số là thêm bốn thao tác cho việc xảy ra
  * hàng chục lần mỗi ngày.
- */
-/**
- * `venueId` lấy từ context thay vì truyền xuống từng dòng.
  *
- * Một ngày bận có ~200 lượt đặt; truyền cùng một chuỗi vào 200 component là
- * 200 chỗ có thể truyền nhầm sân — mà nhầm sân ở đây nghĩa là huỷ nhầm lượt
- * đặt của sân khác.
+ * ---
+ * NHÃN TRẠNG THÁI DÙNG CHUNG BỘ CỦA KHÁCH
+ *
+ * Bản trước có bộ nhãn riêng ("Chờ trả tiền", "Đã trả tiền") khác hẳn chữ khách
+ * đọc ("Chờ thanh toán", "Đã xác nhận") — chủ sân và khách nói về cùng một lượt
+ * bằng hai tên. Xem `BOOKING_STATUS`.
  */
-const VenueIdContext = createContext<string>("");
-
-export function VenueIdProvider({
-  venueId,
-  children,
-}: {
-  venueId: string;
-  children: React.ReactNode;
-}) {
-  return <VenueIdContext.Provider value={venueId}>{children}</VenueIdContext.Provider>;
-}
-
-function useVenueId(): string {
-  return useContext(VenueIdContext);
-}
-
 export function BookingRow({ booking }: { booking: BookingRowData }) {
-  const status = STATUS[booking.status] ?? {
-    text: booking.status,
-    className: "bg-elevated text-muted ring-line",
-  };
+  const permissions = useContext(BookingRowsContext);
+  const status = bookingStatusBadge(booking.status, booking.holdExpired);
 
-  const canCheckIn = booking.status === "CONFIRMED";
-  const canCancel = ["HOLDING", "CONFIRMED"].includes(booking.status);
+  const canCheckIn = permissions.canCheckIn && booking.status === "CONFIRMED";
+  const canCancel =
+    permissions.canCancel &&
+    !booking.holdExpired &&
+    ["HOLDING", "CONFIRMED"].includes(booking.status);
+
+  const start = new Date(booking.startAt);
+  const end = new Date(booking.endAt);
 
   return (
-    <li className="flex flex-col gap-3 rounded-token-lg border border-line bg-surface p-3 shadow-nang-1 sm:flex-row sm:items-center sm:gap-4">
+    <li className="flex flex-col gap-3 rounded-token-lg border border-line bg-surface p-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
       <div className="flex shrink-0 items-center gap-3">
         <div className="w-[104px] shrink-0">
           <p className="text-base font-bold tabular-nums leading-tight text-content">
-            {timeOfDay(new Date(booking.startAt))}
+            {timeOfDay(start)}
           </p>
-          <p className="text-xs tabular-nums text-muted">→ {timeOfDay(new Date(booking.endAt))}</p>
+          <p className="text-xs tabular-nums text-muted">→ {timeOfDay(end)}</p>
         </div>
 
         <span className="rounded-token-sm bg-elevated px-2 py-1 text-xs font-bold text-content">
@@ -97,7 +107,7 @@ export function BookingRow({ booking }: { booking: BookingRowData }) {
         <p className="text-sm text-muted">
           <a
             href={`tel:${booking.customerPhone}`}
-            className="font-medium text-brand hover:underline"
+            className="font-semibold text-brand-text hover:underline"
           >
             {booking.customerPhone}
           </a>
@@ -114,6 +124,12 @@ export function BookingRow({ booking }: { booking: BookingRowData }) {
             </>
           )}
         </p>
+        {/* Điều khách dặn khi đặt — người trực sân phải đọc được ngay trên dòng. */}
+        {booking.customerNote && (
+          <p className="mt-0.5 text-xs text-muted">
+            Khách ghi: <span className="text-content">{booking.customerNote}</span>
+          </p>
+        )}
       </div>
 
       <div className="flex items-center gap-3 sm:shrink-0">
@@ -126,22 +142,40 @@ export function BookingRow({ booking }: { booking: BookingRowData }) {
       </div>
 
       {(canCheckIn || canCancel) && (
-        <div className="flex gap-2 sm:shrink-0">
+        <div className="flex min-w-0 flex-wrap gap-2 sm:shrink-0">
           {canCheckIn && <CheckInForm bookingId={booking.id} />}
-          {canCancel && <CancelForm bookingId={booking.id} />}
+          {canCancel && (
+            <CancelForm
+              bookingId={booking.id}
+              label={`${timeOfDay(start)}–${timeOfDay(end)} ${booking.courtName} của ${booking.customerName}`}
+            />
+          )}
         </div>
       )}
     </li>
   );
 }
 
+/**
+ * Bọc action theo sân để câu THÀNH CÔNG đi lên thông báo của trang: nhận sân
+ * hay huỷ xong là nút biến mất khỏi dòng (trạng thái đổi), câu nằm cạnh nút sẽ
+ * bị gỡ theo. Câu LỖI thì trả về cho dòng tự hiện — dòng còn nguyên.
+ */
+function useRowAction(
+  action: (venueId: string, previous: ManageState, formData: FormData) => Promise<ManageState>,
+) {
+  const { venueId } = useContext(BookingRowsContext);
+  const notify = useActionNotice();
+
+  return useActionState<ManageState, FormData>(async (previous, formData) => {
+    const result = await action(venueId, previous, formData);
+    if (result.ok) notify(result.ok);
+    return result;
+  }, {});
+}
+
 function CheckInForm({ bookingId }: { bookingId: string }) {
-  const [state, action] = useActionState<ManageState, FormData>(
-    // `defineVenueAction` đặt `venueId` làm tham số đầu — `bind` gắn nó vào,
-    // để lại đúng chữ ký mà `useActionState` cần.
-    checkInAction.bind(null, useVenueId()),
-    {},
-  );
+  const [state, action] = useRowAction(checkInAction);
 
   return (
     <form action={action}>
@@ -152,38 +186,44 @@ function CheckInForm({ bookingId }: { bookingId: string }) {
   );
 }
 
-function CancelForm({ bookingId }: { bookingId: string }) {
-  const [state, action] = useActionState<ManageState, FormData>(
-    cancelBookingAction.bind(null, useVenueId()),
-    {},
-  );
+function CancelForm({ bookingId, label }: { bookingId: string; label: string }) {
+  const [state, action] = useRowAction(cancelBookingAction);
+  // Có kiểm soát: React tự xoá form sau action kể cả khi báo lỗi — lý do vừa
+  // gõ không được mất chỉ vì huỷ không thành.
+  const [reason, setReason] = useState("");
+  const reasonId = `cancel-reason-${bookingId}`;
 
   return (
-    <form action={action}>
+    <form action={action} className="max-w-full sm:max-w-sm">
       <input type="hidden" name="bookingId" value={bookingId} />
-      <SubmitButton label="Huỷ" pendingLabel="Đang huỷ…" variant="outline" />
+      <ConfirmButton
+        label="Huỷ"
+        prompt={`Huỷ lượt ${label}? Chỗ được nhả cho người khác ngay.`}
+        confirmLabel="Xác nhận huỷ"
+        pendingLabel="Đang huỷ…"
+      >
+        <label htmlFor={reasonId} className="mb-1 block text-xs text-muted">
+          Lý do (khách sẽ đọc — không bắt buộc)
+        </label>
+        <Input
+          id={reasonId}
+          name="reason"
+          maxLength={300}
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder="Ví dụ: sân mất điện"
+          className="bg-surface"
+        />
+      </ConfirmButton>
       {state.error && <ErrorText>{state.error}</ErrorText>}
-      {state.ok && (
-        <p role="status" className="mt-1 text-xs text-brand-hover">
-          {state.ok}
-        </p>
-      )}
     </form>
   );
 }
 
-function SubmitButton({
-  label,
-  pendingLabel,
-  variant = "default",
-}: {
-  label: string;
-  pendingLabel: string;
-  variant?: "default" | "outline";
-}) {
+function SubmitButton({ label, pendingLabel }: { label: string; pendingLabel: string }) {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" size="sm" variant={variant} disabled={pending}>
+    <Button type="submit" size="sm" disabled={pending}>
       {pending ? pendingLabel : label}
     </Button>
   );
@@ -191,7 +231,7 @@ function SubmitButton({
 
 function ErrorText({ children }: { children: React.ReactNode }) {
   return (
-    <p role="alert" className="mt-1 max-w-[14rem] text-xs text-danger">
+    <p role="alert" className="mt-1 max-w-[14rem] text-xs text-danger-text">
       {children}
     </p>
   );

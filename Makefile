@@ -1,50 +1,52 @@
-.PHONY: help setup install dev build start check lint lint-fix typecheck test test-watch \
-        test-coverage format format-check \
-        db-generate db-migrate db-migrate-create db-migrate-diff db-push db-deploy db-studio db-seed db-seed-dev db-seed-prod db-reset db-purge \
+.PHONY: help setup install dev build start check e2e lint lint-fix typecheck test test-watch \
+        test-coverage format format-check realtime worker \
+        db-generate db-migrate-diff db-deploy db-studio db-seed db-seed-prod db-purge check-conflict \
         docker-build docker-up docker-down docker-logs docker-ps \
-        realtime docker-deploy docker-size docker-clean \
+        docker-deploy docker-size docker-clean \
         vps-deploy vps-logs vps-status vps-files \
         pm2-deploy pm2-start pm2-stop pm2-restart pm2-reload pm2-logs pm2-status pm2-monit
 
 help:
 	@echo "========================================================================"
-	@echo "                      BẢNG HƯỚNG DẪN CÁC LỆNH MAKE                      "
+	@echo "                  CHỐTSÂN — BẢNG HƯỚNG DẪN CÁC LỆNH MAKE                "
 	@echo "========================================================================"
 	@echo "--- BẮT ĐẦU ---"
-	@echo "  make setup           - Cài deps + tạo .env + dựng DB + seed (chạy 1 lần)"
+	@echo "  make setup           - Cài deps + tạo .env + dựng Postgres + migrate + seed (chạy 1 lần)"
 	@echo ""
 	@echo "--- PHÁT TRIỂN ---"
 	@echo "  make install         - Cài đặt dependencies"
 	@echo "  make dev             - Chạy dev server (http://localhost:3000)"
 	@echo "  make start           - Chạy bản build production"
 	@echo "  make realtime        - Chạy máy chủ WebSocket (tiến trình riêng, cổng 3002)"
+	@echo "  make worker          - Chạy worker job nền (cần REDIS_URL khi QUEUE_ENABLED=1)"
 	@echo "  make build           - Build production"
 	@echo ""
 	@echo "--- CHẤT LƯỢNG ---"
-	@echo "  make check           - Chạy tất cả: typecheck + lint + format + test"
+	@echo "  make check           - Như CI: typecheck + lint + format + test kèm ngưỡng coverage"
 	@echo "  make typecheck       - Kiểm tra kiểu TypeScript"
 	@echo "  make lint            - ESLint (make lint-fix để tự sửa)"
 	@echo "  make test            - Unit test (test-watch / test-coverage)"
 	@echo "  make format          - Prettier (format-check để chỉ kiểm tra)"
+	@echo "  make e2e             - Playwright trên bản build production (cổng 3100)"
+	@echo "  make check-conflict  - Chống trùng chỗ/trùng tiền trên DATABASE THẬT (DATABASE_URL)"
 	@echo ""
 	@echo "--- DATABASE ---"
-	@echo "  make db-migrate      - Tạo migration mới và áp dụng (dev)"
-	@echo "  make db-migrate-create - Tự sinh file SQL migration (không chạm vào DB)"
-	@echo "  make db-migrate-diff - Xem trước mã SQL khác biệt giữa Database và schema.prisma"
-	@echo "  make db-push         - Đẩy trực tiếp schema lên database (không tạo migration)"
-	@echo "  make db-deploy       - Áp migration đã có (production)"
-	@echo "  make db-generate     - Sinh Prisma Client"
+	@echo "  make db-migrate-diff - In SQL khác biệt giữa database và schema.prisma (ĐỌC + LỌC DROP)"
+	@echo "  make db-deploy       - Áp migration đã có trong prisma/migrations"
+	@echo "  make db-generate     - Sinh Prisma Client (xong thì khởi động lại pnpm dev)"
 	@echo "  make db-studio       - Mở Prisma Studio"
-	@echo "  make db-seed-dev     - Nạp dữ liệu mẫu"
-	@echo "  make db-seed-prod    - Chỉ tạo tài khoản admin nền"
-	@echo "  make db-reset        - XOÁ SẠCH database rồi tạo lại"
-	@echo "  make db-purge        - Dọn refresh/verification token đã hết hạn"
+	@echo "  make db-seed         - Nạp dữ liệu mẫu (chạy lại an toàn)"
+	@echo "  make db-seed-prod    - Chỉ tạo quyền, môn và tài khoản admin nền"
+	@echo "  make db-purge        - Dọn token, nhật ký, thiết bị đã hết hạn"
+	@echo "  ⚠️  KHÔNG có migrate dev / db push / reset: chúng xoá ràng buộc viết tay"
+	@echo "     (docs/GOTCHAS.md #11). Quy trình: db-migrate-diff → lọc SQL → db-deploy"
+	@echo "     → db-generate → check-conflict."
 	@echo ""
 	@echo "--- HƯỚNG DẪN DEPLOY ĐẦY ĐỦ: docs/DEPLOY_VPS.md ---"
 	@echo ""
 	@echo "--- DEPLOY: DOCKER ---"
 	@echo "  make docker-build    - Build image"
-	@echo "  make docker-up       - Chạy postgres + migrate + web"
+	@echo "  make docker-up       - Chạy postgres + migrate + web + redis + realtime + worker"
 	@echo "  make docker-down     - Dừng và xoá container"
 	@echo "  make docker-logs     - Xem log realtime"
 	@echo "  make docker-ps       - Trạng thái container"
@@ -69,15 +71,20 @@ help:
 	@echo "  make vps-files       - In hướng dẫn cài systemd + Caddy lần đầu"
 	@echo "========================================================================"
 
-# Một lệnh duy nhất để có môi trường chạy được từ repo vừa clone.
+# Một lệnh duy nhất để có môi trường chạy được từ repo vừa clone, với Postgres
+# chạy bằng Docker trên máy. Dùng Neon/Postgres có sẵn thì bỏ qua target này:
+# điền DATABASE_URL rồi chạy `pnpm db:deploy && pnpm db:seed`.
+#
+# `db:deploy` chứ KHÔNG `migrate dev`: migration đã có sẵn trong repo (kèm ràng
+# buộc viết tay), `migrate dev` sẽ đòi xoá chúng — docs/GOTCHAS.md #11.
 setup:
 	pnpm install
 	@test -f .env || (cp .env.example .env && echo "→ Đã tạo .env — hãy set SESSION_SECRET: openssl rand -base64 48")
 	docker compose up -d postgres
 	@echo "→ Đợi Postgres sẵn sàng..."
 	@until docker compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; do sleep 1; done
-	pnpm db:migrate
-	pnpm db:seed:dev
+	pnpm db:deploy
+	pnpm db:seed
 	@echo "→ Xong. Chạy 'make dev'."
 
 install:
@@ -92,11 +99,17 @@ start:
 realtime:
 	pnpm realtime:dev
 
+worker:
+	pnpm worker:dev
+
 build:
 	pnpm build
 
 check:
 	pnpm check
+
+e2e:
+	pnpm test:e2e
 
 lint:
 	pnpm lint
@@ -125,17 +138,8 @@ format-check:
 db-generate:
 	pnpm db:generate
 
-db-migrate:
-	pnpm db:migrate
-
-db-migrate-create:
-	pnpm db:migrate:create
-
 db-migrate-diff:
 	pnpm db:migrate:diff
-
-db-push:
-	pnpm db:push
 
 db-deploy:
 	pnpm db:deploy
@@ -146,17 +150,14 @@ db-studio:
 db-seed:
 	pnpm db:seed
 
-db-seed-dev:
-	pnpm db:seed:dev
-
 db-seed-prod:
 	pnpm db:seed:prod
 
-db-reset:
-	pnpm db:reset
-
 db-purge:
 	pnpm db:purge
+
+check-conflict:
+	pnpm db:check-conflict
 
 docker-build:
 	docker compose build
@@ -177,8 +178,8 @@ docker-deploy:
 	./scripts/deploy-docker.sh
 
 docker-size:
-	@echo "── Image của dự án:"
-	@docker images --format '   {{.Repository}}:{{.Tag}}\t{{.Size}}' | grep nextjs_base || echo "   (chưa build)"
+	@echo "── Image của dự án (theo compose):"
+	@docker compose images 2>/dev/null || echo "   (chưa build)"
 	@echo "── Image mồ côi (mỗi lần build lỗi để lại một bản):"
 	@echo "   số lượng: $$(docker images -f 'dangling=true' -q | wc -l | tr -d ' ')"
 	@docker system df
@@ -221,7 +222,7 @@ pm2-monit:
 # --- VPS trực tiếp (systemd + Caddy) ---------------------------------------
 # Các target dưới đây chạy TRÊN MÁY CHỦ, không phải máy dev.
 
-SERVICE ?= nextjs-base
+SERVICE ?= chotsan
 
 vps-deploy:
 	./scripts/deploy-vps.sh
@@ -230,26 +231,27 @@ vps-logs:
 	journalctl -u $(SERVICE) -f
 
 vps-status:
-	systemctl status $(SERVICE) --no-pager
+	systemctl status $(SERVICE) $(SERVICE)-realtime $(SERVICE)-worker --no-pager
 
 vps-files:
 	@echo "Cài đặt lần đầu trên VPS:"
 	@echo ""
-	@echo "  sudo mkdir -p /etc/nextjs-base"
-	@echo "  sudo cp .env.example /etc/nextjs-base/env   # rồi điền giá trị thật"
-	@echo "  sudo chmod 600 /etc/nextjs-base/env"
+	@echo "  sudo mkdir -p /etc/chotsan"
+	@echo "  sudo cp .env.example /etc/chotsan/env   # rồi điền giá trị thật"
+	@echo "  sudo chmod 600 /etc/chotsan/env"
 	@echo ""
-	@echo "  sudo cp deploy/nextjs-base.service deploy/nextjs-base-realtime.service /etc/systemd/system/"
+	@echo "  sudo cp deploy/chotsan.service deploy/chotsan-realtime.service deploy/chotsan-worker.service /etc/systemd/system/"
 	@echo "  sudo systemctl daemon-reload"
-	@echo "  sudo systemctl enable --now $(SERVICE) $(SERVICE)-realtime"
+	@echo "  sudo systemctl enable --now $(SERVICE) $(SERVICE)-realtime $(SERVICE)-worker"
 	@echo "  # THIẾU unit realtime = web chạy nhưng WebSocket im lặng không tồn tại"
+	@echo "  # REALTIME_ENABLED=0 / QUEUE_ENABLED=0 thì bỏ unit tương ứng — deploy-vps.sh tự disable"
 	@echo ""
 	@echo "  sudo cp deploy/Caddyfile /etc/caddy/Caddyfile   # đổi example.com"
 	@echo "  sudo systemctl reload caddy"
 	@echo ""
-	@echo "  # Dọn token hết hạn hằng ngày — hai bảng token chỉ tăng nếu thiếu bước này:"
-	@echo "  sudo cp deploy/nextjs-base-purge.service deploy/nextjs-base-purge.timer /etc/systemd/system/"
+	@echo "  # (Tuỳ chọn) lưới dự phòng dọn dữ liệu hết hạn — lịch trong worker/web đã dọn mỗi ngày:"
+	@echo "  sudo cp deploy/chotsan-purge.service deploy/chotsan-purge.timer /etc/systemd/system/"
 	@echo "  sudo systemctl daemon-reload"
-	@echo "  sudo systemctl enable --now nextjs-base-purge.timer"
+	@echo "  sudo systemctl enable --now chotsan-purge.timer"
 	@echo ""
 	@echo "VPS đã chạy nginx? Viết server block trỏ 127.0.0.1:3000, nhớ ghi đè X-Forwarded-For."

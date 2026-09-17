@@ -1,13 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TOTP, Secret } from "otpauth";
 import type { PrismaClient } from "@prisma/client";
 import { TwoFactorService } from "./two-factor.service";
+import { __clearCache } from "@/lib/cache";
 import { encryptSecret } from "@/lib/encryption";
+import { __clearRateLimits } from "@/lib/rate-limit";
 import { createTotpSecret } from "@/lib/totp";
 import { hashScopedToken, normalizeRecoveryCode } from "@/lib/opaque-token";
 import {
   InvalidCredentialsError,
   InvalidTwoFactorCodeError,
+  ProviderNotConfiguredError,
+  TooManyTwoFactorAttemptsError,
   TwoFactorAlreadyEnabledError,
   TwoFactorNotEnabledError,
 } from "@/lib/errors";
@@ -38,6 +42,14 @@ function createDb(user: unknown, overrides: Record<string, unknown> = {}) {
 }
 
 describe("TwoFactorService", () => {
+  beforeEach(async () => {
+    // Bộ đếm lần thử và dấu "bước TOTP đã dùng" nằm trong store dùng chung
+    // theo userId. Không dọn thì mã hợp lệ ở bài sau bị coi là mã nộp lại của
+    // bài trước.
+    await __clearRateLimits();
+    await __clearCache();
+  });
+
   describe("bật 2FA", () => {
     it("beginSetup lưu bí mật ĐÃ MÃ HOÁ, chưa bật", async () => {
       // Bí mật TOTP sinh ra được mã hợp lệ — lưu thô là một lần rò database
@@ -55,6 +67,16 @@ describe("TwoFactorService", () => {
       expect(data.twoFactorSecret).toMatch(/^v1\./);
       // CHƯA bật: người quét QR hỏng không được phép bị khoá khỏi tài khoản.
       expect(data.twoFactorEnabledAt).toBeUndefined();
+    });
+
+    it("máy chủ chưa đặt ENCRYPTION_KEY → lỗi CẤU HÌNH, không phải lỗi 500 chung chung", async () => {
+      // `Error` thường thì API trả 500 "thử lại" — thử bao nhiêu lần cũng vậy.
+      const db = createDb({ email: "a@b.com", username: null, twoFactorEnabledAt: null });
+      const service = new TwoFactorService(db);
+      vi.spyOn(service, "isAvailable").mockReturnValue(false);
+
+      await expect(service.beginSetup("u1")).rejects.toBeInstanceOf(ProviderNotConfiguredError);
+      expect(db.user.update).not.toHaveBeenCalled();
     });
 
     it("không cho cài lại khi 2FA đã bật", async () => {
@@ -145,6 +167,87 @@ describe("TwoFactorService", () => {
       });
 
       await expect(new TwoFactorService(db).verifyCode("u1", "A1B2C-3D4E5")).resolves.toBe(false);
+    });
+
+    it("KHÔNG nhận lại mã TOTP vừa dùng — kể cả khi mã còn trong cửa sổ ±30 giây", async () => {
+      /*
+       * Mã hợp lệ tới 90 giây. Không nhớ bước đã dùng thì ai nhìn trộm được mã
+       * (qua vai, màn hình chia sẻ, trang giả chuyển tiếp) đăng nhập lại bằng
+       * chính mã đó ngay sau chủ tài khoản.
+       */
+      const { secret } = createTotpSecret("App", "a@b.com");
+      const service = new TwoFactorService(
+        createDb({ twoFactorSecret: encryptSecret(secret), twoFactorEnabledAt: new Date() }),
+      );
+      const code = codeFor(secret);
+
+      await expect(service.verifyCode("u1", code)).resolves.toBe(true);
+      await expect(service.verifyCode("u1", code)).resolves.toBe(false);
+    });
+
+    it("hai request CÙNG LÚC nộp cùng một mã: chỉ một bên qua", async () => {
+      const { secret } = createTotpSecret("App", "a@b.com");
+      const service = new TwoFactorService(
+        createDb({ twoFactorSecret: encryptSecret(secret), twoFactorEnabledAt: new Date() }),
+      );
+      const code = codeFor(secret);
+
+      const results = await Promise.all([
+        service.verifyCode("u1", code),
+        service.verifyCode("u1", code),
+      ]);
+
+      expect(results.filter(Boolean)).toHaveLength(1);
+    });
+
+    it("khoá theo TÀI KHOẢN sau 5 lần thử — chặn cả mã ĐÚNG tới hết cửa sổ", async () => {
+      /*
+       * Rate limit theo IP không cản được kẻ dò xoay IP. Bộ đếm này đếm trên
+       * tài khoản, chung cho web lẫn API. Mã đúng mà vẫn qua thì bộ đếm chỉ
+       * làm chậm chứ không chặn: kẻ dò cứ bắn, lần trúng luôn được nhận.
+       */
+      const { secret } = createTotpSecret("App", "a@b.com");
+      const service = new TwoFactorService(
+        createDb({ twoFactorSecret: encryptSecret(secret), twoFactorEnabledAt: new Date() }),
+      );
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await expect(service.verifyCode("u1", "000000")).resolves.toBe(false);
+      }
+
+      await expect(service.verifyCode("u1", codeFor(secret))).rejects.toBeInstanceOf(
+        TooManyTwoFactorAttemptsError,
+      );
+      // Tài khoản khác không bị vạ lây.
+      const other = new TwoFactorService(
+        createDb({ twoFactorSecret: encryptSecret(secret), twoFactorEnabledAt: new Date() }),
+      );
+      await expect(other.verifyCode("u2", codeFor(secret))).resolves.toBe(true);
+    });
+
+    it("nhập ĐÚNG thì bộ đếm về 0 — lần gõ nhầm cũ không tích luỹ mãi", async () => {
+      const { secret } = createTotpSecret("App", "a@b.com");
+      const db = createDb(
+        { twoFactorSecret: encryptSecret(secret), twoFactorEnabledAt: new Date() },
+        {
+          recoveryCode: {
+            updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+            deleteMany: vi.fn(),
+            createMany: vi.fn(),
+          },
+        },
+      );
+      const service = new TwoFactorService(db);
+
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await service.verifyCode("u1", "000000");
+      }
+      // Lần thứ 5 dùng mã khôi phục đúng → đếm lại từ đầu.
+      await expect(service.verifyCode("u1", "A1B2C-3D4E5")).resolves.toBe(true);
+
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await expect(service.verifyCode("u1", "000000")).resolves.toBe(false);
+      }
     });
 
     it("trả false khi tài khoản CHƯA bật 2FA", async () => {

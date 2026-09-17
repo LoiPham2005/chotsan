@@ -1,4 +1,4 @@
-import { env, publicAppUrl } from "@/lib/env";
+import { appBaseUrl, appUrl, env } from "@/lib/env";
 import { apiPath } from "@/lib/api/version";
 import { OAUTH_PROVIDERS, type OAuthProviderId } from "./types";
 
@@ -46,10 +46,15 @@ export const PROVIDER_CONFIG: Record<OAuthProviderId, ProviderConfig> = {
 };
 
 /**
- * Provider có đủ credential để dùng chưa. Route `ngay`/`callback` gọi hàm
+ * Provider có đủ credential để dùng chưa. Route `start`/`callback` gọi hàm
  * này trước tiên — thiếu cấu hình phải báo lỗi rõ ràng, không được 500 mù mờ.
+ *
+ * Thiếu URL công khai (`APP_URL`/`NEXT_PUBLIC_APP_URL`) cũng tính là CHƯA cấu
+ * hình: không dựng được `redirect_uri` thì bấm nút chỉ ra trang lỗi 500.
  */
 export function isProviderConfigured(provider: OAuthProviderId): boolean {
+  if (!appBaseUrl()) return false;
+
   switch (provider) {
     case "google":
       return Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
@@ -72,10 +77,13 @@ export function configuredOAuthProviders(): OAuthProviderId[] {
   return OAUTH_PROVIDERS.filter(isProviderConfigured);
 }
 
-/** redirect_uri phải TUYỆT ĐỐI và khớp 100% với cấu hình trên console của provider. */
+/**
+ * redirect_uri phải TUYỆT ĐỐI và khớp 100% với cấu hình trên console của provider.
+ *
+ * Dựng bằng `appUrl()` — cùng gốc URL với link trong email và passkey, nên
+ * không còn chuyện email chạy mà OAuth hỏng (hay ngược lại) vì mỗi bên đọc một
+ * biến môi trường.
+ */
 export function callbackUrl(provider: OAuthProviderId): string {
-  if (!publicAppUrl) {
-    throw new Error("NEXT_PUBLIC_APP_URL là bắt buộc để dùng đăng nhập OAuth");
-  }
-  return `${publicAppUrl}${apiPath(`/auth/oauth/${provider}/callback`)}`;
+  return appUrl(apiPath(`/auth/oauth/${provider}/callback`));
 }

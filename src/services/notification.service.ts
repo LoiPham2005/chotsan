@@ -159,18 +159,29 @@ export class NotificationService {
   }
 
   /**
-   * Đánh dấu đã đọc.
+   * Đánh dấu đã đọc. `true` khi bản ghi TỒN TẠI và thuộc về `userId` — kể cả khi
+   * nó đã được đọc từ trước.
    *
    * `userId` nằm trong `where` chứ không phải một phép kiểm tra riêng: id đến
    * từ client, nên thiếu ràng buộc này là ai cũng đánh dấu được thông báo của
    * người khác.
+   *
+   * IDEMPOTENT có chủ đích. Bản trước trả `false` cho thông báo đã đọc, và route
+   * dịch thành 404: app gửi lại request khi mạng chập chờn, hoặc hai thiết bị
+   * cùng mở một thông báo, là nhận "không tìm thấy" cho một thứ vừa đọc xong.
+   * `readAt` giữ mốc đọc ĐẦU TIÊN — lần gọi sau không ghi đè.
    */
   async markRead(recipientId: string, userId: string): Promise<boolean> {
     const result = await this.db.notificationRecipient.updateMany({
       where: { id: recipientId, userId, isRead: false },
       data: { isRead: true, readAt: new Date() },
     });
-    return result.count > 0;
+    if (result.count > 0) return true;
+
+    const existing = await this.db.notificationRecipient.count({
+      where: { id: recipientId, userId },
+    });
+    return existing > 0;
   }
 
   async markAllRead(userId: string): Promise<number> {

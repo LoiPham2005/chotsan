@@ -1,92 +1,147 @@
 import Link from "next/link";
 import { logoutAction } from "@/app/logout-action";
 import { getCurrentUser } from "@/lib/auth";
+import { cn } from "@/lib/cn";
 import { Logo } from "@/components/layout/logo";
 import { Button } from "@/components/ui/button";
+import type { Permission } from "@/lib/permissions";
 import { permissionService } from "@/services/permission.service";
 import { venueService } from "@/services/venue.service";
+
+/** Các trang trong khu quản trị. Union để `typedRoutes` bắt lỗi đường dẫn sai. */
+type AdminRoute = "/venue-approvals" | "/invoices" | "/users" | "/roles";
+
+/**
+ * Lối vào khu quản trị, xét từ hẹp tới rộng — CÙNG thứ tự với `landingPathFor`
+ * và thanh điều hướng của `(admin)/layout.tsx`. Mỗi mục trỏ đúng trang người đó
+ * vào được.
+ */
+const ADMIN_ENTRIES = [
+  ["venue:approve", "/venue-approvals"],
+  ["invoice:manage", "/invoices"],
+  ["user:read", "/users"],
+  ["role:read", "/roles"],
+] as const satisfies ReadonlyArray<readonly [Permission, AdminRoute]>;
 
 /**
  * Thanh điều hướng.
  *
- * Dùng token màu của dự án (`surface`, `line`, `muted`) thay cho cặp nền-trắng
- * kèm biến thể `dark:` như trước. Nhánh `dark:` đó không bao giờ được kích hoạt
- * — không chỗ nào đặt class `dark` lên `<html>` — nên header hiện màu trắng đè
- * lên nền tối của toàn trang.
+ * ---
+ * ĐIỆN THOẠI: HAI HÀNG, KHÔNG MENU BA GẠCH
+ *
+ * Đã đo ở 390px: chủ sân có logo + 3 mục + "Đăng xuất" thì trang rộng thêm
+ * 101px, quản trị viên 77px — header đẩy tràn ngang CẢ TRANG. Gấp các mục vào
+ * menu ba gạch thì hết tràn, nhưng giấu đúng việc làm hằng ngày (SKILL.md §1,
+ * luật 2: "không giấu sau dấu ba chấm").
+ *
+ * Nên khi đã đăng nhập, dưới `md` header tách làm hai hàng:
+ *   hàng 1 — logo, tên người dùng, "Đăng xuất" (việc hiếm)
+ *   hàng 2 — các mục điều hướng (việc hằng ngày), đủ chỗ cho cả 4 mục; màn hẹp
+ *            hơn nữa thì hàng này tự cuộn ngang, mép phải để lộ mục kế tiếp.
+ *
+ * Cuộn trang xuống thì hàng 1 trôi đi, hàng 2 DÍNH lại ở mép trên (`-top-14`
+ * = trừ đúng chiều cao hàng 1): trên điện thoại chỉ tốn 48px cố định thay vì
+ * cả header 104px, mà các mục vẫn một chạm là tới.
+ *
+ * Khách chưa đăng nhập chỉ có "Tìm sân" + hai nút tài khoản — vừa một hàng.
+ *
+ * Từ `md` (máy tính bảng 834px) trở lên: một hàng. Giữa `md` và `lg` chỗ chỉ
+ * đủ cho logo + 4 mục + "Đăng xuất", nên tên người dùng tạm ẩn — nó chỉ là lối
+ * tắt tới trang thiết bị, không phải việc hằng ngày.
  */
-/** Các trang trong khu quản trị. Union để `typedRoutes` bắt lỗi đường dẫn sai. */
-type AdminRoute = "/venue-approvals" | "/users" | "/roles";
-
 export async function Header() {
   const user = await getCurrentUser();
 
   // Chỉ hiện mục quản trị cho người thật sự vào được. Link dẫn tới trang 404
   // không phải "bảo mật kém" (trang vẫn tự kiểm quyền), nhưng là giao diện tệ:
   // người dùng bấm vào thứ trông như dùng được rồi nhận trang không tìm thấy.
-  // `can()` nhận USER ID, không phải tên vai trò. Trước đây chỗ này truyền
-  // `user.roles.join(", ")` — một chuỗi không khớp id nào, nên câu hỏi luôn trả
-  // false và mục quản trị KHÔNG BAO GIỜ hiện với ai, kể cả SUPER_ADMIN.
-  const [canSeeUsers, canSeeRoles, canApproveVenues, venues] = user
+  //
+  // MỘT lần đọc tập quyền (có cache) cho mọi mục, theo USER ID. Trước đây chỗ
+  // này truyền `user.roles.join(", ")` — một chuỗi không khớp id nào, nên mục
+  // quản trị KHÔNG BAO GIỜ hiện với ai, kể cả SUPER_ADMIN. Người chỉ có
+  // `invoice:manage` cũng từng không thấy mục "Quản trị" vì danh sách thiếu
+  // `/invoices`.
+  const [granted, venues] = user
     ? await Promise.all([
-        permissionService.can(user.id, "user:read"),
-        permissionService.can(user.id, "role:read"),
-        permissionService.can(user.id, "venue:approve"),
+        permissionService.permissionsFor(user.id),
         venueService.listForUser(user.id),
       ])
-    : [false, false, false, []];
+    : [new Set<Permission>(), []];
 
-  const adminEntry: AdminRoute | null = canApproveVenues
-    ? "/venue-approvals"
-    : canSeeUsers
-      ? "/users"
-      : canSeeRoles
-        ? "/roles"
-        : null;
+  const adminEntry: AdminRoute | null =
+    ADMIN_ENTRIES.find(([permission]) => granted.has(permission))?.[1] ?? null;
 
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-line bg-canvas/85 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-2 px-4 sm:gap-4 sm:px-6 lg:px-8">
-        {/* Khoảng cách hẹp lại trên điện thoại: ở 390px, `gap-8` + `gap-3` làm
-            header rộng 409px và đẩy tràn CẢ TRANG sang ngang. */}
-        <div className="flex items-center gap-2 sm:gap-8">
-          <Logo />
-
-          {/*
-            "Tìm sân" hiện ở MỌI khổ màn, kể cả điện thoại — đó là việc duy
-            nhất người mở app muốn làm, giấu nó sau menu ba gạch là chặn đúng
-            đường đi chính.
-          */}
-          <nav className="flex items-center gap-1">
-            <NavLink href="/venues">Tìm sân</NavLink>
-
-            {/* Chỉ hiện với người thật sự quản lý sân — bày mục dẫn tới trang
-                trống là hứa một thứ không có. */}
-            {venues.length > 0 && <NavLink href="/manage">Quản lý sân</NavLink>}
-            {user && <NavLink href="/account/bookings">Lượt đặt</NavLink>}
-
-            {/*
-              MỘT lối vào khu quản trị, không liệt kê từng trang ở đây — việc đó
-              do sidebar trong `(admin)/layout.tsx` lo. Bày cả hai chỗ cùng một
-              danh sách chỉ tạo ra hai nơi phải sửa mỗi lần thêm trang.
-
-              Trỏ tới trang ĐẦU TIÊN người này thật sự vào được: một người chỉ
-              có `role:read` mà bị dẫn tới `/users` sẽ nhận 404 ngay ở cú bấm
-              đầu tiên.
-            */}
-            {adminEntry && <NavLink href={adminEntry}>Quản trị</NavLink>}
-          </nav>
+    <header
+      className={cn(
+        "sticky z-40 w-full border-b border-line bg-canvas/95 backdrop-blur-md",
+        user ? "-top-14 md:top-0" : "top-0",
+      )}
+    >
+      <div
+        className={cn(
+          "mx-auto flex max-w-6xl items-center gap-x-2 px-4 sm:px-6 md:h-16 md:gap-x-6 lg:px-8",
+          user && "flex-wrap md:flex-nowrap",
+        )}
+      >
+        <div className="flex h-14 shrink-0 items-center md:h-auto">
+          {/* Khách: logo + "Tìm sân" + hai nút tài khoản chỉ vừa một hàng khi
+              bỏ chữ "ChốtSân" dưới 400px — đã đo, 360px (khổ Android phổ biến
+              nhất) tràn 25px nếu giữ chữ. */}
+          <Logo textFrom={user ? 360 : 400} />
         </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-3">
+        {/*
+          "Tìm sân" hiện ở MỌI khổ màn, kể cả điện thoại — đó là việc duy nhất
+          người mở app muốn làm, giấu nó sau menu ba gạch là chặn đúng đường đi
+          chính.
+
+          `min-w-0` + `overflow-x-auto`: thiếu `min-w-0` thì hàng mục đẩy rộng
+          cả trang thay vì tự cuộn (SKILL.md, mục `min-w-0`).
+        */}
+        <nav
+          aria-label="Điều hướng chính"
+          className={cn(
+            "flex min-w-0 items-center gap-1",
+            user &&
+              "scrollbar-thin order-last -mx-4 basis-[calc(100%+2rem)] overflow-x-auto px-4 pb-1 sm:-mx-6 sm:basis-[calc(100%+3rem)] sm:px-6 md:order-none md:mx-0 md:shrink-0 md:basis-auto md:overflow-visible md:px-0 md:pb-0",
+          )}
+        >
+          <NavLink href="/venues">Tìm sân</NavLink>
+
+          {/* Chỉ hiện với người thật sự quản lý sân — bày mục dẫn tới trang
+              trống là hứa một thứ không có. */}
+          {venues.length > 0 && <NavLink href="/manage">Quản lý sân</NavLink>}
+          {user && <NavLink href="/account/bookings">Lượt đặt</NavLink>}
+
+          {/*
+            MỘT lối vào khu quản trị, không liệt kê từng trang ở đây — việc đó
+            do thanh điều hướng trong `(admin)/layout.tsx` lo. Bày cả hai chỗ
+            cùng một danh sách chỉ tạo ra hai nơi phải sửa mỗi lần thêm trang.
+
+            Trỏ tới trang ĐẦU TIÊN người này thật sự vào được: một người chỉ
+            có `role:read` mà bị dẫn tới `/users` sẽ nhận 404 ngay ở cú bấm
+            đầu tiên.
+          */}
+          {adminEntry && <NavLink href={adminEntry}>Quản trị</NavLink>}
+        </nav>
+
+        {/* `basis-0 flex-1`: khối tài khoản CO LẠI (tên cắt bớt) thay vì rớt
+            xuống hàng riêng khi tên người dùng dài. */}
+        <div className="flex min-w-0 flex-1 basis-0 items-center justify-end gap-1 md:gap-2">
           {user ? (
             <>
               {/* Tên người dùng dẫn thẳng tới màn quản lý thiết bị — đó là
-                  chỗ người ta tìm khi nghi ngờ tài khoản bị đăng nhập lạ. */}
+                  chỗ người ta tìm khi nghi ngờ tài khoản bị đăng nhập lạ. Tên
+                  dài thì cắt bớt: nó không được đẩy nút "Đăng xuất" ra ngoài
+                  màn hình. */}
               <Link
                 href="/sessions"
-                className="hidden text-sm text-muted transition-colors hover:text-content sm:inline"
+                className="flex min-h-11 min-w-0 items-center rounded-token-control px-2 text-sm text-muted transition-colors hover:bg-elevated hover:text-content md:hidden lg:flex"
               >
-                {user.fullName ?? user.email}
+                <span className="max-w-[9rem] truncate sm:max-w-[16rem] lg:max-w-[14rem]">
+                  {user.fullName ?? user.email}
+                </span>
               </Link>
               {/*
                 Server Action, KHÔNG phải `/api/v1/auth/logout`. Endpoint đó là
@@ -94,7 +149,7 @@ export async function Header() {
                 gửi lên rỗng — kết quả là người dùng nhìn thấy một trang JSON
                 báo lỗi và vẫn đang đăng nhập.
               */}
-              <form action={logoutAction}>
+              <form action={logoutAction} className="shrink-0">
                 <Button size="sm" variant="outline" type="submit">
                   Đăng xuất
                 </Button>
@@ -102,13 +157,10 @@ export async function Header() {
             </>
           ) : (
             <>
-              {/* `px-2` ở khổ nhỏ nhất: ở 360px (iPhone SE và nhiều máy
-                  Android) đệm mặc định làm header rộng hơn màn hình và đẩy
-                  tràn ngang cả trang. */}
-              <Button asChild size="sm" variant="ghost" className="px-2 sm:px-3">
+              <Button asChild size="sm" variant="ghost" className="shrink-0 px-2 sm:px-3">
                 <Link href="/login">Đăng nhập</Link>
               </Button>
-              <Button asChild size="sm" className="px-2 sm:px-3">
+              <Button asChild size="sm" className="shrink-0 px-2.5 sm:px-3">
                 <Link href="/register">Đăng ký</Link>
               </Button>
             </>
@@ -123,14 +175,13 @@ function NavLink({
   href,
   children,
 }: {
-  href:
-    "/" | "/venues" | "/manage" | "/account/bookings" | "/venue-approvals" | "/users" | "/roles";
+  href: "/" | "/venues" | "/manage" | "/account/bookings" | AdminRoute;
   children: React.ReactNode;
 }) {
   return (
     <Link
       href={href}
-      className="whitespace-nowrap rounded-token-md px-2 py-2 text-sm font-medium text-muted transition-colors hover:bg-elevated hover:text-content sm:px-3"
+      className="flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-token-control px-2.5 text-sm font-semibold text-muted transition-colors hover:bg-elevated hover:text-content sm:px-3"
     >
       {children}
     </Link>

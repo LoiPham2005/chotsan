@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/notice";
 import { getPasskeyLoginOptions, verifyPasskeyLogin } from "./passkey-actions";
 
 /**
@@ -35,13 +36,18 @@ export function PasskeyButton({ nextPath }: { nextPath?: string }) {
 
     try {
       const { startAuthentication } = await import("@simplewebauthn/browser");
-      const { options, challengeToken } = await getPasskeyLoginOptions();
+      const prepared = await getPasskeyLoginOptions();
+
+      if (!prepared.ok) {
+        setError(prepared.error);
+        return;
+      }
 
       // Bước này mở secure enclave của thiết bị. Trình duyệt CHỈ ký cho đúng
       // tên miền đã đăng ký — đó là toàn bộ lý do passkey chống được phishing.
-      const response = await startAuthentication({ optionsJSON: options });
+      const response = await startAuthentication({ optionsJSON: prepared.options });
 
-      const result = await verifyPasskeyLogin(challengeToken, response, nextPath);
+      const result = await verifyPasskeyLogin(prepared.challengeToken, response, nextPath);
 
       if (!result.ok) {
         setError(result.error);
@@ -65,33 +71,47 @@ export function PasskeyButton({ nextPath }: { nextPath?: string }) {
   }
 
   return (
-    <div style={{ marginTop: 16 }}>
+    <div className="mt-4">
       <Button
         type="button"
         variant="outline"
         onClick={() => void handleClick()}
         disabled={busy}
-        style={{ width: "100%" }}
+        className="w-full"
       >
-        {busy ? "Đang chờ thiết bị…" : "🔑 Đăng nhập bằng passkey"}
+        {/* Biểu tượng vẽ SVG nét, không dùng emoji (SKILL.md §7). */}
+        <KeyIcon />
+        {busy ? "Đang chờ thiết bị…" : "Đăng nhập bằng passkey"}
       </Button>
 
-      <p
-        style={{
-          marginTop: 8,
-          textAlign: "center",
-          fontSize: "0.85rem",
-          color: "var(--text-muted)",
-        }}
-      >
+      <p className="mt-2 text-center text-xs text-muted">
         Không cần nhập email. Mở khoá bằng vân tay hoặc Face ID.
       </p>
 
       {error && (
-        <p role="alert" className="alert alert-danger">
+        <Notice tone="danger" role="alert" className="mt-2">
           {error}
-        </p>
+        </Notice>
       )}
     </div>
+  );
+}
+
+function KeyIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5 shrink-0 text-muted"
+      aria-hidden
+      focusable="false"
+    >
+      <circle cx="8" cy="15" r="4" />
+      <path d="m10.8 12.2 8.7-8.7M16.5 6.5l2.5 2.5M14 9l2 2" />
+    </svg>
   );
 }

@@ -1,9 +1,14 @@
-import { createServer, type Server as HttpServer } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server as HttpServer,
+  type ServerResponse,
+} from "node:http";
 import { Queue, Worker, type Job } from "bullmq";
 import { logger } from "@/lib/logger";
 import { jobHandlers } from "@/jobs/handlers";
-import type { JobName } from "@/jobs/types";
-import { workerEnv } from "./env";
+import { SCHEDULE_TIMEZONE, type ScheduleDefinition } from "@/jobs/schedules";
+import type { JobHandlers, JobName } from "@/jobs/types";
 
 /**
  * Tiến trình chạy job nền — RIÊNG với web, giống cách `realtime/` tách ra.
@@ -25,11 +30,49 @@ import { workerEnv } from "./env";
  *
  * An toàn. BullMQ dùng Redis để khoá job: một job chỉ được giao cho đúng một
  * worker. Chạy 3 instance worker là xử lý nhanh gấp 3, không phải chạy trùng.
+ *
+ * ---
+ * KẾT NỐI REDIS
+ *
+ * `connection: { url }` → BullMQ tự dựng client bằng gói `ioredis` (nạp lười,
+ * nên không import nào trong mã trỏ tới nó). Gỡ `ioredis` khỏi package.json là
+ * worker lẫn `enqueue()` chết lúc CHẠY với "could not load the optional
+ * 'ioredis' package" — typecheck, lint, build đều vẫn xanh.
  */
 
 export type WorkerHandle = {
   stop: () => Promise<void>;
 };
+
+/**
+ * Cấu hình truyền vào thay vì đọc `worker/env.ts` ngay tại đây: tệp env ném lỗi
+ * lúc nạp khi thiếu `REDIS_URL`, nên import nó ở đây là test không nạp nổi tệp này.
+ */
+export type WorkerConfig = {
+  redisUrl: string;
+  concurrency: number;
+  healthPort: number;
+  healthHost: string;
+  schedules: readonly ScheduleDefinition[];
+};
+
+/**
+ * Trần thời gian đếm job cho `/health`.
+ *
+ * Redis không tới được thì `getJobCounts` KHÔNG ném lỗi — ioredis giữ lệnh lại
+ * chờ kết nối lại, mãi mãi. Không có trần này, `curl /health` treo vô hạn thay
+ * vì trả 503 (đã thấy khi chạy thử bundle với Redis tắt). Ngắn hơn `--timeout=5s`
+ * của HEALTHCHECK để Docker nhận được 503 rõ ràng chứ không phải "hết giờ".
+ */
+export const HEALTH_TIMEOUT_MS = 2_000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`quá ${timeoutMs}ms`)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 /**
  * Endpoint `/health` — cách duy nhất để bên ngoài biết worker còn sống.
@@ -42,15 +85,17 @@ export type WorkerHandle = {
  * hàng đợi có ùn không" từ chuyện phải SSH vào gõ `redis-cli` thành một lệnh
  * `curl`. Job hỏng mà không ai nhìn thấy là job không tồn tại.
  */
-function startHealthServer(queue: Queue): HttpServer {
-  const server = createServer((req, res) => {
+export function healthHandler(
+  queue: Pick<Queue, "getJobCounts">,
+  timeoutMs: number = HEALTH_TIMEOUT_MS,
+): (req: Pick<IncomingMessage, "url">, res: ServerResponse) => void {
+  return (req, res) => {
     if (req.url !== "/health") {
       res.writeHead(404).end();
       return;
     }
 
-    void queue
-      .getJobCounts("waiting", "active", "delayed", "failed")
+    void withTimeout(queue.getJobCounts("waiting", "active", "delayed", "failed"), timeoutMs)
       .then((counts) => {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ status: "ok", counts }));
@@ -62,14 +107,20 @@ function startHealthServer(queue: Queue): HttpServer {
         res.writeHead(503, { "content-type": "application/json" });
         res.end(JSON.stringify({ status: "error", queue: "unreachable" }));
       });
-  });
+  };
+}
 
-  server.listen(workerEnv.WORKER_HEALTH_PORT, "0.0.0.0");
+function startHealthServer(queue: Queue, port: number, host: string): HttpServer {
+  const server = createServer(healthHandler(queue));
+
+  // Loopback mặc định — xem `HOST` trong `worker/env.ts`.
+  server.listen(port, host);
   return server;
 }
 
 /**
- * Đăng ký các job chạy theo lịch.
+ * Đăng ký các job chạy theo lịch — danh sách lấy từ `src/jobs/schedules.ts`,
+ * nguồn duy nhất dùng chung với bộ chạy lịch trong tiến trình web.
  *
  * ---
  * VÌ SAO DÙNG JOB SCHEDULER CỦA BULLMQ CHỨ KHÔNG PHẢI `setInterval`
@@ -83,52 +134,32 @@ function startHealthServer(queue: Queue): HttpServer {
  * thì kết quả vẫn là một lịch duy nhất. Đổi biểu thức cron rồi deploy lại là
  * lịch tự cập nhật, không đẻ ra lịch thứ hai.
  */
-async function registerSchedules(queue: Queue): Promise<void> {
-  const schedules = [
-    { id: "booking-expire-holds", cron: workerEnv.CRON_EXPIRE_HOLDS, name: "booking:expire-holds" },
-    {
-      id: "payment-expire-pending",
-      cron: workerEnv.CRON_EXPIRE_HOLDS,
-      name: "payment:expire-pending",
-    },
-    {
-      id: "maintenance-purge-expired",
-      cron: workerEnv.CRON_PURGE_EXPIRED,
-      name: "maintenance:purge-expired",
-    },
-    {
-      id: "invoice-generate-monthly",
-      cron: workerEnv.CRON_INVOICE_MONTHLY,
-      name: "invoice:generate-monthly",
-    },
-    {
-      id: "invoice-mark-overdue",
-      cron: workerEnv.CRON_INVOICE_OVERDUE,
-      name: "invoice:mark-overdue",
-    },
-  ] as const;
-
+export async function registerSchedules(
+  queue: Pick<Queue, "upsertJobScheduler">,
+  schedules: readonly ScheduleDefinition[],
+): Promise<void> {
   try {
     for (const schedule of schedules) {
       await queue.upsertJobScheduler(
         schedule.id,
-        { pattern: schedule.cron },
+        // Múi giờ tường minh: máy chủ chạy UTC — xem `SCHEDULE_TIMEZONE`.
+        { pattern: schedule.pattern, tz: SCHEDULE_TIMEZONE },
         {
           name: schedule.name,
           data: {},
-          /*
-           * Job theo lịch KHÔNG thử lại: mốc tiếp theo tới sau vài giây tới vài
-           * phút nữa và sẽ tự dọn nốt phần còn sót. Thử lại chỉ chồng thêm việc
-           * lên một hệ thống đang có vấn đề.
-           */
-          opts: { attempts: 1, removeOnComplete: 100, removeOnFail: 100 },
+          opts: {
+            attempts: schedule.attempts,
+            ...(schedule.backoff ? { backoff: schedule.backoff } : {}),
+            removeOnComplete: 100,
+            removeOnFail: 100,
+          },
         },
       );
     }
 
     logger.info("Đã đăng ký job theo lịch", {
-      expireHolds: workerEnv.CRON_EXPIRE_HOLDS,
-      purgeExpired: workerEnv.CRON_PURGE_EXPIRED,
+      timeZone: SCHEDULE_TIMEZONE,
+      schedules: schedules.map((schedule) => `${schedule.id} (${schedule.pattern})`),
     });
   } catch (error) {
     // Không giết tiến trình: worker vẫn xử lý được job thường. Nhưng phải kêu
@@ -138,46 +169,47 @@ async function registerSchedules(queue: Queue): Promise<void> {
   }
 }
 
-export function startWorker(): WorkerHandle {
-  const worker = new Worker(
-    "app",
-    async (job: Job) => {
-      const name = job.name as JobName;
-      /*
-       * Ép kiểu handler về `(payload: unknown) => Promise<void>`.
-       *
-       * `name` đến từ Redis dưới dạng chuỗi nên nó là HỢP của mọi tên job, và
-       * `jobHandlers[name]` có kiểu tham số là GIAO của mọi payload — một kiểu
-       * không giá trị nào thoả mãn. TypeScript không thu hẹp được vì `name` và
-       * `job.data` là hai giá trị độc lập.
-       *
-       * An toàn ở tầng chạy: `enqueue()` là hàm generic, nên payload sai kiểu
-       * bị chặn ngay lúc biên dịch ở phía ĐẨY job — chỗ duy nhất kiểm được thật.
-       */
-      const handler = jobHandlers[name] as ((payload: unknown) => Promise<void>) | undefined;
+/**
+ * Điều phối MỘT job tới handler dùng chung (`src/jobs/handlers.ts`).
+ *
+ * Ép kiểu handler về `(payload: unknown) => Promise<void>`: `name` đến từ Redis
+ * dưới dạng chuỗi nên nó là HỢP của mọi tên job, và `handlers[name]` có kiểu
+ * tham số là GIAO của mọi payload — một kiểu không giá trị nào thoả mãn.
+ * TypeScript không thu hẹp được vì `name` và `job.data` là hai giá trị độc lập.
+ *
+ * An toàn ở tầng chạy: `enqueue()` là hàm generic, nên payload sai kiểu bị chặn
+ * ngay lúc biên dịch ở phía ĐẨY job — chỗ duy nhất kiểm được thật.
+ */
+export async function processJob(
+  job: Pick<Job, "name" | "data" | "id" | "attemptsMade">,
+  handlers: JobHandlers = jobHandlers,
+): Promise<void> {
+  const name = job.name as JobName;
+  const handler = (handlers as Partial<Record<string, (payload: unknown) => Promise<void>>>)[name];
 
-      if (!handler) {
-        // Job lạ = phiên bản worker cũ hơn phiên bản web đang chạy. Ném lỗi để
-        // BullMQ giữ job lại trong danh sách thất bại thay vì coi như đã xong
-        // — nhờ vậy sau khi deploy worker mới, job vẫn còn để chạy lại.
-        throw new Error(`Không có handler cho job "${name}" — worker cũ hơn app?`);
-      }
+  if (!handler) {
+    // Job lạ = phiên bản worker cũ hơn phiên bản web đang chạy. Ném lỗi để
+    // BullMQ giữ job lại trong danh sách thất bại thay vì coi như đã xong
+    // — nhờ vậy sau khi deploy worker mới, job vẫn còn để chạy lại.
+    throw new Error(`Không có handler cho job "${name}" — worker cũ hơn app?`);
+  }
 
-      const startedAt = Date.now();
-      await handler(job.data);
+  const startedAt = Date.now();
+  await handler(job.data);
 
-      logger.info("Job xong", {
-        name,
-        jobId: job.id,
-        attempt: job.attemptsMade + 1,
-        durationMs: Date.now() - startedAt,
-      });
-    },
-    {
-      connection: { url: workerEnv.REDIS_URL },
-      concurrency: workerEnv.WORKER_CONCURRENCY,
-    },
-  );
+  logger.info("Job xong", {
+    name,
+    jobId: job.id,
+    attempt: job.attemptsMade + 1,
+    durationMs: Date.now() - startedAt,
+  });
+}
+
+export function startWorker(config: WorkerConfig): WorkerHandle {
+  const worker = new Worker("app", (job: Job) => processJob(job), {
+    connection: { url: config.redisUrl },
+    concurrency: config.concurrency,
+  });
 
   // Job thất bại là thứ PHẢI thấy được. Không có listener này thì lần thử cuối
   // cùng thất bại rơi vào im lặng, và bạn chỉ phát hiện khi có người hỏi vì sao
@@ -202,14 +234,19 @@ export function startWorker(): WorkerHandle {
     logger.error("Worker lỗi", error);
   });
 
-  const queue = new Queue("app", { connection: { url: workerEnv.REDIS_URL } });
-  const healthServer = startHealthServer(queue);
+  const queue = new Queue("app", { connection: { url: config.redisUrl } });
+  // Cùng lý do với `worker.on("error")`: không nghe thì lỗi kết nối của hàng đợi
+  // (dùng cho /health và đăng ký lịch) in ra stderr dạng stack trần, lọt khỏi log JSON.
+  queue.on("error", (error) => {
+    logger.error("Hàng đợi (health, lịch) lỗi kết nối Redis", error);
+  });
+  const healthServer = startHealthServer(queue, config.healthPort, config.healthHost);
 
-  void registerSchedules(queue);
+  void registerSchedules(queue, config.schedules);
 
   logger.info("Worker đã chạy", {
-    concurrency: workerEnv.WORKER_CONCURRENCY,
-    healthPort: workerEnv.WORKER_HEALTH_PORT,
+    concurrency: config.concurrency,
+    health: `http://${config.healthHost}:${config.healthPort}/health`,
   });
 
   return {

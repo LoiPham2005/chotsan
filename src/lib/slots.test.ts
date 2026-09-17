@@ -161,23 +161,23 @@ describe("slotsToRanges", () => {
 });
 
 describe("encodeSelection / decodeSelection", () => {
-  const CHON = [
+  const SELECTION = [
     { courtId: "cmtmlvmpt001jp2itqjbb6o9v", minute: 1080 },
     { courtId: "cmtmlvmpt001lp2itrfu2pt5i", minute: 1110 },
   ];
 
   it("đi một vòng qua URL vẫn nguyên vẹn", () => {
     // Khách chọn ô → bị đưa sang đăng nhập → quay lại phải thấy đúng các ô đó.
-    expect(decodeSelection(encodeSelection(CHON))).toEqual(CHON);
+    expect(decodeSelection(encodeSelection(SELECTION))).toEqual(SELECTION);
   });
 
   it("bỏ phần tử sai định dạng thay vì làm đổ trang", () => {
-    const raw = `${encodeSelection(CHON)},rác,<script>~10,abc~17,${CHON[0]!.courtId}~1085`;
-    expect(decodeSelection(raw)).toEqual(CHON);
+    const raw = `${encodeSelection(SELECTION)},rác,<script>~10,abc~17,${SELECTION[0]!.courtId}~1085`;
+    expect(decodeSelection(raw)).toEqual(SELECTION);
   });
 
   it("bỏ trùng lặp và phút ngoài ngày", () => {
-    const a = CHON[0]!.courtId;
+    const a = SELECTION[0]!.courtId;
     expect(decodeSelection(`${a}~1080,${a}~1080,${a}~1440`)).toEqual([
       { courtId: a, minute: 1080 },
     ]);

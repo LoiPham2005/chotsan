@@ -1,7 +1,7 @@
 import { enforceRateLimit, requireApiUser } from "@/lib/api/auth";
 import { apiOk, handleApiError } from "@/lib/api/response";
 import { logger } from "@/lib/logger";
-import { RATE_LIMITS } from "@/lib/rate-limit";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS } from "@/lib/rate-limit";
 import { authService } from "@/services/auth.service";
 
 export const dynamic = "force-dynamic";
@@ -21,7 +21,7 @@ export async function POST(request: Request) {
 
     await enforceRateLimit(
       request,
-      "api:verify-email-request",
+      RATE_LIMIT_BUCKETS.emailVerificationRequest,
       RATE_LIMITS.emailVerificationRequest,
     );
 

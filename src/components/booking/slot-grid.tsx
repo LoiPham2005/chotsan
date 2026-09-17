@@ -83,7 +83,26 @@ const STATUS_LABEL: Record<SlotStatus, string> = {
   TAKEN: "đã có người đặt",
   CLOSED: "sân đang bảo trì",
   PAST: "đã qua giờ",
+  NOT_FOR_SALE: "chưa mở bán",
 };
+
+/**
+ * Nhãn đọc to của một ô: sân, khung giờ, trạng thái — và GIÁ chỉ khi ô bán được.
+ *
+ * Lỗi thật trước đây: ô chưa có giá đọc thành "…, còn trống, 0" — người dùng
+ * trình đọc màn hình nghe như khung miễn phí.
+ */
+export function slotAriaLabel(
+  courtName: string,
+  minute: number,
+  slot: { status: SlotStatus; price: number },
+  isSelected: boolean,
+): string {
+  const range = `${formatHhMm(minute)}–${formatHhMm(minute + SLOT_MINUTES)}`;
+  const state = isSelected ? "đang chọn" : STATUS_LABEL[slot.status];
+  const price = slot.status === "FREE" && slot.price > 0 ? `, ${formatVndShort(slot.price)}` : "";
+  return `${courtName} ${range} — ${state}${price}`;
+}
 
 /**
  * Phút của khung ĐẦU TIÊN còn đặt được trên bất kỳ sân nào — đích cuộn lúc mở.
@@ -141,6 +160,10 @@ export function SlotGrid({ day, selected, onToggle, axis, onAxisChange, classNam
 
   const { minutes, hidden } = useMemo(() => visibleMinutes(day), [day]);
   const target = useMemo(() => firstBookableMinute(day), [day]);
+  const hasNotForSale = useMemo(
+    () => day.courts.some((court) => court.slots.some((slot) => slot.status === "NOT_FOR_SALE")),
+    [day.courts],
+  );
 
   /*
    * Cuộn tới khung đầu tiên còn đặt được. Đặt `scrollLeft` thẳng trên phần tử,
@@ -174,6 +197,18 @@ export function SlotGrid({ day, selected, onToggle, axis, onAxisChange, classNam
     }
   }, [target, axis, day.date]);
 
+  // Ngày đã qua nói trước mọi thứ khác: nói "sân nghỉ" hay "hôm nay hết giờ"
+  // cho một ngày của tuần trước là nói sai chuyện.
+  if (day.timing === "PAST") {
+    return (
+      <EmptyState
+        className={className}
+        title="Ngày này đã qua"
+        hint="Chọn hôm nay hoặc một ngày sắp tới để xem khung giờ còn trống."
+      />
+    );
+  }
+
   if (day.isClosed || day.courts.length === 0) {
     return (
       <EmptyState
@@ -204,7 +239,6 @@ export function SlotGrid({ day, selected, onToggle, axis, onAxisChange, classNam
     }
 
     const clickable = Boolean(onToggle) && slot.status === "FREE";
-    const range = `${formatHhMm(minute)}–${formatHhMm(minute + SLOT_MINUTES)}`;
 
     let content: React.ReactNode;
     let tone: string;
@@ -222,14 +256,19 @@ export function SlotGrid({ day, selected, onToggle, axis, onAxisChange, classNam
     } else if (slot.status === "PAST") {
       content = null;
       tone = "cursor-not-allowed bg-elevated/40";
+    } else if (slot.status === "NOT_FOR_SALE") {
+      // Khung chưa có giá: chủ sân chưa mở bán giờ này. Trông như ô không bấm
+      // được, KHÔNG hiện "0" — số 0 đọc thành "miễn phí".
+      content = <span className="text-[11px] font-medium">—</span>;
+      tone = "cursor-not-allowed bg-elevated/40 text-subtle";
     } else if (slot.isPeak) {
-      content = slot.price > 0 ? formatVndShort(slot.price) : "—";
+      content = formatVndShort(slot.price);
       tone =
         "bg-peak-tint text-peak-text ring-1 ring-inset ring-peak-line/80 hover:ring-2 hover:ring-peak-text/60";
     } else {
-      content = slot.price > 0 ? formatVndShort(slot.price) : "—";
+      content = formatVndShort(slot.price);
       tone =
-        "bg-surface text-content ring-1 ring-inset ring-line hover:bg-brand-tint hover:text-brand-hover hover:ring-2 hover:ring-brand/50";
+        "bg-surface text-content ring-1 ring-inset ring-line hover:bg-brand-tint hover:text-brand-text hover:ring-2 hover:ring-brand/50";
     }
 
     return (
@@ -239,9 +278,7 @@ export function SlotGrid({ day, selected, onToggle, axis, onAxisChange, classNam
         disabled={!clickable && !isSelected}
         onClick={() => onToggle?.(courtId, minute)}
         aria-pressed={isSelected}
-        aria-label={`${courtName} ${range} — ${isSelected ? "đang chọn" : STATUS_LABEL[slot.status]}${
-          slot.status === "FREE" ? `, ${formatVndShort(slot.price)}` : ""
-        }`}
+        aria-label={slotAriaLabel(courtName, minute, slot, isSelected)}
         className={cn(
           // 44px: ngưỡng chạm tối thiểu trên điện thoại và máy tính bảng.
           "flex h-11 w-full items-center justify-center rounded-xl text-[13px] font-semibold tabular-nums transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
@@ -255,11 +292,9 @@ export function SlotGrid({ day, selected, onToggle, axis, onAxisChange, classNam
   };
 
   return (
+    // Viền 1px, không đổ bóng — thẻ thường không đổ bóng (SKILL.md §4).
     <div
-      className={cn(
-        "min-w-0 overflow-hidden rounded-2xl bg-surface shadow-nang-1 ring-1 ring-line",
-        className,
-      )}
+      className={cn("min-w-0 overflow-hidden rounded-2xl bg-surface ring-1 ring-line", className)}
     >
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 pb-2 pt-3.5">
         <p className="text-xs text-muted">
@@ -289,10 +324,13 @@ export function SlotGrid({ day, selected, onToggle, axis, onAxisChange, classNam
               type="button"
               aria-pressed={axis === value}
               onClick={() => onAxisChange(value)}
+              // Viên thuốc nhìn gọn (24px: chữ 16px + đệm 4px trên dưới) nhưng vùng
+              // bấm đủ 44px nhờ lớp giả `after:` nới 10px trên dưới (SKILL.md §1,
+              // luật 5). Nới 8px chỉ được 40px — đã đo bằng `getBoundingClientRect`.
               className={cn(
-                "rounded-full px-3 py-1 text-xs font-semibold transition-all",
+                "relative rounded-full px-3 py-1 text-xs font-semibold transition-colors after:absolute after:inset-x-0 after:-inset-y-2.5",
                 axis === value
-                  ? "bg-surface text-content shadow-nang-1"
+                  ? "bg-surface text-content ring-1 ring-line"
                   : "text-muted hover:text-content",
               )}
             >
@@ -341,7 +379,7 @@ export function SlotGrid({ day, selected, onToggle, axis, onAxisChange, classNam
                 <tr key={court.courtId} className="group">
                   <th
                     scope="row"
-                    className="sticky left-0 z-20 bg-surface pl-2 pr-3 text-left shadow-[8px_0_12px_-10px_rgba(15,23,42,0.25)]"
+                    className="sticky left-0 z-20 bg-surface pl-2 pr-3 text-left shadow-sticky-edge"
                   >
                     <span className="whitespace-nowrap text-sm font-semibold text-content">
                       {court.courtName}
@@ -414,6 +452,7 @@ export function SlotGrid({ day, selected, onToggle, axis, onAxisChange, classNam
           className="bg-[repeating-linear-gradient(135deg,var(--border-strong)_0_2px,transparent_2px_5px)]"
           label="Bảo trì"
         />
+        {hasNotForSale && <Swatch className="bg-elevated" label="Chưa mở bán" />}
       </div>
     </div>
   );
@@ -508,12 +547,7 @@ function EmptyState({
   hint: string;
 }) {
   return (
-    <div
-      className={cn(
-        "rounded-2xl bg-surface p-10 text-center shadow-nang-1 ring-1 ring-line",
-        className,
-      )}
-    >
+    <div className={cn("rounded-2xl bg-surface p-10 text-center ring-1 ring-line", className)}>
       <p className="text-base font-semibold text-content">{title}</p>
       <p className="mt-1 text-sm text-muted">{hint}</p>
     </div>

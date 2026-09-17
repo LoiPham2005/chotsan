@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { fieldClassName, Input } from "@/components/ui/input";
 import { SportIcon, sportStyle } from "@/components/venue/sport-icon";
 import { VenueCard } from "@/components/venue/venue-card";
+import { cn } from "@/lib/cn";
 import { sportService } from "@/services/sport.service";
 import { venueService } from "@/services/venue.service";
 
@@ -22,6 +23,17 @@ export const metadata: Metadata = {
  * Người mở trang này đã biết mình cần gì: một sân, tối nay, gần nhà. Họ không
  * cần đọc app làm được gì. Nên thứ đầu tiên chạm tới là ô tìm — và ngay dưới
  * là sân thật, không phải ba khối "tính năng nổi bật".
+ *
+ * ---
+ * PHẲNG, KHÔNG TRANG TRÍ
+ *
+ * Không nền chuyển sắc, không quầng sáng mờ, không chữ tô gradient, không đổ
+ * bóng (SKILL.md §4, §7): người dùng đứng ngoài sân giữa ban ngày — độ tương
+ * phản và chữ rõ quan trọng hơn cảm giác "bóng bẩy".
+ *
+ * Thẻ sân ở đây KHÔNG tải ảnh ngay (khác `/venues`): trên điện thoại khối tìm
+ * kiếm đã chiếm trọn màn hình đầu, phần tử lớn nhất lúc mở trang là tiêu đề chứ
+ * không phải ảnh sân.
  */
 export default async function HomePage() {
   const [sports, featured] = await Promise.all([
@@ -31,36 +43,21 @@ export default async function HomePage() {
 
   return (
     <div>
-      <section className="relative overflow-hidden border-b border-line bg-gradient-to-b from-brand-tint via-brand-tint/40 to-canvas">
-        {/*
-          Hai quầng sáng mờ phía sau. Chúng KHÔNG mang thông tin gì — chỉ để nền
-          không phẳng lì như một ô màu. `blur-3xl` + độ mờ thấp nên chúng không
-          bao giờ tranh chấp độ tương phản với chữ nằm trên.
-        */}
-        <div
-          className="pointer-events-none absolute -left-24 -top-24 h-72 w-72 rounded-full bg-brand/15 blur-3xl"
-          aria-hidden
-        />
-        <div
-          className="pointer-events-none absolute -right-20 top-10 h-64 w-64 rounded-full bg-emerald-300/20 blur-3xl"
-          aria-hidden
-        />
-
-        <div className="relative mx-auto max-w-4xl px-4 py-14 text-center sm:px-6 sm:py-24">
-          <p className="mb-4 inline-flex items-center gap-1.5 rounded-full border border-brand-line bg-surface/70 px-3 py-1 text-xs font-semibold text-brand backdrop-blur-sm">
+      <section className="border-b border-line bg-surface">
+        <div className="mx-auto max-w-4xl px-4 py-12 text-center sm:px-6 sm:py-20">
+          <p className="mb-4 inline-flex items-center gap-1.5 rounded-full border border-brand-line bg-brand-tint px-3 py-1 text-xs font-semibold text-brand-text">
             <span className="relative flex h-1.5 w-1.5" aria-hidden>
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-75" />
+              {/* `motion-safe:`: người bật "giảm chuyển động" thì chấm đứng yên. */}
+              <span className="absolute inline-flex h-full w-full rounded-full bg-brand opacity-75 motion-safe:animate-ping" />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-brand" />
             </span>
             Đang nhận đặt sân hôm nay
           </p>
 
-          <h1 className="text-4xl font-extrabold leading-[1.1] tracking-tight text-content sm:text-6xl">
+          <h1 className="text-4xl font-extrabold leading-[1.15] tracking-tight text-content sm:text-6xl">
             Đặt sân thể thao
             <br />
-            <span className="bg-gradient-to-r from-brand to-emerald-500 bg-clip-text text-transparent">
-              nhanh, rõ giá
-            </span>
+            <span className="text-brand-text">nhanh, rõ giá</span>
           </h1>
 
           <p className="mx-auto mt-4 max-w-xl text-base leading-relaxed text-muted sm:text-lg">
@@ -76,45 +73,49 @@ export default async function HomePage() {
           <form
             action="/venues"
             method="get"
-            className="mx-auto mt-8 grid max-w-2xl gap-2 rounded-token-xl border border-line bg-surface/80 p-2 shadow-nang-2 backdrop-blur-sm sm:grid-cols-[1fr_11rem_auto]"
+            className="mx-auto mt-8 grid max-w-2xl gap-2 text-left sm:grid-cols-[1fr_11rem_auto]"
           >
             <Input
               type="search"
               name="q"
               placeholder="Tên sân hoặc địa chỉ…"
               aria-label="Tìm theo tên sân hoặc địa chỉ"
-              className="h-12 border-transparent bg-transparent text-base shadow-none focus-visible:border-line"
+              className="h-12"
             />
 
             <select
               name="mon"
               aria-label="Môn thể thao"
-              className="h-12 cursor-pointer rounded-token-md border border-transparent bg-transparent px-3 text-base text-content focus-visible:border-line focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60"
+              className={cn(fieldClassName, "h-12 cursor-pointer")}
             >
               <option value="">Tất cả môn</option>
-              {sports.map((mon) => (
-                <option key={mon.key} value={mon.key}>
-                  {mon.name}
+              {sports.map((sport) => (
+                <option key={sport.key} value={sport.key}>
+                  {sport.name}
                 </option>
               ))}
             </select>
 
-            <Button type="submit" size="lg" className="h-12 shadow-selection">
+            <Button type="submit" size="lg">
               Tìm sân
             </Button>
           </form>
 
           {/* Lối tắt theo môn — kèm biểu tượng để mắt bắt được ngay, không
-              phải đọc từng chữ. */}
+              phải đọc từng chữ. Tham số `?mon=` giữ nguyên: link cũ đã chia sẻ
+              vẫn phải mở đúng kết quả. */}
           <ul className="mt-6 flex flex-wrap justify-center gap-2">
-            {sports.slice(0, 6).map((mon) => (
-              <li key={mon.key}>
+            {sports.slice(0, 6).map((sport) => (
+              <li key={sport.key}>
                 <Link
-                  href={`/venues?mon=${mon.key}`}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface/80 py-1.5 pl-2.5 pr-3.5 text-sm font-medium text-content shadow-nang-1 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:border-brand-line hover:shadow-nang-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+                  href={`/venues?mon=${sport.key}`}
+                  className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface pl-3 pr-4 text-sm font-medium text-content transition-colors hover:border-brand-line hover:bg-brand-tint focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
                 >
-                  <SportIcon sportKey={mon.key} className={`h-4 w-4 ${sportStyle(mon.key).mau}`} />
-                  {mon.name}
+                  <SportIcon
+                    sportKey={sport.key}
+                    className={`h-4 w-4 ${sportStyle(sport.key).text}`}
+                  />
+                  {sport.name}
                 </Link>
               </li>
             ))}
@@ -129,10 +130,9 @@ export default async function HomePage() {
           </h2>
           <Link
             href="/venues"
-            className="group shrink-0 text-sm font-semibold text-brand hover:underline"
+            className="inline-flex min-h-11 shrink-0 items-center text-sm font-semibold text-brand-text hover:underline"
           >
-            Xem tất cả{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-0.5">→</span>
+            Xem tất cả →
           </Link>
         </div>
 
@@ -142,10 +142,10 @@ export default async function HomePage() {
           </p>
         ) : (
           <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {featured.items.map((court) => (
+            {featured.items.map((venue) => (
               // `Decimal` của Prisma không đi qua ranh giới Server → Client
               // được — đổi sang số ngay tại đây.
-              <VenueCard key={court.id} court={{ ...court, ratingAvg: Number(court.ratingAvg) }} />
+              <VenueCard key={venue.id} venue={{ ...venue, ratingAvg: Number(venue.ratingAvg) }} />
             ))}
           </div>
         )}
@@ -157,26 +157,21 @@ export default async function HomePage() {
             Đặt sân trong ba bước
           </h2>
 
-          {/* Đường nối chỉ vẽ ở khổ có ba cột nằm ngang — dọc thì nó nối nhầm hướng. */}
-          <ol className="relative mt-9 grid gap-8 sm:grid-cols-3 sm:gap-6">
-            <div
-              className="pointer-events-none absolute left-[16.67%] right-[16.67%] top-5 hidden h-px bg-gradient-to-r from-brand-line via-brand-line to-transparent sm:block"
-              aria-hidden
+          <ol className="mt-9 grid gap-8 sm:grid-cols-3 sm:gap-6">
+            <HowToStep
+              step={1}
+              title="Chọn sân và giờ"
+              description="Lưới sân × khung 30 phút cho thấy ngay sân nào trống, giờ nào giá cao hơn."
             />
             <HowToStep
-              so={1}
-              tieuDe="Chọn sân và giờ"
-              mo="Lưới sân × khung 30 phút cho thấy ngay sân nào trống, giờ nào giá cao hơn."
+              step={2}
+              title="Chuyển khoản"
+              description="Quét mã QR bằng app ngân hàng. Chỗ được giữ trong lúc bạn thanh toán."
             />
             <HowToStep
-              so={2}
-              tieuDe="Chuyển khoản"
-              mo="Quét mã QR bằng app ngân hàng. Chỗ được giữ 10 phút để bạn thanh toán."
-            />
-            <HowToStep
-              so={3}
-              tieuDe="Tới sân, đọc mã"
-              mo="Sân xác nhận xong bạn nhận thông báo. Tới nơi chỉ cần đọc mã đặt sân."
+              step={3}
+              title="Tới sân, đọc mã"
+              description="Sân xác nhận xong bạn nhận thông báo. Tới nơi chỉ cần đọc mã đặt sân."
             />
           </ol>
         </div>
@@ -189,24 +184,37 @@ export default async function HomePage() {
           Không mất phí đăng ký.
         </p>
         <Button asChild size="lg" variant="outline" className="mt-5">
-          <Link href="/register">Đăng ký chủ sân</Link>
+          {/* Chưa đăng nhập thì `/manage/new` tự chuyển sang đăng nhập rồi quay lại. */}
+          <Link href="/manage/new">Đăng ký chủ sân</Link>
         </Button>
       </section>
     </div>
   );
 }
 
-function HowToStep({ so, tieuDe, mo }: { so: number; tieuDe: string; mo: string }) {
+/**
+ * Một bước trong "Đặt sân trong ba bước". Số bước là ô VIỀN trung tính, không
+ * phải khối xanh đặc: nó không bấm được, mà xanh đặc là màu của thứ bấm được.
+ */
+function HowToStep({
+  step,
+  title,
+  description,
+}: {
+  step: number;
+  title: string;
+  description: string;
+}) {
   return (
-    <li className="relative text-center sm:text-left">
+    <li className="text-center sm:text-left">
       <span
-        className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-brand to-emerald-600 text-base font-bold text-white shadow-selection ring-4 ring-surface"
+        className="inline-flex h-10 w-10 items-center justify-center rounded-full border-[1.5px] border-line-strong bg-surface text-base font-bold text-content"
         aria-hidden
       >
-        {so}
+        {step}
       </span>
-      <h3 className="mt-4 font-semibold text-content">{tieuDe}</h3>
-      <p className="mt-1.5 text-sm leading-relaxed text-muted">{mo}</p>
+      <h3 className="mt-4 font-semibold text-content">{title}</h3>
+      <p className="mt-1.5 text-sm leading-relaxed text-muted">{description}</p>
     </li>
   );
 }

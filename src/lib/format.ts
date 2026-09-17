@@ -19,8 +19,19 @@ export function formatCurrency(
 }
 
 /**
- * Format ngày tháng năm chuẩn định dạng Việt Nam
+ * Múi giờ hiển thị mặc định.
+ *
+ * `Intl.DateTimeFormat` không có `timeZone` thì theo giờ MÁY CHỦ — mà máy chủ
+ * chạy UTC: một phiên đăng nhập lúc 06:30 sáng giờ VN hiện thành "23:30" hôm
+ * trước ở `/sessions` và `/security`. Mọi ngày giờ của dự án theo giờ Việt Nam.
+ */
+const DISPLAY_TIME_ZONE = "Asia/Ho_Chi_Minh";
+
+/**
+ * Format ngày tháng năm chuẩn định dạng Việt Nam, theo GIỜ VIỆT NAM
  * @example formatDate(new Date()) => "16/08/2026"
+ *
+ * `options` truyền vào vẫn giữ múi giờ VN trừ khi tự khai `timeZone` khác.
  */
 export function formatDate(
   date: Date | string | number,
@@ -33,11 +44,11 @@ export function formatDate(
 ): string {
   const d = typeof date === "string" || typeof date === "number" ? new Date(date) : date;
   if (isNaN(d.getTime())) return "";
-  return new Intl.DateTimeFormat(locale, options).format(d);
+  return new Intl.DateTimeFormat(locale, { timeZone: DISPLAY_TIME_ZONE, ...options }).format(d);
 }
 
 /**
- * Format ngày giờ đầy đủ
+ * Format ngày giờ đầy đủ, theo GIỜ VIỆT NAM
  * @example formatDateTime(new Date()) => "17:45 16/08/2026"
  */
 export function formatDateTime(date: Date | string | number): string {

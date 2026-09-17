@@ -103,15 +103,20 @@ const SAMPLE_VENUES: SampleVenue[] = [
   },
 ];
 
-/** Giờ vàng: 17:00–22:00 mọi ngày, và cả ngày cuối tuần. */
-function priceRules(court: SampleVenue) {
+/**
+ * Giờ vàng: 17:00–22:00 các ngày trong tuần, và cả ngày cuối tuần.
+ *
+ * Ba luật mang BA ưu tiên khác nhau: `CourtService.setPriceRules` từ chối hai
+ * luật cùng ưu tiên chồng giờ, vì giá khi đó không xác định.
+ */
+function priceRules(venue: SampleVenue) {
   return [
     // Giá nền, mọi khung, mọi ngày.
     {
       weekdays: [],
       startMinute: OPENING_HOURS.openMinute,
       endMinute: OPENING_HOURS.closeMinute,
-      pricePerSlot: court.basePrice,
+      pricePerSlot: venue.basePrice,
       isPeak: false,
       priority: 0,
     },
@@ -120,7 +125,7 @@ function priceRules(court: SampleVenue) {
       weekdays: [1, 2, 3, 4, 5],
       startMinute: 17 * 60,
       endMinute: 22 * 60,
-      pricePerSlot: court.peakPrice,
+      pricePerSlot: venue.peakPrice,
       isPeak: true,
       priority: 10,
     },
@@ -129,7 +134,7 @@ function priceRules(court: SampleVenue) {
       weekdays: [0, 6],
       startMinute: OPENING_HOURS.openMinute,
       endMinute: OPENING_HOURS.closeMinute,
-      pricePerSlot: court.peakPrice,
+      pricePerSlot: venue.peakPrice,
       isPeak: true,
       priority: 5,
     },
@@ -153,36 +158,36 @@ export async function seedVenues(prisma: PrismaClient): Promise<void> {
 
   let created = 0;
 
-  for (const court of SAMPLE_VENUES) {
+  for (const venue of SAMPLE_VENUES) {
     const existing = await prisma.venue.findUnique({
-      where: { slug: court.slug },
+      where: { slug: venue.slug },
       select: { id: true },
     });
     if (existing) continue;
 
     const sport = await prisma.sport.findUniqueOrThrow({
-      where: { key: court.sportKey },
+      where: { key: venue.sportKey },
       select: { id: true },
     });
 
     await prisma.venue.create({
       data: {
-        slug: court.slug,
-        name: court.name,
-        description: court.description,
+        slug: venue.slug,
+        name: venue.name,
+        description: venue.description,
         status: "ACTIVE",
-        address: court.address,
-        ward: court.ward,
-        province: court.province,
+        address: venue.address,
+        ward: venue.ward,
+        province: venue.province,
         phone: "0987654321",
-        amenities: court.amenities,
+        amenities: venue.amenities,
         bankName: "VCB",
         bankAccountNumber: "1234567890",
         bankAccountName: "NGUYEN VAN A",
         commissionRate: 8,
-        holdMinutes: court.holdMinutes,
-        freeCancelHours: court.freeCancelHours,
-        cancelFeePercent: court.cancelFeePercent,
+        holdMinutes: venue.holdMinutes,
+        freeCancelHours: venue.freeCancelHours,
+        cancelFeePercent: venue.cancelFeePercent,
         sportId: sport.id,
         hours: {
           create: Array.from({ length: 7 }, (_, weekday) => ({
@@ -192,18 +197,18 @@ export async function seedVenues(prisma: PrismaClient): Promise<void> {
           })),
         },
         courts: {
-          create: Array.from({ length: court.courtCount }, (_, index) => ({
+          create: Array.from({ length: venue.courtCount }, (_, index) => ({
             sportId: sport.id,
-            name: court.courtName(index + 1),
-            surface: court.surface,
-            isIndoor: court.isIndoor,
+            name: venue.courtName(index + 1),
+            surface: venue.surface,
+            isIndoor: venue.isIndoor,
             sortOrder: index,
             // Sân cuối tắt sẵn: lưới đặt sân phải chứng minh được là nó bỏ qua
             // sân đang tắt, và chuyện đó chỉ thấy khi có một sân bị tắt.
-            isActive: index < court.courtCount - 1,
+            isActive: index < venue.courtCount - 1,
           })),
         },
-        priceRules: { create: priceRules(court) },
+        priceRules: { create: priceRules(venue) },
         members: {
           create: [
             { userId: owner.id, role: "OWNER", status: "ACTIVE" },

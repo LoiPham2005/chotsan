@@ -39,6 +39,8 @@ export class ApiError extends Error {
     readonly code: ApiErrorCode,
     message: string,
     readonly fields?: Record<string, string[]>,
+    /** Số giây client nên đợi — đi ra header `Retry-After` của response 429. */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "ApiError";
@@ -60,7 +62,13 @@ export const apiErrors = {
   conflict: (message: string) => new ApiError(409, "CONFLICT", message),
 
   rateLimited: (retryAfterSeconds: number) =>
-    new ApiError(429, "RATE_LIMITED", `Quá nhiều yêu cầu. Thử lại sau ${retryAfterSeconds} giây.`),
+    new ApiError(
+      429,
+      "RATE_LIMITED",
+      `Quá nhiều yêu cầu. Thử lại sau ${retryAfterSeconds} giây.`,
+      undefined,
+      retryAfterSeconds,
+    ),
 
   accountBanned: (message: string) => new ApiError(403, "ACCOUNT_BANNED", message),
 
@@ -136,7 +144,25 @@ function buildErrorResponse(
   // log, thay vì phải mò theo thời điểm và địa chỉ IP.
   if (requestId) response.headers.set(REQUEST_ID_HEADER, requestId);
 
+  /*
+   * `Retry-After` (RFC 9110 §10.2.3) cho MỌI 429 biết lúc nào hết chặn: rate
+   * limit IP, bộ đếm 2FA theo tài khoản, giãn cách OTP. Không có nó thì app
+   * mobile chỉ còn cách đoán — thường là thử lại ngay, và tự kéo dài lệnh chặn.
+   */
+  const retryAfter = retryAfterOf(error);
+  if (retryAfter !== undefined) response.headers.set("Retry-After", String(retryAfter));
+
   return response;
+}
+
+/** Số giây chờ mà lỗi mang theo, nếu có — cả `ApiError` lẫn lỗi nghiệp vụ RATE_LIMITED. */
+function retryAfterOf(error: unknown): number | undefined {
+  if (!(error instanceof ApiError) && !(error instanceof DomainError)) return undefined;
+
+  const value = (error as { retryAfterSeconds?: unknown }).retryAfterSeconds;
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(1, Math.ceil(value))
+    : undefined;
 }
 
 /**

@@ -53,10 +53,14 @@ export abstract class DomainError extends Error {
  *
  * Gộp lại có chủ đích — phân biệt ba trường hợp là xác nhận cho người đang dò
  * biết tài khoản nào có thật.
+ *
+ * @param userId Chỉ truyền khi tài khoản CÓ THẬT (sai mật khẩu). Không bao giờ
+ * đi ra response — `handleApiError` và Server Action chỉ đọc `code`/`message`
+ * — mà để nhật ký ghi được `LOGIN_FAILED` đúng tài khoản bị dò.
  */
 export class InvalidCredentialsError extends DomainError {
   readonly code = "UNAUTHENTICATED" as const;
-  constructor() {
+  constructor(readonly userId?: string) {
     super("Thông tin đăng nhập không chính xác");
   }
 }
@@ -64,7 +68,8 @@ export class InvalidCredentialsError extends DomainError {
 /** Khoá thủ công bởi admin (`UserStatus.BANNED`) — không tự hết hạn. */
 export class AccountBannedError extends DomainError {
   readonly code = "ACCOUNT_BANNED" as const;
-  constructor() {
+  /** Xem `InvalidCredentialsError.userId` — chỉ cho nhật ký, không ra response. */
+  constructor(readonly userId?: string) {
     super("Tài khoản đã bị khoá. Vui lòng liên hệ quản trị viên.");
   }
 }
@@ -78,15 +83,26 @@ export class AccountBannedError extends DomainError {
  */
 export class AccountInactiveError extends DomainError {
   readonly code = "ACCOUNT_BANNED" as const;
-  constructor() {
+  /** Xem `InvalidCredentialsError.userId` — chỉ cho nhật ký, không ra response. */
+  constructor(readonly userId?: string) {
     super("Tài khoản đang tạm ngưng hoạt động. Vui lòng liên hệ quản trị viên.");
   }
 }
 
-/** Khoá tạm tự động do sai mật khẩu liên tiếp — tự hết hạn tại `lockedUntil`. */
+/**
+ * Khoá tạm tự động do sai mật khẩu liên tiếp — tự hết hạn tại `lockedUntil`.
+ *
+ * Ném TRƯỚC khi so mật khẩu (xem `AuthService.validateCredentials`): trong lúc
+ * khoá, đúng hay sai đều nhận đúng lỗi này, nên khoá tạm không còn là cái máy
+ * báo "vừa đoán trúng".
+ */
 export class AccountLockedError extends DomainError {
   readonly code = "ACCOUNT_LOCKED" as const;
-  constructor(readonly lockedUntil: Date) {
+  constructor(
+    readonly lockedUntil: Date,
+    /** Xem `InvalidCredentialsError.userId` — chỉ cho nhật ký, không ra response. */
+    readonly userId?: string,
+  ) {
     super(
       `Tài khoản tạm khoá do đăng nhập sai quá nhiều lần. Thử lại sau ${Math.max(
         1,
@@ -112,7 +128,8 @@ export class InvalidVerificationTokenError extends DomainError {
  * Refresh token đã bị thu hồi nhưng vẫn được dùng lại.
  *
  * Chỉ có một cách giải thích hợp lý: nó đã bị đánh cắp. Không thể biết bên nào
- * là kẻ trộm, nên `TokenService` huỷ TOÀN BỘ phiên của tài khoản đó.
+ * là kẻ trộm, nên `TokenService` huỷ cả HỌ phiên đó (mọi token sinh ra từ cùng
+ * một lần đăng nhập) — phiên trên các thiết bị khác của tài khoản vẫn sống.
  */
 export class RefreshTokenReuseError extends DomainError {
   readonly code = "UNAUTHENTICATED" as const;
@@ -232,6 +249,21 @@ export class ForbiddenError extends DomainError {
   }
 }
 
+/**
+ * Cấp cho người khác một quyền mà CHÍNH MÌNH không có.
+ *
+ * Tách khỏi `InsufficientRoleLevelError`: bậc vai trò có thể cao hơn hẳn mà
+ * quyền vẫn thiếu (ADMIN bậc 50 không có `payout:approve`). Không có chốt này
+ * thì ADMIN tick `payout:approve` cho một tài khoản phụ bậc thấp rồi dùng nó —
+ * chốt bậc vai trò không thấy gì bất thường.
+ */
+export class PermissionNotHeldError extends DomainError {
+  readonly code = "FORBIDDEN" as const;
+  constructor(keys: readonly string[]) {
+    super(`Bạn không thể cấp quyền mà chính bạn không có: ${keys.join(", ")}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Bên thứ ba
 // ---------------------------------------------------------------------------
@@ -243,11 +275,30 @@ export class ProviderNotConfiguredError extends DomainError {
   }
 }
 
+/*
+ * LỖI OAUTH — NGUỒN DUY NHẤT.
+ *
+ * Trước đây `src/lib/oauth/types.ts` có một bộ lớp lỗi riêng TRÙNG TÊN với bộ
+ * ở đây. Service ném lớp của file này, route callback so `instanceof` với lớp
+ * của file kia — không bao giờ khớp, nên "tài khoản không có email" hiện thành
+ * "Có lỗi xảy ra" và bị ghi log như sự cố. Hai lớp cùng tên là hai lớp khác
+ * nhau; giữ đúng một chỗ khai báo.
+ */
+
+/** Đổi `code` lấy token, hoặc đọc hồ sơ từ provider, thất bại. */
 export class ProviderExchangeError extends DomainError {
   readonly code = "PROVIDER_ERROR" as const;
   constructor(provider: string, cause?: unknown) {
     super(`Không đăng nhập được bằng ${provider}. Vui lòng thử lại.`);
     this.cause = cause;
+  }
+}
+
+/** `state` trong callback không khớp cookie của lượt đăng nhập (hoặc cookie đã mất). */
+export class OAuthStateMismatchError extends DomainError {
+  readonly code = "UNAUTHENTICATED" as const;
+  constructor() {
+    super("Phiên đăng nhập OAuth không hợp lệ hoặc đã hết hạn");
   }
 }
 
@@ -257,6 +308,25 @@ export class OAuthEmailRequiredError extends DomainError {
     super(
       `Tài khoản ${provider} của bạn không có email đã xác thực để liên kết. ` +
         `Vui lòng công khai/xác thực email trên ${provider} rồi thử lại.`,
+    );
+  }
+}
+
+/**
+ * Email từ provider trùng một tài khoản có sẵn CHƯA xác thực email.
+ *
+ * Không liên kết: đăng ký bằng mật khẩu không bắt xác thực email, nên kẻ xấu
+ * đăng ký trước bằng email nạn nhân được. Nạn nhân "Tiếp tục với Google" mà
+ * hệ thống tự gắn vào tài khoản đó thì kẻ xấu — vẫn giữ mật khẩu — đăng nhập
+ * chung vào tài khoản của nạn nhân. Chủ thật lấy lại bằng "Quên mật khẩu":
+ * link gửi tới hộp thư mới chứng minh được quyền sở hữu.
+ */
+export class OAuthEmailUnverifiedError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor() {
+    super(
+      "Email này đã có tài khoản nhưng chưa được xác thực. Đăng nhập bằng mật khẩu, " +
+        "hoặc dùng “Quên mật khẩu” để lấy lại tài khoản rồi thử lại.",
     );
   }
 }
@@ -286,6 +356,24 @@ export class InvalidTwoFactorCodeError extends DomainError {
   readonly code = "UNAUTHENTICATED" as const;
   constructor() {
     super("Mã xác thực không đúng hoặc đã hết hiệu lực");
+  }
+}
+
+/**
+ * Nhập mã 2FA quá nhiều lần trên MỘT tài khoản — đếm chung web và API.
+ *
+ * Chặn cả mã ĐÚNG tới hết cửa sổ. Nếu mã đúng vẫn qua thì kẻ dò chỉ cần bắn đủ
+ * nhanh: lần trúng luôn được nhận, bộ đếm chỉ làm chậm chứ không chặn.
+ */
+export class TooManyTwoFactorAttemptsError extends DomainError {
+  readonly code = "RATE_LIMITED" as const;
+  constructor(readonly retryAfterSeconds: number) {
+    super(
+      `Bạn đã nhập mã xác thực quá nhiều lần. Thử lại sau ${Math.max(
+        1,
+        Math.ceil(retryAfterSeconds / 60),
+      )} phút.`,
+    );
   }
 }
 
@@ -340,6 +428,20 @@ export class InsufficientRoleLevelError extends DomainError {
 // ---------------------------------------------------------------------------
 
 /**
+ * Passkey không còn trong tài khoản (đã gỡ, hoặc id không thuộc người đang
+ * thao tác) — dùng ở màn QUẢN LÝ passkey.
+ *
+ * Không dùng ở luồng đăng nhập: ở đó mọi thất bại đều là
+ * `InvalidCredentialsError` như nhau.
+ */
+export class PasskeyNotFoundError extends DomainError {
+  readonly code = "NOT_FOUND" as const;
+  constructor() {
+    super("Passkey này không còn tồn tại hoặc đã bị gỡ.");
+  }
+}
+
+/**
  * Phản hồi passkey không hợp lệ khi ĐĂNG KÝ.
  *
  * Dùng chung cho mọi lý do — sai origin, sai RP ID, challenge không khớp, chữ
@@ -367,9 +469,13 @@ export class WebAuthnVerificationError extends DomainError {
  * "chưa xác thực email thì chưa cho vào", đừng dùng trạng thái này — đã có cột
  * `emailVerifiedAt` riêng cho việc đó. Một cột một ý nghĩa.
  */
-export function assertLoginAllowed(status: "ACTIVE" | "INACTIVE" | "BANNED"): void {
-  if (status === "BANNED") throw new AccountBannedError();
-  if (status === "INACTIVE") throw new AccountInactiveError();
+export function assertLoginAllowed(
+  status: "ACTIVE" | "INACTIVE" | "BANNED",
+  /** Chỉ để nhật ký ghi được tài khoản bị chặn — xem `InvalidCredentialsError`. */
+  userId?: string,
+): void {
+  if (status === "BANNED") throw new AccountBannedError(userId);
+  if (status === "INACTIVE") throw new AccountInactiveError(userId);
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +499,8 @@ export class PhoneVerificationDisabledError extends DomainError {
  */
 export class PhoneOtpThrottledError extends DomainError {
   readonly code = "RATE_LIMITED" as const;
-  constructor(retryAfterSeconds: number) {
+  /** Đi ra header `Retry-After` của response 429 — xem `handleApiError`. */
+  constructor(readonly retryAfterSeconds: number) {
     super(
       retryAfterSeconds >= 3600
         ? "Số điện thoại này đã nhận quá nhiều mã hôm nay. Vui lòng thử lại vào ngày mai."
@@ -426,6 +533,35 @@ export class SlotTakenError extends DomainError {
 export class SlotUnavailableError extends DomainError {
   readonly code = "CONFLICT" as const;
   constructor(message = "Khung giờ này không đặt được") {
+    super(message);
+  }
+}
+
+/**
+ * Dữ liệu đặt sân sai HÌNH DẠNG — phút lệch khung 30, giờ ngược, hai dãy chồng
+ * nhau trong cùng một lần đặt.
+ *
+ * Tách khỏi `SlotUnavailableError` (CONFLICT) vì đây không phải chuyện "người
+ * khác lấy mất": giao diện chuẩn không bao giờ gửi dữ liệu như vậy, nên báo
+ * "vừa có người đặt mất" là nói sai sự thật với người đang dò lỗi.
+ */
+export class BookingValidationError extends DomainError {
+  readonly code = "VALIDATION_ERROR" as const;
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+/**
+ * Cơ sở không ở trạng thái mở bán (nháp, chờ duyệt, tạm nghỉ, bảo trì, bị khoá).
+ *
+ * Trang sân đã ẩn lưới đặt trong trường hợp này, nên lỗi chỉ tới từ request
+ * tự chế hoặc từ người mở trang TRƯỚC lúc sân đóng — câu báo phải nói đúng lý
+ * do chứ không đổ cho "khung giờ đã có người".
+ */
+export class VenueNotBookableError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(message = "Sân này đang tạm ngừng nhận đặt. Chọn sân khác giúp bạn nhé.") {
     super(message);
   }
 }
@@ -502,23 +638,6 @@ export class ManualApprovalNotAllowedError extends DomainError {
   }
 }
 
-/**
- * Số tiền cổng báo về khác số tiền của giao dịch.
- *
- * KHÔNG tự xác nhận trong trường hợp này dù webhook nói "thành công": chênh
- * lệch nghĩa là hoặc mã đối soát bị dùng lại, hoặc có người sửa số tiền giữa
- * đường. Cả hai đều phải có người xem.
- */
-export class PaymentAmountMismatchError extends DomainError {
-  readonly code = "CONFLICT" as const;
-  constructor(
-    readonly expected: number,
-    readonly received: number,
-  ) {
-    super(`Số tiền không khớp: giao dịch ${expected}đ, cổng báo ${received}đ`);
-  }
-}
-
 /** Sân chưa khai tài khoản ngân hàng nên không dựng được mã QR chuyển khoản. */
 export class VenueBankAccountMissingError extends DomainError {
   readonly code = "CONFLICT" as const;
@@ -580,14 +699,136 @@ export class VenueAdminLockedError extends DomainError {
 }
 
 /**
- * Chưa đủ điều kiện mở bán.
+ * Chưa đủ điều kiện mở bán (hoặc gửi duyệt).
  *
  * Mang theo danh sách thứ còn thiếu để giao diện chỉ thẳng vào chỗ cần sửa,
  * thay vì bắt chủ sân đi dò từng màn xem thiếu gì.
  */
 export class VenueNotReadyError extends DomainError {
   readonly code = "CONFLICT" as const;
-  constructor(readonly missing: string[]) {
-    super(`Chưa mở bán được: sân còn thiếu ${missing.join(", ")}`);
+  constructor(
+    readonly missing: string[],
+    /** Việc đang bị chặn — "mở bán" hay "gửi duyệt" — để câu báo nói đúng việc người dùng vừa bấm. */
+    action = "mở bán",
+  ) {
+    super(`Chưa ${action} được: sân còn thiếu ${missing.join(", ")}`);
+  }
+}
+
+/**
+ * Chuyển trạng thái cơ sở không có trong đồ thị cho phép (vd bản nháp nhảy thẳng
+ * sang đang nhận đặt), hoặc trạng thái vừa bị người khác đổi trong lúc bấm.
+ *
+ * Tách khỏi `VenueConfigError`: đây không phải dữ liệu nhập sai mà là thứ tự
+ * nghiệp vụ sai — người dùng cần biết cơ sở ĐANG ở trạng thái nào.
+ */
+export class VenueStatusTransitionError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+/**
+ * Chặn lạm dụng màn đăng ký cơ sở: một người chỉ giữ được vài hồ sơ chưa duyệt
+ * cùng lúc. Không có trần thì một tài khoản đẻ ra hàng trăm cơ sở rác lấp hàng
+ * chờ duyệt, và slug đẹp bị chiếm trước.
+ */
+export class VenueDraftLimitError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(readonly limit: number) {
+    super(
+      `Bạn đang có ${limit} cơ sở chưa được duyệt. Hoàn tất hoặc chờ duyệt bớt rồi hãy đăng ký thêm nhé.`,
+    );
+  }
+}
+
+/**
+ * Đóng sân chồng lên lượt đặt còn sống.
+ *
+ * Ràng buộc chống trùng ở database không biết tới lịch đóng sân, nên nếu cho
+ * đóng thì khách đã trả tiền tới nơi mới thấy sân khoá. Người gọi phải huỷ hoặc
+ * dời các lượt đó trước. Câu báo do service dựng (có mã + giờ từng lượt).
+ */
+export class CourtClosureConflictError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(
+    readonly bookingCodes: string[],
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export class CourtClosureNotFoundError extends DomainError {
+  readonly code = "NOT_FOUND" as const;
+  constructor() {
+    super("Không tìm thấy lịch đóng sân");
+  }
+}
+
+export class PriceOverrideNotFoundError extends DomainError {
+  readonly code = "NOT_FOUND" as const;
+  constructor() {
+    super("Không tìm thấy giá đè theo ngày");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Hoá đơn hoa hồng
+// ---------------------------------------------------------------------------
+
+export class InvoiceNotFoundError extends DomainError {
+  readonly code = "NOT_FOUND" as const;
+  constructor() {
+    super("Không tìm thấy hoá đơn");
+  }
+}
+
+export class InvoicePaidError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor() {
+    super("Hoá đơn đã thu tiền rồi, không miễn được");
+  }
+}
+
+export class InvoiceWaivedError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor() {
+    super("Hoá đơn này đã được miễn");
+  }
+}
+
+/**
+ * Xuất hoá đơn cho tháng chưa kết thúc. Hoá đơn là ảnh chụp: chốt giữa tháng là
+ * thiếu nửa tháng doanh thu, mà ràng buộc (cơ sở, kỳ) lại chặn xuất bản đủ về sau.
+ */
+export class InvoicePeriodOpenError extends DomainError {
+  readonly code = "CONFLICT" as const;
+  constructor(period: string) {
+    super(`Tháng ${period} chưa kết thúc, chưa xuất hoá đơn được`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Đánh giá
+// ---------------------------------------------------------------------------
+
+/**
+ * Tách khỏi `BookingNotFoundError`: chủ sân trả lời một ĐÁNH GIÁ, báo "không
+ * tìm thấy lượt đặt sân" là nói sai về chính thứ họ vừa bấm.
+ */
+export class ReviewNotFoundError extends DomainError {
+  readonly code = "NOT_FOUND" as const;
+  constructor() {
+    super("Không tìm thấy đánh giá");
+  }
+}
+
+/** Điểm không phải số nguyên 1–5. Database cũng chặn, đây là lớp báo lỗi tử tế. */
+export class ReviewRatingError extends DomainError {
+  readonly code = "VALIDATION_ERROR" as const;
+  constructor() {
+    super("Điểm đánh giá phải từ 1 tới 5 sao");
   }
 }

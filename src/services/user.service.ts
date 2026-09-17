@@ -1,6 +1,7 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient, UserStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { SYSTEM_ROLES, isKnownPermission } from "@/lib/permissions";
+import { isUniqueViolation } from "@/lib/prisma-errors";
 import { buildPaginationMeta, toPrismaPage, type Paginated } from "@/schemas/common.schema";
 import {
   type CreateUserInput,
@@ -11,14 +12,40 @@ import {
 } from "@/schemas/user.schema";
 import { CryptoUtils } from "@/lib/crypto";
 import { type PermissionService, permissionService } from "@/services/permission.service";
+import { type SecurityStampService, securityStampService } from "@/services/security-stamp.service";
 import {
   DuplicateFieldError,
   InsufficientRoleLevelError,
+  PermissionNotHeldError,
   SelfActionForbiddenError,
   UnknownPermissionError,
   UnknownRoleKeyError,
   UserNotFoundError,
 } from "@/lib/errors";
+
+/**
+ * Ai đang thao tác — THAM SỐ BẮT BUỘC của mọi hàm ghi có chốt bậc quyền lực.
+ *
+ * `string | null` chứ không phải `actorId?: string`: bản cũ để tuỳ chọn, và
+ * nơi gọi QUÊN truyền thì mọi chốt `Role.level` lặng lẽ biến mất — `POST
+ * /api/v1/users` từng cho ADMIN tạo tài khoản SUPER_ADMIN đúng theo cách đó.
+ * Bắt buộc thì quên là lỗi biên dịch; `null` (thao tác của hệ thống: seed,
+ * script, đăng ký công khai) phải được viết ra tường minh.
+ */
+export type ActorOptions = { actorId: string | null };
+
+/**
+ * Hằng số tên partial unique index trên bảng `users`
+ * (`prisma/migrations/20260903000000_init`).
+ *
+ * Prisma 7 + driver adapter không còn `meta.target`; tên ràng buộc chỉ nằm
+ * trong `meta.driverAdapterError.cause.originalMessage` — xem GOTCHAS #10.
+ */
+const UNIQUE_INDEX_BY_FIELD = {
+  email: "users_email_active_key",
+  username: "users_username_active_key",
+  phone: "users_phone_active_key",
+} as const;
 
 /**
  * `select` dùng chung cho MỌI truy vấn trả user ra ngoài.
@@ -78,6 +105,7 @@ export class UserService {
   constructor(
     private readonly db: PrismaClient = prisma,
     private readonly permissions: PermissionService = permissionService,
+    private readonly securityStamps: SecurityStampService = securityStampService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -113,9 +141,10 @@ export class UserService {
    * mình" không cứu được, vì họ tạo tài khoản KHÁC.
    *
    * `actorId` là `null` khi thao tác đến từ hệ thống (seed, script, job nền) —
-   * lúc đó không có ai để so bậc, và bỏ qua là đúng.
+   * lúc đó không có ai để so bậc, và bỏ qua là đúng. `null` phải được truyền
+   * TƯỜNG MINH (xem `ActorOptions`), không bao giờ là hệ quả của việc quên.
    */
-  private async assertCanActOn(actorId: string | null | undefined, targetUserId: string) {
+  private async assertCanActOn(actorId: string | null, targetUserId: string) {
     if (!actorId) return;
 
     const [actorLevel, targetLevel] = await Promise.all([
@@ -138,7 +167,7 @@ export class UserService {
    * `assertCanActOn`, ADMIN không đụng được vào ADMIN khác. Muốn thêm người
    * cùng bậc thì phải do bậc CAO HƠN thực hiện.
    */
-  private async assertCanAssignRoles(actorId: string | null | undefined, roleKeys: string[]) {
+  private async assertCanAssignRoles(actorId: string | null, roleKeys: string[]) {
     if (!actorId || roleKeys.length === 0) return;
 
     const [actorLevel, roles] = await Promise.all([
@@ -282,28 +311,32 @@ export class UserService {
     }
   }
 
-  /** Đổi P2002 của Prisma thành lỗi nghiệp vụ chỉ đúng trường bị trùng. */
+  /**
+   * Đổi vi phạm partial unique index thành lỗi nghiệp vụ chỉ đúng trường bị
+   * trùng — nhánh này chạy khi hai request cùng lúc qua được `assertUnique`.
+   *
+   * Lỗi thật trước đây: bản cũ đọc `meta.target`, thứ Prisma 7 không còn trả.
+   * Nhánh không bao giờ khớp, và người thua cuộc đua nhận 500 thay vì "Email
+   * đã được sử dụng".
+   */
   private static catchDuplicate(error: unknown): never {
-    const code = (error as { code?: string }).code;
-    const target = (error as { meta?: { target?: string[] } }).meta?.target ?? [];
-
-    if (code === "P2002") {
-      for (const field of ["email", "username", "phone"] as const) {
-        if (target.includes(field)) throw new DuplicateFieldError(field);
+    for (const [field, constraint] of Object.entries(UNIQUE_INDEX_BY_FIELD)) {
+      if (isUniqueViolation(error, constraint)) {
+        throw new DuplicateFieldError(field as keyof typeof UNIQUE_INDEX_BY_FIELD);
       }
     }
 
     throw error;
   }
 
-  async create(input: CreateUserInput & { actorId?: string | null }): Promise<PublicUser> {
+  async create(input: CreateUserInput, options: ActorOptions): Promise<PublicUser> {
     await this.assertUnique(input);
 
     const roleKeys = input.roleKeys?.length ? input.roleKeys : [SYSTEM_ROLES.USER];
 
     // TRƯỚC khi tạo. Đây là đường leo thang đặc quyền rõ nhất: tạo một tài
     // khoản SUPER_ADMIN rồi tự đăng nhập vào đó.
-    await this.assertCanAssignRoles(input.actorId, roleKeys);
+    await this.assertCanAssignRoles(options.actorId, roleKeys);
 
     const roleIds = await this.resolveRoleIds(roleKeys);
 
@@ -322,7 +355,7 @@ export class UserService {
           // nhánh không tồn tại là một nhánh không thể sai.
           profile: { create: { fullName: input.fullName ?? null } },
           userRoles: {
-            create: roleIds.map((roleId) => ({ roleId, assignedBy: input.actorId ?? null })),
+            create: roleIds.map((roleId) => ({ roleId, assignedBy: options.actorId })),
           },
         },
         select: USER_SELECT,
@@ -336,14 +369,10 @@ export class UserService {
     }
   }
 
-  async update(
-    id: string,
-    input: UpdateUserInput,
-    options: { actorId?: string | null } = {},
-  ): Promise<PublicUser> {
+  async update(id: string, input: UpdateUserInput, options: ActorOptions): Promise<PublicUser> {
     const existing = await this.db.user.findFirst({
       where: { id, deletedAt: null },
-      select: { id: true },
+      select: { id: true, email: true },
     });
     if (!existing) throw new UserNotFoundError(id);
 
@@ -359,6 +388,14 @@ export class UserService {
     await this.assertUnique(input, id);
 
     const roleIds = input.roleKeys ? await this.resolveRoleIds(input.roleKeys) : null;
+
+    /*
+     * Email do QUẢN TRỊ VIÊN gõ chưa ai chứng minh là của người dùng. Giữ nguyên
+     * `emailVerifiedAt` của địa chỉ cũ là để một email chưa xác thực mang dấu
+     * "đã xác thực" — và OAuth liên kết theo email đã xác thực (xem
+     * `OAuthService`), nên đó là cửa chiếm tài khoản.
+     */
+    const emailChanged = input.email !== undefined && input.email !== existing.email;
 
     try {
       const row = await this.db.$transaction(async (tx) => {
@@ -376,15 +413,27 @@ export class UserService {
           });
         }
 
+        // Đổi trạng thái qua đây phải có ĐÚNG hệ quả như `setStatus` — không thì
+        // khoá bằng PATCH users/[id] để lại phiên cũ sống tiếp.
+        if (input.status !== undefined && input.status !== "ACTIVE") {
+          await tx.refreshToken.updateMany({
+            where: { userId: id, revokedAt: null },
+            data: { revokedAt: new Date() },
+          });
+        }
+
         const hasProfileChange = input.fullName !== undefined;
 
         return tx.user.update({
           where: { id },
           data: {
             ...(input.email !== undefined ? { email: input.email } : {}),
+            ...(emailChanged ? { emailVerifiedAt: null } : {}),
             ...(input.phone !== undefined ? { phone: input.phone } : {}),
             ...(input.username !== undefined ? { username: input.username } : {}),
-            ...(input.status !== undefined ? { status: input.status } : {}),
+            ...(input.status !== undefined
+              ? { status: input.status, ...UserService.clearLockWhenActive(input.status) }
+              : {}),
             ...(hasProfileChange
               ? {
                   profile: {
@@ -401,6 +450,7 @@ export class UserService {
       });
 
       await this.permissions.invalidateUser(row.id);
+      if (input.status !== undefined) await this.securityStamps.invalidate(row.id);
 
       return toPublicUser(row);
     } catch (error) {
@@ -408,7 +458,22 @@ export class UserService {
     }
   }
 
-  /** Cập nhật hồ sơ của CHÍNH người đang đăng nhập. */
+  /**
+   * Về ACTIVE thì bỏ luôn khoá tạm: `lockedUntil` là hệ quả của brute-force mật
+   * khẩu, không liên quan tới quyết định hành chính vừa rồi. Giữ lại thì admin
+   * "mở khoá" xong người dùng vẫn không vào được.
+   */
+  private static clearLockWhenActive(status: UserStatus) {
+    return status === "ACTIVE" ? { lockedUntil: null, failedLoginAttempts: 0 } : {};
+  }
+
+  /**
+   * Cập nhật hồ sơ của CHÍNH người đang đăng nhập.
+   *
+   * Chỉ trường HỒ SƠ (`updateProfileSchema`): email, số điện thoại, tên đăng
+   * nhập, trạng thái, vai trò đều có luồng riêng với chốt riêng, không đi qua
+   * đây.
+   */
   async updateProfile(userId: string, input: UpdateProfileInput): Promise<PublicUser> {
     const existing = await this.db.user.findFirst({
       where: { id: userId, deletedAt: null },
@@ -463,11 +528,17 @@ export class UserService {
     };
   }
 
+  /**
+   * Khoá / tạm ngưng / mở lại một tài khoản.
+   *
+   * Trả kèm trạng thái TRƯỚC khi đổi để nhật ký ghi được `{ from, to }` — "mở
+   * khoá" từ BANNED và từ INACTIVE là hai sự kiện khác nhau với người tra cứu.
+   */
   async setStatus(
     id: string,
-    status: PublicUser["status"],
-    options: { actorId?: string | null } = {},
-  ): Promise<PublicUser> {
+    status: UserStatus,
+    options: ActorOptions,
+  ): Promise<{ user: PublicUser; previousStatus: UserStatus }> {
     if (options.actorId && options.actorId === id) {
       throw new SelfActionForbiddenError("đổi trạng thái");
     }
@@ -476,20 +547,14 @@ export class UserService {
 
     const existing = await this.db.user.findFirst({
       where: { id, deletedAt: null },
-      select: { id: true },
+      select: { id: true, status: true },
     });
     if (!existing) throw new UserNotFoundError(id);
 
     const row = await this.db.$transaction(async (tx) => {
       const updated = await tx.user.update({
         where: { id },
-        data: {
-          status,
-          // Bỏ khoá tạm khi được mở lại: `lockedUntil` là hệ quả của brute-force
-          // mật khẩu, không liên quan tới quyết định hành chính vừa rồi. Giữ
-          // lại thì admin "mở khoá" xong người dùng vẫn không vào được.
-          ...(status === "ACTIVE" ? { lockedUntil: null, failedLoginAttempts: 0 } : {}),
-        },
+        data: { status, ...UserService.clearLockWhenActive(status) },
         select: USER_SELECT,
       });
 
@@ -505,7 +570,11 @@ export class UserService {
       return updated;
     });
 
-    return toPublicUser(row);
+    // Refresh token đã thu hồi ở trên; dòng này cắt nốt cookie web và access
+    // token đang cầm — ngay request kế tiếp, không đợi cache 60 giây.
+    await this.securityStamps.invalidate(id);
+
+    return { user: toPublicUser(row), previousStatus: existing.status };
   }
 
   /**
@@ -516,7 +585,7 @@ export class UserService {
    * "mở khoá cho người gõ nhầm mật khẩu" vô tình gỡ luôn lệnh đình chỉ mà quản
    * trị viên khác vừa đặt.
    */
-  async unlock(id: string, options: { actorId?: string | null } = {}): Promise<PublicUser> {
+  async unlock(id: string, options: ActorOptions): Promise<PublicUser> {
     await this.assertCanActOn(options.actorId, id);
 
     const existing = await this.db.user.findFirst({
@@ -545,7 +614,7 @@ export class UserService {
    * không có bước này thì địa chỉ email đó vĩnh viễn không ai đăng ký lại được,
    * kể cả chính chủ.
    */
-  async softDelete(id: string, options: { actorId?: string | null } = {}): Promise<void> {
+  async softDelete(id: string, options: ActorOptions): Promise<void> {
     if (options.actorId && options.actorId === id) {
       throw new SelfActionForbiddenError("xoá");
     }
@@ -578,23 +647,42 @@ export class UserService {
     ]);
 
     await this.permissions.invalidateUser(id);
+    await this.securityStamps.invalidate(id);
   }
 
   // -------------------------------------------------------------------------
   // Quyền riêng của từng người (đè lên quyền đến từ vai trò)
   // -------------------------------------------------------------------------
 
+  /**
+   * Cấp (`isGranted: true`) hoặc tước (`false`) một quyền lẻ.
+   *
+   * Hai chốt:
+   *   1. Bậc vai trò (`assertCanActOn`) — không đụng vào người ngang/trên mình.
+   *   2. CẤP thì người cấp phải ĐANG CÓ quyền đó. Không có chốt này thì ADMIN
+   *      tick `payout:approve` (quyền chỉ SUPER_ADMIN có) cho một tài khoản phụ
+   *      bậc thấp rồi dùng tài khoản đó — chốt bậc vai trò không thấy gì lạ.
+   *      Tước thì không cần: bỏ bớt quyền của người dưới mình không mở ra gì.
+   */
   async setUserPermission(
     userId: string,
     permissionKey: string,
     isGranted: boolean,
-    options: { actorId?: string | null; expiresAt?: Date | null } = {},
+    options: ActorOptions & { expiresAt?: Date | null },
   ): Promise<void> {
     if (!isKnownPermission(permissionKey)) throw new UnknownPermissionError([permissionKey]);
 
     // Cấp/tước quyền lẻ là một dạng đổi thẩm quyền — phải chịu cùng chốt chặn
     // với việc đổi vai trò, nếu không thì nó trở thành đường vòng.
     await this.assertCanActOn(options.actorId, userId);
+
+    if (
+      isGranted &&
+      options.actorId &&
+      !(await this.permissions.can(options.actorId, permissionKey))
+    ) {
+      throw new PermissionNotHeldError([permissionKey]);
+    }
 
     const permission = await this.db.permission.findUnique({
       where: { key: permissionKey },
@@ -622,8 +710,20 @@ export class UserService {
     await this.permissions.invalidateUser(userId);
   }
 
-  /** Gỡ ngoại lệ, trả người dùng về đúng quyền của vai trò họ đang mang. */
-  async clearUserPermission(userId: string, permissionKey: string): Promise<void> {
+  /**
+   * Gỡ ngoại lệ, trả người dùng về đúng quyền của vai trò họ đang mang.
+   *
+   * Chịu CÙNG chốt bậc vai trò như cấp/tước: gỡ một lệnh TƯỚC quyền chính là
+   * trả lại quyền đó. Không có chốt thì ADMIN gỡ được lệnh tước đặt trên một
+   * ADMIN khác, hay trên SUPER_ADMIN.
+   */
+  async clearUserPermission(
+    userId: string,
+    permissionKey: string,
+    options: ActorOptions,
+  ): Promise<void> {
+    await this.assertCanActOn(options.actorId, userId);
+
     const permission = await this.db.permission.findUnique({
       where: { key: permissionKey },
       select: { id: true },

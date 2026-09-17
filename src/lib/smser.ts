@@ -28,7 +28,9 @@ import { logger } from "@/lib/logger";
  *
  * Mỗi dự án Việt Nam dùng một bên khác nhau (eSMS, Viettel, VNPT, Twilio), nên
  * bộ khung cố ý không chọn hộ. Viết một object thoả `Smser` rồi gọi
- * `setSmser()` trong `apps/api/src/main.ts`:
+ * `setSmser()` ở MỌI tiến trình chạy job `sms:send`: `worker/main.ts` (khi
+ * `QUEUE_ENABLED=1`) và `register()` trong `src/instrumentation.ts` (khi
+ * `QUEUE_ENABLED=0` — job chạy ngay trong tiến trình web):
  *
  *   setSmser({
  *     async send({ to, text }) {

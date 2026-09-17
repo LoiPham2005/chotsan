@@ -1,6 +1,7 @@
-import { requireApiUser } from "@/lib/api/auth";
+import { clientIp, requireApiUser } from "@/lib/api/auth";
 import { apiErrors, apiOk, handleApiError } from "@/lib/api/response";
-import { logger } from "@/lib/logger";
+import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
+import { auditService } from "@/services/audit.service";
 import { tokenService } from "@/services/token.service";
 
 export const dynamic = "force-dynamic";
@@ -38,7 +39,16 @@ export async function DELETE(request: Request, { params }: RouteContext) {
       throw apiErrors.notFound("Không tìm thấy phiên đăng nhập");
     }
 
-    logger.info("Thu hồi một phiên đăng nhập", { userId: session.sub, sessionId: id });
+    await auditService.record({
+      action: AUDIT_ACTIONS.SESSION_REVOKED,
+      entity: "user",
+      entityId: session.sub,
+      actorId: session.sub,
+      actorEmail: session.email,
+      metadata: { sessionId: id, scope: "one_device" },
+      ip: clientIp(request),
+      userAgent: request.headers.get("user-agent"),
+    });
 
     return apiOk({ id });
   } catch (error) {

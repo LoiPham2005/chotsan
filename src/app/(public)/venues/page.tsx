@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { fieldClassName, Input } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
 import { VenueCard } from "@/components/venue/venue-card";
 import { sportService } from "@/services/sport.service";
 import { venueService } from "@/services/venue.service";
@@ -34,7 +35,8 @@ export default async function VenueSearchPage({
 
   const page = Number(read("page") ?? 1);
 
-  const [result, sports] = await Promise.all([
+  // Ba truy vấn độc lập — chạy song song.
+  const [result, sports, provinces] = await Promise.all([
     venueService.search({
       q: read("q"),
       sportKey: read("mon"),
@@ -43,6 +45,7 @@ export default async function VenueSearchPage({
       limit: 12,
     }),
     sportService.listActive(),
+    venueService.listActiveProvinces(),
   ]);
 
   const { items, meta } = result;
@@ -51,7 +54,12 @@ export default async function VenueSearchPage({
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-10 lg:px-8">
       <h1 className="text-2xl font-bold text-content sm:text-3xl">Tìm sân</h1>
 
-      <form method="get" className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+      {/*
+        `?tinh=` đã được đọc từ lâu nhưng KHÔNG có ô nào để chọn — lọc theo tỉnh
+        chỉ làm được bằng cách tự sửa URL. Tên tham số giữ nguyên (`mon`, `tinh`):
+        link cũ đã chia sẻ vẫn phải mở ra đúng kết quả.
+      */}
+      <form method="get" className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto_auto_auto]">
         <Input
           type="search"
           name="q"
@@ -64,12 +72,26 @@ export default async function VenueSearchPage({
           name="mon"
           defaultValue={read("mon") ?? ""}
           aria-label="Môn thể thao"
-          className="h-10 rounded-token-md border border-line bg-surface px-3 text-sm text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60 sm:w-44"
+          className={cn(fieldClassName, "h-11 cursor-pointer sm:w-44")}
         >
           <option value="">Tất cả môn</option>
-          {sports.map((mon) => (
-            <option key={mon.key} value={mon.key}>
-              {mon.name}
+          {sports.map((sport) => (
+            <option key={sport.key} value={sport.key}>
+              {sport.name}
+            </option>
+          ))}
+        </select>
+
+        <select
+          name="tinh"
+          defaultValue={read("tinh") ?? ""}
+          aria-label="Tỉnh/thành phố"
+          className={cn(fieldClassName, "h-11 cursor-pointer sm:w-48")}
+        >
+          <option value="">Mọi tỉnh/thành</option>
+          {provinces.map((province) => (
+            <option key={province} value={province}>
+              {province}
             </option>
           ))}
         </select>
@@ -85,14 +107,18 @@ export default async function VenueSearchPage({
         <EmptyResults />
       ) : (
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {items.map((court) => (
+          {items.map((venue, index) => (
             <VenueCard
-              key={court.id}
-              court={{
-                ...court,
+              key={venue.id}
+              // Thẻ ĐẦU nằm trên màn hình đầu — Next đo được ảnh của nó là phần tử
+              // LCP của trang mà lại đang tải lười. Chỉ thẻ đầu: tải ngay cả 12 ảnh
+              // là giành băng thông của chính ảnh cần hiện trước.
+              eager={index === 0}
+              venue={{
+                ...venue,
                 // `Decimal` của Prisma không đi qua ranh giới Server → Client
                 // được. Đổi sang số ngay tại đây, không đẩy xuống component.
-                ratingAvg: Number(court.ratingAvg),
+                ratingAvg: Number(venue.ratingAvg),
               }}
             />
           ))}
@@ -106,7 +132,7 @@ export default async function VenueSearchPage({
 
 function EmptyResults() {
   return (
-    <div className="mt-8 rounded-xl border border-dashed border-line bg-surface p-10 text-center">
+    <div className="mt-8 rounded-token-lg border border-dashed border-line bg-surface p-10 text-center">
       <p className="text-lg font-medium text-content">Chưa tìm thấy sân nào</p>
       <p className="mt-1 text-sm text-muted">
         Thử bỏ bớt bộ lọc, hoặc tìm bằng tên quen thuộc của sân.
@@ -137,35 +163,49 @@ function Pagination({
       if (key !== "page" && typeof value === "string" && value !== "") query.set(key, value);
     }
     if (page > 1) query.set("page", String(page));
-    const chuoi = query.toString();
-    return chuoi ? `/venues?${chuoi}` : "/venues";
+    const search = query.toString();
+    return search ? `/venues?${search}` : "/venues";
   };
 
   return (
     <nav className="mt-8 flex items-center justify-center gap-2" aria-label="Phân trang">
-      <Button asChild variant="outline" size="sm" disabled={meta.page <= 1}>
-        <Link
-          href={buildHref(meta.page - 1)}
-          aria-disabled={meta.page <= 1}
-          className={meta.page <= 1 ? "pointer-events-none opacity-40" : ""}
-        >
-          Trước
-        </Link>
-      </Button>
+      <PageLink href={buildHref(meta.page - 1)} disabled={meta.page <= 1} label="Trước" />
 
       <span className="px-3 text-sm text-muted">
         Trang {meta.page} / {meta.totalPages}
       </span>
 
-      <Button asChild variant="outline" size="sm" disabled={meta.page >= meta.totalPages}>
-        <Link
-          href={buildHref(meta.page + 1)}
-          aria-disabled={meta.page >= meta.totalPages}
-          className={meta.page >= meta.totalPages ? "pointer-events-none opacity-40" : ""}
-        >
-          Sau
-        </Link>
-      </Button>
+      <PageLink
+        href={buildHref(meta.page + 1)}
+        disabled={meta.page >= meta.totalPages}
+        label="Sau"
+      />
     </nav>
+  );
+}
+
+/**
+ * Nút chuyển trang.
+ *
+ * Hết trang thì KHÔNG render link: bản trước là `<Link>` kèm
+ * `pointer-events-none` — chuột không bấm được nhưng Tab tới rồi Enter vẫn đi
+ * tới trang 0 hay trang quá cuối, ra một danh sách rỗng. Phần tử không tương
+ * tác thì không có gì để bàn phím kích hoạt.
+ */
+function PageLink({ href, disabled, label }: { href: string; disabled: boolean; label: string }) {
+  const className = buttonVariants({ variant: "outline", size: "sm" });
+
+  if (disabled) {
+    return (
+      <span aria-disabled="true" className={cn(className, "cursor-not-allowed opacity-40")}>
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <Link href={href} className={className}>
+      {label}
+    </Link>
   );
 }

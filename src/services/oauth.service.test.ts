@@ -2,7 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { OAuthService } from "./oauth.service";
 import { UserService } from "./user.service";
-import { AccountBannedError, AccountInactiveError } from "@/lib/errors";
+import {
+  AccountBannedError,
+  AccountInactiveError,
+  InvalidCredentialsError,
+  OAuthEmailUnverifiedError,
+  TwoFactorRequiredError,
+} from "@/lib/errors";
 
 const USER_ROW = {
   id: "u1",
@@ -75,5 +81,64 @@ describe("OAuthService", () => {
         new OAuthService(db, new UserService(db)).loginWithProfile(profile("loi@gmail.com")),
       ).rejects.toBeInstanceOf(error);
     }
+  });
+
+  it("email trùng tài khoản CHƯA xác thực email → KHÔNG liên kết", async () => {
+    /*
+     * Tiền-chiếm tài khoản: kẻ xấu đăng ký trước bằng email nạn nhân (đăng ký
+     * không bắt xác thực email). Tự liên kết thì nạn nhân "Tiếp tục với Google"
+     * là bước vào tài khoản mà kẻ xấu vẫn giữ mật khẩu.
+     */
+    const db = createDb({
+      user: {
+        findFirst: vi.fn().mockResolvedValue({ ...USER_ROW, emailVerifiedAt: null }),
+        create: vi.fn(),
+      },
+    });
+
+    await expect(
+      new OAuthService(db, new UserService(db)).loginWithProfile(profile("loi@gmail.com")),
+    ).rejects.toBeInstanceOf(OAuthEmailUnverifiedError);
+    expect(db.oAuthAccount.create).not.toHaveBeenCalled();
+    expect(db.user.create).not.toHaveBeenCalled();
+  });
+
+  it("tài khoản đã bật 2FA → đòi bước 2, KHÔNG trả user để cấp phiên", async () => {
+    // Lỗi thật trước đây: OAuth cấp phiên luôn, bỏ qua TOTP người dùng đã bật.
+    const db = createDb({
+      user: {
+        findFirst: vi.fn().mockResolvedValue({ ...USER_ROW, twoFactorEnabledAt: new Date() }),
+        create: vi.fn(),
+      },
+    });
+
+    const error = await new OAuthService(db, new UserService(db))
+      .loginWithProfile(profile("loi@gmail.com"))
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(TwoFactorRequiredError);
+    expect((error as TwoFactorRequiredError).userId).toBe("u1");
+  });
+
+  it("liên kết cũ trỏ vào tài khoản ĐÃ XOÁ MỀM → từ chối như tài khoản không còn", async () => {
+    // Mock lọc theo `where.deletedAt`: tài khoản này chỉ thấy được khi truy vấn
+    // KHÔNG lọc bản ghi đã xoá.
+    const deleted = { ...USER_ROW, status: "INACTIVE" as const, deletedAt: new Date() };
+    const db = createDb({
+      oAuthAccount: {
+        findUnique: vi.fn().mockResolvedValue({ userId: "u1" }),
+        create: vi.fn(),
+      },
+      user: {
+        findFirst: vi.fn(({ where }: { where: { deletedAt?: null } }) =>
+          Promise.resolve("deletedAt" in where ? null : deleted),
+        ),
+        create: vi.fn(),
+      },
+    });
+
+    await expect(
+      new OAuthService(db, new UserService(db)).loginWithProfile(profile("loi@gmail.com")),
+    ).rejects.toBeInstanceOf(InvalidCredentialsError);
   });
 });

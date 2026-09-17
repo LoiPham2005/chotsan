@@ -27,42 +27,57 @@ interface LogoProps {
   className?: string;
   size?: "sm" | "md" | "lg";
   showText?: boolean;
+  /**
+   * Khổ màn dưới đó chỉ còn biểu tượng. Mặc định 360px (SKILL.md: màn hẹp nhất
+   * thì ẩn chữ, giữ biểu tượng). Header của khách dùng 400px — xem `Header`.
+   */
+  textFrom?: 360 | 400;
   title?: string;
   href?: string;
 }
+
+/** Chuỗi class viết đủ để Tailwind quét thấy — không ghép chuỗi động. */
+const HIDE_TEXT_BELOW = { 360: "max-[359px]:hidden", 400: "max-[399px]:hidden" } as const;
 
 export function Logo({
   className,
   size = "md",
   showText = true,
+  textFrom = 360,
   title = "ChốtSân",
   href = "/",
 }: LogoProps) {
   const sizes = {
-    sm: { icon: "h-4 w-4", box: "p-1.5 rounded-lg", text: "text-base font-bold" },
-    md: { icon: "h-5 w-5", box: "p-2 rounded-xl", text: "text-lg font-bold" },
-    lg: { icon: "h-6 w-6", box: "p-2.5 rounded-xl", text: "text-xl font-extrabold" },
+    sm: { icon: "h-4 w-4", box: "p-1.5 rounded-token-control", text: "text-base font-bold" },
+    md: { icon: "h-5 w-5", box: "p-2 rounded-token-md", text: "text-lg font-bold" },
+    lg: { icon: "h-6 w-6", box: "p-2.5 rounded-token-md", text: "text-xl font-extrabold" },
   };
 
   return (
-    <Link href={href} className={cn("flex items-center gap-2.5 group select-none", className)}>
-      <div
-        className={cn(
-          "flex items-center justify-center bg-brand text-white shadow-md shadow-brand/20 transition-transform group-hover:scale-105",
-          sizes[size].box,
-        )}
-      >
+    // `min-h-11`: logo là link về trang chủ — cũng là một ô bấm, cũng cần đủ 44px.
+    // Không đổ bóng, không phóng to khi rê chuột: logo là dấu nhận diện, không
+    // phải nút kêu gọi bấm.
+    // `aria-label`: khi chữ bị ẩn ở màn hẹp, biểu tượng (aria-hidden) không còn
+    // gì để trình đọc màn hình đọc — link về trang chủ thành link không tên.
+    <Link
+      href={href}
+      aria-label={title}
+      className={cn("flex min-h-11 select-none items-center gap-2.5 rounded-token-md", className)}
+    >
+      <div className={cn("flex items-center justify-center bg-brand text-white", sizes[size].box)}>
         <ChotSanMark className={sizes[size].icon} />
       </div>
       {showText && (
         /*
-          Dưới 360px chỉ còn biểu tượng.
-          
+          Màn hẹp chỉ còn biểu tượng.
+
           iPhone SE đời cũ rộng 320px; ở đó logo + "Tìm sân" + hai nút tài khoản
           rộng hơn màn hình và đẩy tràn ngang CẢ TRANG. Biểu tượng một mình vẫn
           nhận ra được app, còn trang tràn ngang thì không cứu được bằng gì.
         */
-        <span className={cn("tracking-tight text-content max-[359px]:hidden", sizes[size].text)}>
+        <span
+          className={cn("tracking-tight text-content", HIDE_TEXT_BELOW[textFrom], sizes[size].text)}
+        >
           {title}
         </span>
       )}

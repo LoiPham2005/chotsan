@@ -1,35 +1,37 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState } from "react";
 import { deleteUserAction } from "./actions";
-import { Button } from "@/components/ui/button";
+import { ConfirmButton } from "@/components/ui/confirm-button";
 
+/**
+ * Xoá (mềm) một tài khoản. Hỏi lại ngay tại dòng, lỗi hiện ngay dưới nút — xem
+ * `UserStatusButton` về lý do không dùng `window.confirm`/`window.alert`.
+ */
 export function UserDeleteButton({ id, email }: { id: string; email: string }) {
-  const [isPending, startTransition] = useTransition();
-
-  const handleDelete = () => {
-    if (
-      typeof window !== "undefined" &&
-      window.confirm(`Bạn có chắc chắn muốn xoá người dùng ${email}?`)
-    ) {
-      startTransition(async () => {
-        const res = await deleteUserAction(id);
-        if (res.error) {
-          window.alert(`Lỗi: ${res.error}`);
-        }
-      });
-    }
-  };
+  const [error, setError] = useState<string | null>(null);
 
   return (
-    <Button
-      type="button"
-      onClick={handleDelete}
-      disabled={isPending}
-      variant="destructive"
-      size="sm"
+    <form
+      className="max-w-full"
+      action={async () => {
+        setError(null);
+        const res = await deleteUserAction(id);
+        if (res.error) setError(res.error);
+      }}
     >
-      {isPending ? "Đang xoá..." : "Xoá"}
-    </Button>
+      <ConfirmButton
+        label="Xoá"
+        prompt={`Xoá người dùng ${email}? Tài khoản không đăng nhập được nữa và biến khỏi danh sách.`}
+        confirmLabel="Xác nhận xoá"
+        pendingLabel="Đang xoá…"
+        variant="destructive"
+      />
+      {error && (
+        <p role="alert" className="mt-1 text-sm text-danger-text">
+          {error}
+        </p>
+      )}
+    </form>
   );
 }

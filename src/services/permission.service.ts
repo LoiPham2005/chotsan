@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import {
   isKnownPermission,
   isVenueScopedPermission,
+  PERMISSIONS,
   VENUE_OWNER_ONLY,
   VENUE_STAFF_DEFAULT,
   type Permission,
@@ -41,6 +42,13 @@ import { cacheDelByPrefix, cacheGet, cacheSet } from "@/lib/cache";
  * 2. Quyền LUÔN được tra lại từ đây, KHÔNG BAO GIỜ đọc từ JWT. Ký quyền vào
  *    token nghĩa là sửa phân quyền không có tác dụng cho tới khi token hết hạn
  *    — người vừa bị tước quyền vẫn thao tác được thêm 15 phút nữa.
+ *
+ * ---
+ * TÀI KHOẢN KHÔNG ACTIVE THÌ KHÔNG CÓ QUYỀN NÀO
+ *
+ * Phiên của tài khoản bị khoá đã bị `securityStampService` cắt ở cửa. Lọc
+ * `status` ở đây nữa là lớp thứ hai: một đường đọc phiên nào đó quên phép kiểm
+ * kia (hoặc nó bị tắt nhầm) thì người bị khoá vẫn không làm được gì.
  */
 
 /**
@@ -97,7 +105,7 @@ export class PermissionService {
 
   private async load(userId: string): Promise<Permission[]> {
     const user = await this.db.user.findFirst({
-      where: { id: userId, deletedAt: null },
+      where: { id: userId, deletedAt: null, status: "ACTIVE" },
       select: {
         userRoles: {
           select: {
@@ -160,18 +168,6 @@ export class PermissionService {
 
   async can(userId: string, permission: Permission): Promise<boolean> {
     return (await this.permissionsFor(userId)).has(permission);
-  }
-
-  /** Đúng khi có ÍT NHẤT MỘT trong các quyền được liệt kê. */
-  async canAny(userId: string, permissions: readonly Permission[]): Promise<boolean> {
-    const granted = await this.permissionsFor(userId);
-    return permissions.some((permission) => granted.has(permission));
-  }
-
-  /** Đúng khi có ĐỦ TẤT CẢ các quyền được liệt kê. */
-  async canAll(userId: string, permissions: readonly Permission[]): Promise<boolean> {
-    const granted = await this.permissionsFor(userId);
-    return permissions.every((permission) => granted.has(permission));
   }
 
   /**
@@ -312,6 +308,20 @@ export class PermissionService {
    *      quản trị viên không làm hộ được — kể cả khi có quyền toàn cục.
    *   2. Là `OWNER` của sân đó → mọi quyền trên sân đó.
    *   3. Là `STAFF` đang hoạt động → bộ mặc định + những quyền chủ sân tick thêm.
+   *
+   * ---
+   * SÂN ĐÃ XOÁ MỀM, SÂN BỊ KHOÁ
+   *
+   * Sân đã xoá mềm (`deletedAt`) thì nhánh THÀNH VIÊN (2, 3) trả `false`: sân
+   * không còn trên nền tảng, chủ cũ và nhân viên cũ không còn việc gì để làm ở
+   * đó. Nhánh quyền toàn cục vẫn giữ — quản trị viên cần mở lại dữ liệu cũ khi
+   * có khiếu nại.
+   *
+   * Sân `ADMIN_LOCKED`, `SUSPENDED`, `UNDER_MAINTENANCE` thì KHÔNG chặn ở đây,
+   * có chủ đích: sân bị khoá hay tạm nghỉ vẫn còn lượt đặt đã trả tiền, còn giao
+   * dịch chờ duyệt, còn khách cần được hoàn tiền. Chặn quyền là khoá chủ sân
+   * khỏi đúng những việc đó. Những gì sân khoá không được làm (mở bán lại, nhận
+   * lượt đặt mới) do chính service nghiệp vụ tự chặn theo trạng thái sân.
    */
   async canOnVenue(userId: string, permission: Permission, venueId: string): Promise<boolean> {
     if (!isKnownPermission(permission)) return false;
@@ -328,10 +338,15 @@ export class PermissionService {
 
     const member = await this.db.venueMember.findUnique({
       where: { venueId_userId: { venueId, userId } },
-      select: { role: true, status: true, permissions: true },
+      select: {
+        role: true,
+        status: true,
+        permissions: true,
+        venue: { select: { deletedAt: true } },
+      },
     });
 
-    if (!member || member.status !== "ACTIVE") return false;
+    if (!member || member.status !== "ACTIVE" || member.venue.deletedAt) return false;
     if (member.role === "OWNER") return true;
 
     // STAFF: bộ mặc định cộng phần được tick thêm. Nhóm chỉ-chủ-sân đã bị chặn
@@ -345,31 +360,49 @@ export class PermissionService {
   }
 
   /**
-   * Danh sách sân mà người này có quyền P — dùng cho màn "chọn sân đang quản".
+   * TOÀN BỘ quyền hiệu lực của một người trên MỘT sân, trong một lượt truy vấn.
    *
-   * Người có quyền toàn cục (quản trị) nhận `null` nghĩa là **mọi sân**, thay
-   * vì trả về danh sách hàng nghìn id.
+   * Dùng khi một màn cần hỏi nhiều quyền cùng lúc (thanh điều hướng khu quản
+   * lý sân, bảng quyền nhân sự): gọi `canOnVenue` năm lần là năm truy vấn
+   * membership giống hệt nhau.
+   *
+   * Luôn khớp `canOnVenue`: `venuePermissions(u, v).has(p) === canOnVenue(u, p, v)`
+   * với mọi `p` — test giữ tính chất đó, vì hai hàm trả lời khác nhau cho cùng
+   * câu hỏi thì giao diện hiện nút mà action từ chối (hoặc ngược lại).
    */
-  async venuesWithPermission(userId: string, permission: Permission): Promise<string[] | null> {
-    const ownerOnly = (VENUE_OWNER_ONLY as readonly string[]).includes(permission);
+  async venuePermissions(userId: string, venueId: string): Promise<ReadonlySet<Permission>> {
+    const [global, member] = await Promise.all([
+      this.permissionsFor(userId),
+      this.db.venueMember.findUnique({
+        where: { venueId_userId: { venueId, userId } },
+        select: {
+          role: true,
+          status: true,
+          permissions: true,
+          venue: { select: { deletedAt: true } },
+        },
+      }),
+    ]);
 
-    if (!ownerOnly && (await this.permissionsFor(userId)).has(permission)) return null;
+    const ownerOnly = new Set<string>(VENUE_OWNER_ONLY);
+    // Nhánh 1 của `canOnVenue`: quyền toàn cục, trừ nhóm chỉ-chủ-sân.
+    const effective = new Set<Permission>([...global].filter((key) => !ownerOnly.has(key)));
 
-    const members = await this.db.venueMember.findMany({
-      where: { userId, status: "ACTIVE" },
-      select: { venueId: true, role: true, permissions: true },
-    });
+    if (member && member.status === "ACTIVE" && !member.venue.deletedAt) {
+      for (const key of PERMISSIONS) {
+        if (!isVenueScopedPermission(key)) continue;
 
-    return members
-      .filter((member) => {
-        if (member.role === "OWNER") return true;
-        if (ownerOnly) return false;
-        return (
-          (VENUE_STAFF_DEFAULT as readonly string[]).includes(permission) ||
-          member.permissions.includes(permission)
-        );
-      })
-      .map((member) => member.venueId);
+        const granted =
+          member.role === "OWNER" ||
+          (!ownerOnly.has(key) &&
+            ((VENUE_STAFF_DEFAULT as readonly string[]).includes(key) ||
+              member.permissions.includes(key)));
+
+        if (granted) effective.add(key);
+      }
+    }
+
+    return effective;
   }
 }
 

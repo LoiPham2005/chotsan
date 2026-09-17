@@ -1,10 +1,11 @@
 import type { PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { permissionService } from "./permission.service";
-import { isKnownPermission } from "@/lib/permissions";
+import { isKnownPermission, type Permission } from "@/lib/permissions";
 import { type CreateRoleInput, type Role, type UpdateRoleInput } from "@/schemas/role.schema";
 import {
   InsufficientRoleLevelError,
+  PermissionNotHeldError,
   RoleInUseError,
   RoleKeyAlreadyExistsError,
   RoleNotFoundError,
@@ -12,6 +13,7 @@ import {
   UnknownPermissionError,
 } from "@/lib/errors";
 import type { PermissionService } from "./permission.service";
+import type { ActorOptions } from "./user.service";
 
 /**
  * Quản trị vai trò và bảng phân quyền.
@@ -68,11 +70,13 @@ export class RoleService {
    * Không có chốt này thì `Role.level` chỉ là trang trí: một ADMIN bị chặn
    * không gán được vai trò SUPER_ADMIN, nhưng lại tạo được một vai trò mới ở
    * bậc 999 rồi tự gán — đi vòng qua đúng thứ vừa dựng lên để chặn.
+   *
+   * `actorId: null` = thao tác của hệ thống (seed), phải truyền TƯỜNG MINH.
+   * Lỗi thật trước đây: mọi nơi gọi `create/update/remove` đều QUÊN truyền
+   * `actorId` (khi đó còn tuỳ chọn), nên chốt này chưa từng chạy — ADMIN tick
+   * được `role:delete`, `setting:update`… cho chính vai trò ADMIN.
    */
-  private async assertCanManageLevel(
-    actorId: string | null | undefined,
-    level: number,
-  ): Promise<void> {
+  private async assertCanManageLevel(actorId: string | null, level: number): Promise<void> {
     if (!actorId) return;
 
     if (level >= (await this.maxRoleLevel(actorId))) {
@@ -80,6 +84,26 @@ export class RoleService {
         `Bạn không đủ thẩm quyền để quản lý vai trò ở bậc ${level}`,
       );
     }
+  }
+
+  /**
+   * Chặn đưa vào vai trò một quyền mà người thao tác KHÔNG có.
+   *
+   * Chốt bậc vai trò chưa đủ: ADMIN (bậc 50) vẫn sửa được vai trò bậc thấp hơn
+   * — kể cả USER mà mọi tài khoản đều mang. Thiếu chốt này, ADMIN tick
+   * `payout:approve` cho USER (hoặc cho một vai trò bậc 49 tự tạo rồi gán cho
+   * tài khoản phụ) và có ngay quyền chi tiền mà chỉ SUPER_ADMIN được có.
+   *
+   * Chỉ xét quyền được THÊM: vai trò có sẵn một quyền mình không có (do bậc
+   * trên cấp) thì vẫn lưu được các thay đổi khác mà không phải gỡ nó ra.
+   */
+  private async assertCanGrant(actorId: string | null, keys: readonly string[]): Promise<void> {
+    if (!actorId || keys.length === 0) return;
+
+    const held = await this.permissions.permissionsFor(actorId);
+    const missing = keys.filter((key) => !held.has(key as Permission));
+
+    if (missing.length > 0) throw new PermissionNotHeldError(missing);
   }
 
   async list(): Promise<Role[]> {
@@ -115,11 +139,12 @@ export class RoleService {
     return role;
   }
 
-  async create(input: CreateRoleInput, options: { actorId?: string | null } = {}): Promise<Role> {
+  async create(input: CreateRoleInput, options: ActorOptions): Promise<Role> {
     const existing = await this.db.role.findUnique({ where: { key: input.key } });
     if (existing) throw new RoleKeyAlreadyExistsError(input.key);
 
     await this.assertCanManageLevel(options.actorId, input.level);
+    await this.assertCanGrant(options.actorId, input.permissions);
 
     const permissionIds = await this.resolvePermissionIds(input.permissions);
 
@@ -141,14 +166,15 @@ export class RoleService {
     return this.findByKey(input.key);
   }
 
-  async update(
-    key: string,
-    input: UpdateRoleInput,
-    options: { actorId?: string | null } = {},
-  ): Promise<Role> {
+  async update(key: string, input: UpdateRoleInput, options: ActorOptions): Promise<Role> {
     const role = await this.db.role.findUnique({
       where: { key },
-      select: { id: true, isSystem: true, level: true },
+      select: {
+        id: true,
+        isSystem: true,
+        level: true,
+        permissions: { select: { permission: { select: { key: true } } } },
+      },
     });
     if (!role) throw new RoleNotFoundError(key);
 
@@ -156,6 +182,14 @@ export class RoleService {
     await this.assertCanManageLevel(options.actorId, role.level);
     // …và bậc MỚI: không cho nâng nó lên ngang/vượt mình.
     if (input.level !== undefined) await this.assertCanManageLevel(options.actorId, input.level);
+
+    if (input.permissions) {
+      const current = new Set(role.permissions.map((item) => item.permission.key));
+      await this.assertCanGrant(
+        options.actorId,
+        input.permissions.filter((permission) => !current.has(permission)),
+      );
+    }
 
     const permissionIds = input.permissions
       ? await this.resolvePermissionIds(input.permissions)
@@ -186,7 +220,7 @@ export class RoleService {
     return this.findByKey(key);
   }
 
-  async remove(key: string, options: { actorId?: string | null } = {}): Promise<void> {
+  async remove(key: string, options: ActorOptions): Promise<void> {
     const role = await this.db.role.findUnique({
       where: { key },
       select: { id: true, isSystem: true, level: true, _count: { select: { userRoles: true } } },

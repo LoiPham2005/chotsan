@@ -16,7 +16,8 @@ export default async function VenueApprovalsPage() {
   const pending = await venueService.listPendingApproval();
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+    // Lề và khoảng đệm do `(admin)/layout.tsx` lo — trang chỉ giới hạn bề rộng chữ.
+    <div className="max-w-4xl">
       <h1 className="text-2xl font-bold tracking-tight text-content sm:text-3xl">Duyệt cơ sở</h1>
       <p className="mt-1 text-sm text-muted">
         {pending.length === 0
@@ -46,6 +47,7 @@ export default async function VenueApprovalsPage() {
                 courtCount: venue._count.courts,
                 priceRuleCount: venue._count.priceRules,
                 openDayCount: venue._count.hours,
+                hasBankAccount: venue.hasBankAccount,
                 ownerName: venue.members[0]?.user.profile?.fullName ?? null,
                 ownerEmail: venue.members[0]?.user.email ?? null,
               }}

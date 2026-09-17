@@ -2,8 +2,8 @@ import { z } from "zod";
 import { emptyToUndefined, paginationSchema } from "@/schemas/common.schema";
 
 /**
- * Luật về người dùng, khai báo MỘT LẦN cho cả ba phía: form trên web,
- * DTO của NestJS, và tham số của service trong core.
+ * Luật về người dùng, khai báo MỘT LẦN cho cả ba phía: form trên web (Server
+ * Action), body của REST API cho mobile, và tham số của service.
  *
  * Chép luật sang từng tầng là cách chắc chắn nhất để chúng lệch nhau — và chiều
  * lệch nguy hiểm nhất diễn ra trong im lặng: web siết 12 ký tự, API vẫn nhận 6,
@@ -117,6 +117,15 @@ export const updateUserSchema = z.object({
 });
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 
+/**
+ * Hồ sơ mà người dùng TỰ sửa được (`PATCH /api/v1/users/{id}` với id của chính
+ * mình).
+ *
+ * CỐ Ý không có email, số điện thoại, tên đăng nhập, trạng thái, vai trò, mật
+ * khẩu: mỗi thứ có luồng riêng với chốt riêng (xác nhận qua hộp thư mới, OTP,
+ * mật khẩu hiện tại…). Cho tự sửa ở đây là bỏ qua chính những chốt đó — tự đổi
+ * email mà giữ nguyên dấu "đã xác thực" chẳng hạn.
+ */
 export const updateProfileSchema = z.object({
   fullName: emptyToUndefined(fullNameSchema.optional()),
   avatarUrl: emptyToUndefined(z.string().url("Đường dẫn ảnh không hợp lệ").optional()),

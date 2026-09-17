@@ -5,10 +5,10 @@ import type { SmsMessage } from "@/lib/smser";
  * Danh mục job và hình dạng payload của từng loại.
  *
  * ---
- * VÌ SAO Ở TRONG `packages/core`, KHÔNG PHẢI TRONG `apps/worker`
+ * VÌ SAO Ở TRONG `src/jobs`, KHÔNG PHẢI TRONG `worker/`
  *
- * File này được import từ HAI phía: `apps/api` (bên đẩy job vào hàng đợi) và
- * `apps/worker` (bên lấy ra chạy). Đặt ở tầng dùng chung để cả hai nhìn chung
+ * File này được import từ HAI phía: web (`enqueue()` đẩy job vào hàng đợi) và
+ * `worker/` (bên lấy ra chạy). Đặt ở tầng dùng chung để cả hai nhìn chung
  * một định nghĩa — nhờ vậy TypeScript bắt được ngay khi hai bên lệch nhau về
  * payload. Không có bước này thì lỗi lệch payload chỉ lộ ra lúc chạy, và lộ ở
  * tiến trình worker — nơi không ai đang nhìn.
@@ -46,14 +46,14 @@ export type JobPayloads = {
   };
 
   /**
-   * Dọn token đã hết hạn. Chạy theo lịch (`apps/worker` đăng ký repeatable job)
+   * Dọn token đã hết hạn. Chạy theo lịch (danh sách ở `src/jobs/schedules.ts`)
    * — bảng token chỉ tăng: mỗi lần đăng nhập, mỗi lần bấm "quên mật khẩu" là
    * thêm một dòng.
    */
   "maintenance:purge-expired": Record<string, never>;
 
   /**
-   * Nhả những chỗ giữ quá 10 phút mà chưa thanh toán. Chạy MỖI PHÚT.
+   * Nhả những chỗ giữ đã quá hạn giữ chỗ của sân mà chưa thanh toán. Chạy MỖI PHÚT.
    *
    * Đây là job không được phép chết. Không có nó, một người mở trang thanh
    * toán rồi bỏ đi sẽ khoá khung giờ đẹp nhất vĩnh viễn, và chủ sân nhìn thấy
@@ -69,11 +69,12 @@ export type JobPayloads = {
   "payment:expire-pending": Record<string, never>;
 
   /**
-   * Xuất hoá đơn hoa hồng cho THÁNG TRƯỚC. Chạy ngày mùng 1 hằng tháng.
+   * Xuất hoá đơn hoa hồng cho MỌI tháng đã kết thúc còn thiếu, tối đa 3 tháng
+   * gần nhất (giờ VN). Tự bù: lần chạy nào hỏng thì lần sau xuất nốt.
    *
    * Chạy lại nhiều lần không sinh hoá đơn trùng — chốt chặn là
    * `@@unique([venueId, periodStart])` ở database, không phải phép kiểm trong
-   * job.
+   * job. Nhờ vậy lịch chạy HẰNG NGÀY và thử lại khi thất bại đều an toàn.
    */
   "invoice:generate-monthly": Record<string, never>;
 

@@ -5,6 +5,7 @@ import {
   DuplicateFieldError,
   InvalidCredentialsError,
   RefreshTokenReuseError,
+  TooManyTwoFactorAttemptsError,
   UserNotFoundError,
 } from "@/lib/errors";
 
@@ -93,5 +94,27 @@ describe("parseJsonBody", () => {
     await expect(parseJsonBody(jsonRequest("{ khong phai json"), schema)).rejects.toBeInstanceOf(
       ApiError,
     );
+  });
+});
+
+describe("429 kèm Retry-After", () => {
+  it("rate limit theo IP: header nói đúng số giây phải chờ", () => {
+    // Không có header thì app mobile chỉ còn cách đoán — thường là thử lại
+    // ngay, và tự kéo dài lệnh chặn của chính mình.
+    const response = handleApiError(apiErrors.rateLimited(42));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("42");
+  });
+
+  it("lỗi nghiệp vụ RATE_LIMITED mang số giây (bộ đếm 2FA theo tài khoản) cũng có header", () => {
+    const response = handleApiError(new TooManyTwoFactorAttemptsError(600));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("600");
+  });
+
+  it("lỗi không phải 429 thì không có Retry-After", () => {
+    expect(handleApiError(new UserNotFoundError()).headers.get("Retry-After")).toBeNull();
   });
 });

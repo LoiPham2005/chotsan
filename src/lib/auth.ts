@@ -1,11 +1,14 @@
 import "server-only";
 import { cache } from "react";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { userService } from "@/services/user.service";
 import type { Permission } from "./permissions";
 import { permissionService } from "@/services/permission.service";
+import { securityStampService } from "@/services/security-stamp.service";
+import { safeRedirectPath } from "./safe-redirect";
 import {
+  CURRENT_PATH_HEADER,
   SESSION_COOKIE_NAME,
   SESSION_MAX_AGE_SECONDS,
   sessionCookieOptions,
@@ -17,12 +20,25 @@ import {
 export type CurrentUser = NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>;
 
 /**
- * Đọc session từ cookie. Rẻ — chỉ verify chữ ký, không chạm database.
- * `cache()` đảm bảo nhiều component trong cùng một request chỉ verify một lần.
+ * Đọc session từ cookie: chữ ký hợp lệ VÀ phiên chưa bị thu hồi.
+ *
+ * Chữ ký đúng chưa đủ: cookie sống `SESSION_MAX_AGE_DAYS`, và trong quãng đó
+ * tài khoản có thể đã bị khoá, bị xoá, hoặc vừa đổi mật khẩu vì nghi bị chiếm.
+ * `securityStampService` đối chiếu với một ảnh nhỏ của tài khoản (cache ≤60
+ * giây, xoá ngay khi đổi) — nên đây vẫn là một lần đọc cache, không phải một
+ * truy vấn database mỗi request.
+ *
+ * Mọi thứ phía sau đều đi qua đây — `getCurrentUser`, `requireUser`, và cả
+ * bốn wrapper Server Action — nên thu hồi có hiệu lực ở mọi cửa cùng lúc.
+ *
+ * `cache()` đảm bảo nhiều component trong cùng một request chỉ kiểm một lần.
  */
 export const getSession = cache(async (): Promise<SessionPayload | null> => {
   const cookieStore = await cookies();
-  return verifySession(cookieStore.get(SESSION_COOKIE_NAME)?.value);
+  const session = await verifySession(cookieStore.get(SESSION_COOKIE_NAME)?.value);
+  if (!session) return null;
+
+  return (await securityStampService.isTokenStillValid(session.sub, session.iat)) ? session : null;
 });
 
 /**
@@ -42,40 +58,32 @@ export const getCurrentUser = cache(async () => {
   return userService.findById(session.sub);
 });
 
-/** Dùng trong trang/layout. Chưa đăng nhập thì đá về /login. */
+/**
+ * Dùng trong trang/layout. Chưa đăng nhập thì đá về `/login?next=<trang này>`.
+ *
+ * @param returnTo Đích sau khi đăng nhập. Bỏ trống = đúng trang đang mở (kèm
+ * truy vấn), đọc từ header `x-pathname` mà proxy gắn — nên layout dùng chung
+ * cho nhiều trang không phải viết cứng một đường dẫn. Mọi giá trị đều qua
+ * `safeRedirectPath`, kể cả header: request đi vòng qua proxy tự đặt được nó.
+ */
 export async function requireUser(returnTo?: string): Promise<CurrentUser> {
   const user = await getCurrentUser();
   if (!user) {
-    const target = returnTo ? `/login?next=${encodeURIComponent(returnTo)}` : "/login";
-    redirect(target);
+    const next = safeRedirectPath(returnTo ?? (await headers()).get(CURRENT_PATH_HEADER), "");
+    redirect(next ? `/login?next=${encodeURIComponent(next)}` : "/login");
   }
-  return user;
-}
-
-/**
- * Dùng trong trang/layout cần quyền ADMIN.
- *
- * Người đã đăng nhập nhưng không đủ quyền nhận 404 chứ không phải 403: 403 xác
- * nhận cho họ biết tài nguyên đó có tồn tại.
- *
- * Kiểm tra theo VAI TRÒ. Khi câu hỏi là "được làm hành động gì" chứ không phải
- * "có phải quản trị viên không", dùng `requirePermission` — nó không phải sửa
- * lại khi sau này thêm vai trò mới.
- */
-export async function requireAdmin(returnTo?: string): Promise<CurrentUser> {
-  const user = await requireUser(returnTo);
-  if (!user.roles.includes("ADMIN")) notFound();
   return user;
 }
 
 /**
  * Dùng trong trang/layout cần một quyền hạn cụ thể.
  *
- * Nên dùng thay cho `requireAdmin` ở phần lớn trường hợp: khi thêm vai trò mới
- * (MANAGER, STAFF…), chỉ phải sửa bảng trong `permissions.ts`, không phải đi
- * lùng từng chỗ đang so sánh `role === "ADMIN"`.
+ * Kiểm theo QUYỀN, không theo tên vai trò: thêm vai trò mới chỉ phải sửa bảng
+ * phân quyền, không phải đi lùng từng chỗ đang so `role === "ADMIN"` — mà so
+ * như vậy còn chặn nhầm cả SUPER_ADMIN.
  *
- * Cũng trả 404 như `requireAdmin`, vì cùng một lý do.
+ * Người đã đăng nhập nhưng không đủ quyền nhận 404 chứ không phải 403: 403 xác
+ * nhận cho họ biết tài nguyên đó có tồn tại.
  */
 export async function requirePermission(
   permission: Permission,
@@ -102,10 +110,27 @@ export async function requirePermission(
 export async function requireVenueAccess(
   venueId: string,
   permission: Permission,
+  returnTo?: string,
 ): Promise<CurrentUser> {
-  const user = await requireUser(`/manage/${venueId}`);
+  // Không viết cứng `/manage/<id>`: người mở `/manage/<id>/payments` từ thông
+  // báo phải quay lại đúng trang duyệt tiền sau khi đăng nhập.
+  const user = await requireUser(returnTo);
   if (!(await permissionService.canOnVenue(user.id, permission, venueId))) notFound();
   return user;
+}
+
+/**
+ * Trình duyệt đang cầm một cookie phiên ĐÚNG chữ ký nhưng đã bị thu hồi (đổi
+ * mật khẩu ở nơi khác, tài khoản bị khoá/xoá).
+ *
+ * Trang đăng nhập dùng để nói rõ vì sao người dùng phải đăng nhập lại, thay
+ * vì để họ tưởng hệ thống tự đăng xuất vô cớ. Không xoá được cookie ở đây:
+ * Server Component không ghi cookie — lần đăng nhập kế tiếp sẽ ghi đè nó.
+ */
+export async function hasRevokedSessionCookie(): Promise<boolean> {
+  const cookieStore = await cookies();
+  const signed = await verifySession(cookieStore.get(SESSION_COOKIE_NAME)?.value);
+  return signed !== null && (await getSession()) === null;
 }
 
 export async function createSession(payload: SessionPayload): Promise<void> {

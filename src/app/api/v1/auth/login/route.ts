@@ -3,7 +3,7 @@ import { apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
 import { issueTokenPair } from "@/lib/api/tokens";
 import { TwoFactorRequiredError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
-import { RATE_LIMITS, resetRateLimit } from "@/lib/rate-limit";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS, resetRateLimit } from "@/lib/rate-limit";
 import { issueTwoFactorTicket } from "@/lib/tickets";
 import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
 import { loginSchema } from "@/schemas/auth.schema";
@@ -18,10 +18,17 @@ export const dynamic = "force-dynamic";
  * Hai hình dạng response KHÁC HẲN nhau có chủ đích: client buộc phải rẽ nhánh
  * tường minh, thay vì đọc phải một object thiếu `accessToken` rồi hỏng ở đâu
  * đó xa hơn.
+ *
+ * Rate limit dùng CHUNG xô với form đăng nhập web (`RATE_LIMIT_BUCKETS.login`):
+ * luân phiên hai cửa không nhân đôi được số lần thử.
  */
 export async function POST(request: Request) {
   try {
-    const rateLimitKey = await enforceRateLimit(request, "api:login", RATE_LIMITS.login);
+    const rateLimitKey = await enforceRateLimit(
+      request,
+      RATE_LIMIT_BUCKETS.login,
+      RATE_LIMITS.login,
+    );
 
     const body = await parseJsonBody(request, loginSchema);
     const userAgent = request.headers.get("user-agent");
@@ -42,6 +49,8 @@ export async function POST(request: Request) {
         // Không reset rate limit: chưa đăng nhập xong.
         return apiOk(await issueTwoFactorTicket(error.userId));
       }
+
+      await auditService.recordLoginFailure(error, { method: "password", ip, userAgent });
       throw error;
     }
 
@@ -56,6 +65,7 @@ export async function POST(request: Request) {
       entityId: user.id,
       actorId: user.id,
       actorEmail: user.email,
+      metadata: { method: "password", surface: "api" },
       ip,
       userAgent,
     });

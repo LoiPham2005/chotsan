@@ -1,16 +1,15 @@
-import { z } from "zod";
-import { enforceRateLimit } from "@/lib/api/auth";
+import { clientIp, enforceRateLimit } from "@/lib/api/auth";
 import { apiErrors, apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
-import { RATE_LIMITS } from "@/lib/rate-limit";
+import { RefreshTokenReuseError } from "@/lib/errors";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS } from "@/lib/rate-limit";
 import { ACCESS_TOKEN_MAX_AGE_SECONDS, signSession } from "@/lib/session";
+import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
+import { refreshSchema } from "@/schemas/auth.schema";
+import { auditService } from "@/services/audit.service";
 import { userService } from "@/services/user.service";
 import { tokenService } from "@/services/token.service";
 
 export const dynamic = "force-dynamic";
-
-const refreshSchema = z.object({
-  refreshToken: z.string().min(1, "Thiếu refreshToken"),
-});
 
 /**
  * Đổi refresh token lấy cặp token mới.
@@ -20,17 +19,36 @@ const refreshSchema = z.object({
  */
 export async function POST(request: Request) {
   try {
-    await enforceRateLimit(request, "api:refresh", RATE_LIMITS.refresh);
+    await enforceRateLimit(request, RATE_LIMIT_BUCKETS.refresh, RATE_LIMITS.refresh);
 
     const { refreshToken } = await parseJsonBody(request, refreshSchema);
+    const userAgent = request.headers.get("user-agent");
+    const ip = clientIp(request);
 
-    const rotated = await tokenService.rotate(refreshToken, {
-      userAgent: request.headers.get("user-agent"),
-    });
+    let rotated;
+    try {
+      rotated = await tokenService.rotate(refreshToken, { userAgent, ip });
+    } catch (error) {
+      /*
+       * Token ĐÃ thu hồi mà vẫn được nộp lại: service vừa huỷ cả HỌ phiên đó
+       * (không phải mọi phiên của tài khoản). Đây là dấu hiệu token bị đánh
+       * cắp — phải để lại dấu vết tra được theo tài khoản, không chỉ một dòng
+       * log cảnh báo trôi đi.
+       */
+      if (error instanceof RefreshTokenReuseError) {
+        await auditService.record({
+          action: AUDIT_ACTIONS.REFRESH_TOKEN_REUSED,
+          entity: "user",
+          entityId: error.userId,
+          actorId: error.userId,
+          ip,
+          userAgent,
+        });
+      }
+      throw error;
+    }
 
-    // null = token không tồn tại hoặc đã hết hạn. Trường hợp token bị dùng lại
-    // sau khi thu hồi thì service ném RefreshTokenReuseError và huỷ mọi phiên;
-    // handleApiError chuyển nó thành 401.
+    // null = token không tồn tại, hết hạn, hoặc tài khoản không còn ACTIVE.
     if (!rotated) {
       throw apiErrors.unauthenticated("Refresh token không hợp lệ hoặc đã hết hạn");
     }
@@ -52,6 +70,9 @@ export async function POST(request: Request) {
         email: user.email,
         roles: user.roles,
         sid: rotated.refresh.familyId,
+        // Phiên đã qua 2FA/passkey thì access token mới cũng mang dấu đó — bản
+        // cũ đánh rơi `mfa` từ lần refresh đầu tiên.
+        ...(rotated.twoFactorAt ? { mfa: rotated.twoFactorAt.toISOString() } : {}),
       },
       ACCESS_TOKEN_MAX_AGE_SECONDS,
     );

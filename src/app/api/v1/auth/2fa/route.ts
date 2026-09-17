@@ -1,6 +1,6 @@
 import { clientIp, enforceRateLimit, requireApiUser } from "@/lib/api/auth";
 import { apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
-import { RATE_LIMITS } from "@/lib/rate-limit";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS } from "@/lib/rate-limit";
 import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
 import { disableTwoFactorSchema } from "@/schemas/auth.schema";
 import { auditService } from "@/services/audit.service";
@@ -41,7 +41,7 @@ export async function GET(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const session = await requireApiUser(request);
-    await enforceRateLimit(request, "api:2fa", RATE_LIMITS.twoFactor);
+    await enforceRateLimit(request, RATE_LIMIT_BUCKETS.twoFactor, RATE_LIMITS.twoFactor);
 
     const body = await parseJsonBody(request, disableTwoFactorSchema);
     await twoFactorService.disable(session.sub, body.password ?? null, body.code);

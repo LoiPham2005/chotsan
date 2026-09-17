@@ -4,6 +4,27 @@ import nextPlugin from "@next/eslint-plugin-next";
 import reactHooks from "eslint-plugin-react-hooks";
 import prettierConfig from "eslint-config-prettier";
 
+/**
+ * Cấm chạm Prisma ngoài tầng service. Tách thành hằng vì nó phải có mặt trong
+ * MỌI khối `no-restricted-imports`: ESLint flat config không GỘP tuỳ chọn của
+ * cùng một luật giữa hai khối — khối sau THAY hẳn khối trước cho những tệp khớp
+ * cả hai. Khối "phân quyền theo sân" mà quên chép danh sách này là khu quản lý
+ * sân được import Prisma trở lại, trong im lặng.
+ */
+const PRISMA_IMPORT_RESTRICTIONS = [
+  {
+    name: "@/lib/prisma",
+    message:
+      "Route/Action không query database trực tiếp. Thêm method vào src/services/*.ts rồi gọi service.",
+  },
+  {
+    name: "@prisma/client",
+    importNames: ["PrismaClient"],
+    message:
+      "Chỉ src/services/* và src/lib/prisma.ts được dựng PrismaClient. Type Prisma thì import type là được.",
+  },
+];
+
 export default tseslint.config(
   {
     ignores: [
@@ -93,24 +114,7 @@ export default tseslint.config(
     files: ["src/app/**/*.{ts,tsx}", "src/components/**/*.{ts,tsx}", "realtime/**/*.ts"],
     ignores: ["**/*.test.{ts,tsx}"],
     rules: {
-      "no-restricted-imports": [
-        "error",
-        {
-          paths: [
-            {
-              name: "@/lib/prisma",
-              message:
-                "Route/Action không query database trực tiếp. Thêm method vào src/services/*.ts rồi gọi service.",
-            },
-            {
-              name: "@prisma/client",
-              importNames: ["PrismaClient"],
-              message:
-                "Chỉ src/services/* và src/lib/prisma.ts được dựng PrismaClient. Type Prisma thì import type là được.",
-            },
-          ],
-        },
-      ],
+      "no-restricted-imports": ["error", { paths: PRISMA_IMPORT_RESTRICTIONS }],
     },
   },
 
@@ -124,18 +128,25 @@ export default tseslint.config(
    *
    * Luật dưới đây làm việc quên kiểm sân thành lỗi biên dịch, không phải thứ
    * phải nhớ.
+   *
+   * ⚠️ Bản trước nhắm `src/app/(venue)/**` — thư mục KHÔNG tồn tại (khu sân thật
+   * là `(manage)/manage/[venueId]`), nên luật chưa từng chặn được gì. `[` `]`
+   * trong glob là lớp ký tự, phải thoát bằng `\\`. Cố ý KHÔNG phủ
+   * `(manage)/manage/new/**`: trang đăng ký cơ sở mới chưa có sân nào để kiểm,
+   * dùng `defineAuthedAction` là đúng.
    */
   {
-    files: ["src/app/(venue)/**/*.{ts,tsx}", "src/app/api/v1/venues/**/*.ts"],
+    files: ["src/app/(manage)/manage/\\[venueId\\]/**/*.{ts,tsx}", "src/app/api/v1/venues/**/*.ts"],
     ignores: ["**/*.test.{ts,tsx}"],
     rules: {
       "no-restricted-imports": [
         "error",
         {
           paths: [
+            ...PRISMA_IMPORT_RESTRICTIONS,
             {
               name: "@/lib/define-action",
-              importNames: ["defineAction", "defineAuthedAction"],
+              importNames: ["defineAction", "defineAuthedAction", "definePublicAction"],
               message:
                 "Khu quản lý sân phải dùng defineVenueAction(permission, handler) — nó bắt truyền venueId và tự gọi canOnVenue.",
             },

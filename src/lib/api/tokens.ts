@@ -28,14 +28,25 @@ export type TokenPair = {
 /**
  * Cấp cặp access + refresh token cho một phiên mobile.
  *
- * Gom vào một chỗ để `login`, `register` và `refresh` không thể lệch nhau về
- * hình dạng response — client Flutter chỉ phải viết một model duy nhất.
+ * Gom vào một chỗ để `login`, `register`, bước 2FA, passkey và đổi mật khẩu
+ * không thể lệch nhau về hình dạng response — client Flutter chỉ phải viết một
+ * model duy nhất.
+ *
+ * @param context.familyId Chỉ truyền khi CẤP LẠI cho một phiên có sẵn (đổi mật
+ * khẩu): token mới vào đúng họ cũ, nên `sessionId` client đang giữ vẫn khớp
+ * dòng của nó trong `GET /auth/sessions`. Bỏ trống = phiên mới, họ mới.
  */
 export async function issueTokenPair(
   user: Pick<PublicUser, "id" | "email" | "roles">,
-  context: { userAgent?: string | null; ip?: string | null; twoFactorAt?: Date | null } = {},
+  context: {
+    userAgent?: string | null;
+    ip?: string | null;
+    twoFactorAt?: Date | null;
+    familyId?: string;
+  } = {},
 ): Promise<TokenPair> {
-  const refresh = await tokenService.issue(user.id, context);
+  const { familyId, ...refreshContext } = context;
+  const refresh = await tokenService.issue(user.id, refreshContext, familyId);
 
   const accessToken = await signSession(
     {

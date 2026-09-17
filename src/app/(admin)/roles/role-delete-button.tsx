@@ -1,42 +1,49 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState } from "react";
 import { deleteRoleAction } from "./actions";
-import { Button } from "@/components/ui/button";
+import { ConfirmButton } from "@/components/ui/confirm-button";
 
+/**
+ * Xoá một vai trò không phải của hệ thống.
+ *
+ * Vai trò còn người dùng thì KHÔNG có nút xoá — chỉ một dòng nói phải làm gì
+ * trước (SKILL.md: nút không bấm được phải nói cần làm gì để bấm được). Bản cũ
+ * hiện nút rồi bật `window.alert` khi bấm. Luật thật vẫn nằm trong service và
+ * chạy dù ai đó gọi thẳng action.
+ */
 export function RoleDeleteButton({ roleKey, userCount }: { roleKey: string; userCount: number }) {
-  const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
 
-  const handleDelete = () => {
-    if (typeof window === "undefined") return;
-
-    // Chặn sớm ở đây chỉ để nói được câu dễ hiểu; luật thật nằm trong service
-    // và vẫn chạy dù ai đó gọi thẳng action.
-    if (userCount > 0) {
-      window.alert(
-        `Vai trò "${roleKey}" đang có ${userCount} người dùng. ` +
-          `Chuyển họ sang vai trò khác trước khi xoá.`,
-      );
-      return;
-    }
-
-    if (!window.confirm(`Xoá vai trò "${roleKey}"?`)) return;
-
-    startTransition(async () => {
-      const res = await deleteRoleAction(roleKey);
-      if (res.error) window.alert(`Lỗi: ${res.error}`);
-    });
-  };
+  if (userCount > 0) {
+    return (
+      <p className="max-w-[16rem] text-xs text-muted">
+        Còn {userCount} người mang vai trò này — chuyển họ sang vai trò khác rồi mới xoá được.
+      </p>
+    );
+  }
 
   return (
-    <Button
-      type="button"
-      onClick={handleDelete}
-      disabled={isPending}
-      variant="destructive"
-      size="sm"
+    <form
+      className="max-w-full"
+      action={async () => {
+        setError(null);
+        const res = await deleteRoleAction(roleKey);
+        if (res.error) setError(res.error);
+      }}
     >
-      {isPending ? "Đang xoá..." : "Xoá"}
-    </Button>
+      <ConfirmButton
+        label="Xoá vai trò"
+        prompt={`Xoá vai trò "${roleKey}"? Không lấy lại được bộ quyền đã tick.`}
+        confirmLabel="Xác nhận xoá"
+        pendingLabel="Đang xoá…"
+        variant="destructive"
+      />
+      {error && (
+        <p role="alert" className="mt-1 text-sm text-danger-text">
+          {error}
+        </p>
+      )}
+    </form>
   );
 }

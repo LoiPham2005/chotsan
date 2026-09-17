@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Favicon ChốtSân — bản RÚT GỌN cho 16–32px: bỏ khung sân (nét 4px biến mất ở
+       cỡ đó), giữ vạch giữa + tam giác. Một màu đặc, không gradient (SKILL.md §7).
+       Next tự gắn <link rel="icon"> cho tệp này (quy ước `app/icon.svg`). -->
+  <rect width="100" height="100" rx="24" fill="#10B981"/>
+  <path d="M34 30 V70" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
+  <path d="M48 33 L76 50 L48 67 Z" fill="#fff"/>
+</svg>

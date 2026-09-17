@@ -1,18 +1,28 @@
 import { redirectRelative } from "@/lib/api/redirect";
-import { landingPathFor } from "@/lib/landing";
+import { clientIp } from "@/lib/api/auth";
 import { createSession } from "@/lib/auth";
+import {
+  AccountBannedError,
+  AccountInactiveError,
+  InvalidCredentialsError,
+  OAuthEmailRequiredError,
+  OAuthEmailUnverifiedError,
+  OAuthStateMismatchError,
+  ProviderExchangeError,
+  ProviderNotConfiguredError,
+  TwoFactorRequiredError,
+} from "@/lib/errors";
+import { landingPathFor } from "@/lib/landing";
 import { logger } from "@/lib/logger";
 import { exchangeCodeForToken } from "@/lib/oauth/client";
 import { consumeOAuthFlowCookie } from "@/lib/oauth/flow-cookie";
 import { fetchOAuthProfile, type AppleFormPostUser } from "@/lib/oauth/profile";
-import { AccountBannedError, InvalidCredentialsError } from "@/lib/errors";
-import {
-  OAuthEmailRequiredError,
-  OAuthExchangeError,
-  OAuthProviderNotConfiguredError,
-  OAuthStateMismatchError,
-  isOAuthProviderId,
-} from "@/lib/oauth/types";
+import { setPendingTwoFactor } from "@/lib/oauth/two-factor-cookie";
+import { isOAuthProviderId } from "@/lib/oauth/types";
+import { safeRedirectPath } from "@/lib/safe-redirect";
+import { issueTwoFactorTicket } from "@/lib/tickets";
+import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
+import { auditService } from "@/services/audit.service";
 import { oauthService } from "@/services/oauth.service";
 
 export const dynamic = "force-dynamic";
@@ -32,18 +42,30 @@ type CallbackPayload = {
  * Mã lỗi ngắn gắn vào `?oauthError=` để trang /login hiển thị thông báo phù
  * hợp — không đi qua `handleApiError`/JSON vì đây là luồng redirect trình
  * duyệt, không phải API cho mobile.
+ *
+ * Mọi lớp lỗi đều từ `@/lib/errors` — nguồn DUY NHẤT. Lỗi thật trước đây: route
+ * so `instanceof` với một bộ lớp TRÙNG TÊN khai riêng trong `oauth/types.ts`,
+ * nên "tài khoản không có email" rơi vào `unknown` và bị ghi log như sự cố.
  */
-function errorCode(error: unknown): string {
+function oauthErrorCode(error: unknown): string {
   if (error instanceof OAuthStateMismatchError) return "state_mismatch";
   if (error instanceof OAuthEmailRequiredError) return "email_required";
-  if (error instanceof OAuthProviderNotConfiguredError) return "not_configured";
-  if (error instanceof OAuthExchangeError) return "exchange_failed";
+  if (error instanceof OAuthEmailUnverifiedError) return "email_unverified";
+  if (error instanceof ProviderNotConfiguredError) return "not_configured";
+  if (error instanceof ProviderExchangeError) return "exchange_failed";
   if (error instanceof AccountBannedError) return "banned";
-  if (error instanceof InvalidCredentialsError) return "account_unavailable";
+  // Tạm ngưng, hoặc liên kết cũ trỏ vào tài khoản đã xoá mềm.
+  if (error instanceof AccountInactiveError || error instanceof InvalidCredentialsError) {
+    return "account_unavailable";
+  }
   return "unknown";
 }
 
-async function handleCallback(provider: string, payload: CallbackPayload): Promise<Response> {
+async function handleCallback(
+  request: Request,
+  provider: string,
+  payload: CallbackPayload,
+): Promise<Response> {
   if (!isOAuthProviderId(provider)) {
     return redirectRelative("/login?oauthError=invalid_provider", 302);
   }
@@ -66,12 +88,40 @@ async function handleCallback(provider: string, payload: CallbackPayload): Promi
     const user = await oauthService.loginWithProfile(profile);
 
     await createSession({ typ: "access", sub: user.id, email: user.email, roles: user.roles });
-    logger.info("OAuth login", { userId: user.id, provider });
+
+    await auditService.record({
+      action: AUDIT_ACTIONS.LOGIN_SUCCEEDED,
+      entity: "user",
+      entityId: user.id,
+      actorId: user.id,
+      actorEmail: user.email,
+      metadata: { method: "oauth", provider },
+      ip: clientIp(request),
+      userAgent: request.headers.get("user-agent"),
+    });
 
     // `next` rỗng = đăng nhập từ màn login trơn → về đúng chỗ làm việc của vai.
-    return redirectRelative(flow.next || (await landingPathFor(user.id)), 302);
+    // `next` đã qua `safeRedirectPath` ở bước `start`; qua thêm lần nữa vì cookie
+    // `oauth_flow` không ký — ai đặt được cookie trên tên miền là sửa được nó.
+    return redirectRelative(
+      safeRedirectPath(flow.next || (await landingPathFor(user.id)), "/"),
+      302,
+    );
   } catch (error) {
-    const code = errorCode(error);
+    /*
+     * Tài khoản đã bật 2FA: Google chỉ là MỘT yếu tố. Không tạo phiên — cấp vé
+     * 2FA như luồng mật khẩu, giữ vé trong cookie httpOnly chỉ gửi kèm `/login`
+     * (xem `two-factor-cookie.ts`), rồi đưa sang form nhập mã. Vé KHÔNG BAO GIỜ
+     * nằm trên URL: nó sẽ vào lịch sử trình duyệt, log proxy và header Referer.
+     */
+    if (error instanceof TwoFactorRequiredError && flow) {
+      const { challengeToken } = await issueTwoFactorTicket(error.userId);
+      await setPendingTwoFactor({ ticket: challengeToken, next: flow.next });
+      logger.info("OAuth cần bước 2FA", { userId: error.userId, provider });
+      return redirectRelative("/login?twoFactor=1", 302);
+    }
+
+    const code = oauthErrorCode(error);
     if (code === "unknown") {
       logger.error("OAuth callback thất bại", error, { provider });
     } else {
@@ -86,14 +136,19 @@ export async function GET(request: Request, { params }: RouteContext) {
   const { provider } = await params;
   const url = new URL(request.url);
 
-  return handleCallback(provider, {
+  return handleCallback(request, provider, {
     code: url.searchParams.get("code") ?? undefined,
     state: url.searchParams.get("state") ?? undefined,
     error: url.searchParams.get("error") ?? undefined,
   });
 }
 
-/** Apple bắt buộc `response_mode=form_post` khi xin scope name/email — xem `config.ts`. */
+/**
+ * Apple bắt buộc `response_mode=form_post` khi xin scope name/email — xem
+ * `config.ts`. Đây là POST CROSS-SITE, nên cookie `oauth_flow` của Apple phải
+ * là `SameSite=None; Secure` (xem `flow-cookie.ts`), không thì mọi lượt đăng
+ * nhập Apple đều dừng ở `state_mismatch`.
+ */
 export async function POST(request: Request, { params }: RouteContext) {
   const { provider } = await params;
   const form = await request.formData();
@@ -112,7 +167,7 @@ export async function POST(request: Request, { params }: RouteContext) {
   const state = form.get("state");
   const error = form.get("error");
 
-  return handleCallback(provider, {
+  return handleCallback(request, provider, {
     code: typeof code === "string" ? code : undefined,
     state: typeof state === "string" ? state : undefined,
     error: typeof error === "string" ? error : undefined,

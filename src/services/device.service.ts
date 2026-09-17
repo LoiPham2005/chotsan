@@ -24,6 +24,15 @@ import type { RegisterDeviceInput } from "@/schemas/notification.schema";
  * một người dùng lâu năm không tích hàng trăm dòng token chết — Firebase coi
  * việc gửi tới token chết là tín hiệu xấu và hạ uy tín gửi của bạn.
  */
+/** Trường trả về cho client — KHÔNG có `fcmToken`: token là thứ đẩy được push tới máy đó. */
+const DEVICE_SELECT = {
+  id: true,
+  platform: true,
+  deviceName: true,
+  lastSeenAt: true,
+  createdAt: true,
+} as const;
+
 export class DeviceService {
   constructor(private readonly db: PrismaClient = prisma) {}
 
@@ -47,14 +56,16 @@ export class DeviceService {
         isActive: true,
         lastSeenAt: new Date(),
       },
-      select: { id: true, platform: true, deviceName: true, lastSeenAt: true },
+      // CÙNG hình dạng với `listActive` — đặc tả OpenAPI khai một kiểu `Device`
+      // cho cả hai; thiếu `createdAt` ở đây là client sinh tự động giải mã hỏng.
+      select: DEVICE_SELECT,
     });
   }
 
   async listActive(userId: string) {
     return this.db.userDevice.findMany({
       where: { userId, isActive: true },
-      select: { id: true, platform: true, deviceName: true, lastSeenAt: true, createdAt: true },
+      select: DEVICE_SELECT,
       orderBy: { lastSeenAt: "desc" },
     });
   }

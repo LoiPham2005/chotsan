@@ -18,7 +18,7 @@ import { useEffect, useRef, useState } from "react";
  */
 export function QrCode({ payload, size = 220 }: { payload: string; size?: number }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [failed, setLoi] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -30,14 +30,14 @@ export function QrCode({ payload, size = 220 }: { payload: string; size?: number
       .then(({ default: QRCode }) =>
         QRCode.toCanvas(canvas, payload, { width: size, margin: 1, errorCorrectionLevel: "M" }),
       )
-      .catch(() => setLoi(true));
+      .catch(() => setFailed(true));
   }, [payload, size]);
 
   if (failed) {
     // Thà nói không vẽ được còn hơn để một ô trắng — khách sẽ ngồi chờ một mã
     // không bao giờ hiện ra.
     return (
-      <p className="text-sm text-danger">
+      <p className="text-sm text-danger-text">
         Không vẽ được mã QR. Chuyển khoản thủ công theo thông tin bên dưới giúp bạn nhé.
       </p>
     );
@@ -48,7 +48,7 @@ export function QrCode({ payload, size = 220 }: { payload: string; size?: number
       ref={canvasRef}
       width={size}
       height={size}
-      className="rounded-token-md border border-line bg-white"
+      className="rounded-token-md border border-line bg-surface"
       aria-label="Mã QR chuyển khoản"
       role="img"
     />

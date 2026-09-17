@@ -1,8 +1,8 @@
 "use client";
 
 import { useActionState } from "react";
-import { loginAction, verifyTwoFactorAction, type AuthFormState } from "../actions";
-import { AuthFields, FORM_STYLE, type Field } from "../auth-form";
+import { loginAction, type AuthFormState } from "../actions";
+import { AUTH_FORM_CLASS, AuthFields, type Field } from "../auth-form";
 import { TwoFactorForm } from "./two-factor-form";
 
 const initialState: AuthFormState = {};
@@ -36,17 +36,11 @@ export function LoginForm({ nextPath }: { nextPath?: string }) {
    * lên — và đoán sai một lần là bỏ qua luôn lớp thứ hai.
    */
   if (state.twoFactorToken) {
-    return (
-      <TwoFactorForm
-        challengeToken={state.twoFactorToken}
-        nextPath={nextPath}
-        action={verifyTwoFactorAction}
-      />
-    );
+    return <TwoFactorForm challengeToken={state.twoFactorToken} nextPath={nextPath} />;
   }
 
   return (
-    <form action={formAction} style={FORM_STYLE}>
+    <form action={formAction} className={AUTH_FORM_CLASS}>
       <AuthFields
         fields={FIELDS}
         state={state}

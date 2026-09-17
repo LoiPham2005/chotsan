@@ -5,7 +5,7 @@ import { ManageNav } from "@/components/manage/manage-nav";
 import { StaffManager } from "@/components/manage/staff-manager";
 import { requireVenueAccess } from "@/lib/auth";
 import { VENUE_STAFF_GRANTABLE } from "@/lib/permissions";
-import { memberService } from "@/services/member.service";
+import { canManageMember, memberService } from "@/services/member.service";
 import { venueService } from "@/services/venue.service";
 
 export const metadata: Metadata = { title: "Nhân sự", robots: { index: false } };
@@ -14,9 +14,10 @@ export default async function StaffPage({ params }: { params: Promise<{ venueId:
   const { venueId } = await params;
   const user = await requireVenueAccess(venueId, "member:manage");
 
-  const [venue, members] = await Promise.all([
+  const [venue, members, scope] = await Promise.all([
     venueService.forManage(venueId),
     memberService.listForVenue(venueId),
+    memberService.managementScope(venueId, user.id),
   ]);
 
   if (!venue) notFound();
@@ -26,7 +27,7 @@ export default async function StaffPage({ params }: { params: Promise<{ venueId:
       <header>
         <Link
           href={`/manage/${venueId}`}
-          className="text-sm font-medium text-muted hover:text-content"
+          className="inline-flex min-h-11 items-center text-sm font-medium text-muted hover:text-content"
         >
           ← {venue.name}
         </Link>
@@ -40,13 +41,20 @@ export default async function StaffPage({ params }: { params: Promise<{ venueId:
       <div className="mt-6">
         <StaffManager
           venueId={venueId}
-          grantable={[...VENUE_STAFF_GRANTABLE]}
+          permissionKeys={[...VENUE_STAFF_GRANTABLE]}
+          grantable={scope.grantable}
           members={members.map((member) => ({
             id: member.id,
             role: member.role,
             name: member.user.profile?.fullName ?? member.user.email ?? "Chưa đặt tên",
             email: member.user.email,
             permissions: member.permissions,
+            isSelf: member.user.id === user.id,
+            editable: canManageMember(scope, user.id, {
+              userId: member.user.id,
+              role: member.role,
+              permissions: member.permissions,
+            }),
           }))}
         />
       </div>

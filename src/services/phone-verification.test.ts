@@ -11,7 +11,7 @@ import { DuplicateFieldError, PhoneOtpThrottledError } from "@/lib/errors";
 
 /**
  * ⚠️ Test này chạy với `PHONE_VERIFICATION_ENABLED=1` (đặt trong
- * `vitest.config.ts`). Mặc định THẬT của hệ thống là TẮT — xem `config/env.ts`.
+ * `vitest.config.ts`). Mặc định THẬT của hệ thống là TẮT — xem `src/lib/env.ts`.
  * Bật ở đây để kiểm được phần đáng giá nhất: ba lớp chặn đốt tiền.
  */
 

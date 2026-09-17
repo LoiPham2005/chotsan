@@ -20,8 +20,9 @@
  * ---
  * FILE NÀY KHÔNG DÙNG ĐỂ KIỂM TRA QUYỀN LÚC CHẠY
  *
- * Dùng `PermissionService.can()` trong `@repo/core` — nó đọc từ database (có
- * cache). Bảng `DEFAULT_ROLE_PERMISSIONS` dưới đây chỉ là dữ liệu nền cho
+ * Dùng `permissionService.can()` / `canOnVenue()`
+ * (`src/services/permission.service.ts`) — nó đọc từ database (có cache).
+ * Bảng `DEFAULT_ROLE_PERMISSIONS` dưới đây chỉ là dữ liệu nền cho
  * `pnpm db:seed`.
  *
  * ---
@@ -121,8 +122,13 @@ export const VENUE_STAFF_DEFAULT: readonly Permission[] = [
 /**
  * Quyền chủ sân TICK THÊM được cho từng nhân viên.
  *
- * Đây là thứ thay cho vai trò `MANAGER` cứng: mỗi sân định nghĩa "quản lý" một
- * kiểu, nhét tất cả vào một enum là ép 100 sân theo hình dạng của một sân.
+ * Đây là thứ thay cho một vai trò "quản lý" cố định: mỗi sân định nghĩa quản
+ * lý một kiểu, nhét tất cả vào một enum là ép 100 sân theo hình dạng của một
+ * sân.
+ *
+ * ⚠️ `member:manage` tick được, nhưng nhân viên có nó KHÔNG leo quyền được:
+ * chỉ cấp được quyền chính họ đang có, không cấp/thu được `member:manage`, không
+ * sửa/gỡ được người đang giữ nó — xem `MemberService`.
  */
 export const VENUE_STAFF_GRANTABLE: readonly Permission[] = [
   "booking:cancel",
@@ -158,11 +164,6 @@ export const VENUE_SCOPED_PERMISSIONS: ReadonlySet<string> = new Set<string>([
 
 export function isVenueScopedPermission(value: string): value is Permission {
   return VENUE_SCOPED_PERMISSIONS.has(value);
-}
-
-/** Chủ sân có tick được quyền này cho nhân viên không. */
-export function isGrantableToStaff(value: string): value is Permission {
-  return (VENUE_STAFF_GRANTABLE as readonly string[]).includes(value);
 }
 
 const PERMISSION_SET: ReadonlySet<string> = new Set(PERMISSIONS);
@@ -205,7 +206,7 @@ export type RoleSeed = {
   /**
    * Bậc quyền lực. Cao hơn = mạnh hơn.
    *
-   * Chừa khoảng trống giữa các bậc (0 → 10 → 20 → 50 → 100) để sau này chèn
+   * Chừa khoảng trống giữa các bậc (USER 0 → ADMIN 50 → SUPER_ADMIN 100) để sau này chèn
    * vai trò mới vào giữa mà không phải đánh số lại toàn bộ — đánh số lại là
    * thao tác mà một lần sai sẽ trao quyền cho nhầm người.
    */
@@ -471,23 +472,6 @@ export const PERMISSION_METADATA: Record<Permission, PermissionMeta> = {
     description: "⚠️ Hoa hồng, chính sách huỷ, cổng thanh toán",
   },
 };
-
-/** Danh sách quyền, gom theo `category` — dùng dựng màn phân quyền. */
-export function permissionsByCategory(): Array<{
-  category: string;
-  permissions: Array<{ key: Permission } & PermissionMeta>;
-}> {
-  const groups = new Map<string, Array<{ key: Permission } & PermissionMeta>>();
-
-  for (const key of PERMISSIONS) {
-    const meta = PERMISSION_METADATA[key];
-    const list = groups.get(meta.category) ?? [];
-    list.push({ key, ...meta });
-    groups.set(meta.category, list);
-  }
-
-  return [...groups.entries()].map(([category, permissions]) => ({ category, permissions }));
-}
 
 /** Quyền của một vai trò seed, đã giải `"*"` thành danh sách đầy đủ. */
 export function resolveSeedPermissions(seed: RoleSeed): readonly Permission[] {

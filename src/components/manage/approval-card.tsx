@@ -7,8 +7,10 @@ import {
   rejectPaymentAction,
   type ManageState,
 } from "@/app/(manage)/manage/[venueId]/actions";
+import { useActionNotice } from "@/components/booking/action-notice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Notice } from "@/components/ui/notice";
 import { fullDateLabel, timeOfDay } from "@/lib/date";
 import { formatVnd } from "@/lib/slots";
 
@@ -55,21 +57,49 @@ export type ApprovalData = {
  *
  * "Duyệt" mơ hồ — duyệt cái gì, có phải đã kiểm chưa. Câu chữ phải nói đúng
  * điều người bấm đang khẳng định, vì bấm nhầm ở đây là mất tiền thật.
+ *
+ * ---
+ * DUYỆT HAY TỪ CHỐI XONG, THẺ RỜI HÀNG CHỜ — CÂU KẾT QUẢ KHÔNG ĐƯỢC ĐI THEO
+ *
+ * Khoản đã xử lý không còn `AWAITING_CONFIRMATION`, trang dựng lại và thẻ này
+ * bị gỡ cùng câu "đã xác nhận" nằm trong nó. Nên câu thành công đi lên thông
+ * báo của trang (`ActionNoticeProvider`), kèm nội dung chuyển khoản để biết là
+ * khoản nào. Lỗi thì hiện ngay trên thẻ — thẻ còn nguyên vì không có gì đổi.
  */
-export function ApprovalCard({ item, venueId }: { item: ApprovalData; venueId: string }) {
+export function ApprovalCard({
+  item,
+  venueId,
+  canConfirm,
+}: {
+  item: ApprovalData;
+  venueId: string;
+  /** `payment:confirm` trên sân này — không có thì chỉ xem, không có nút. */
+  canConfirm: boolean;
+}) {
   const [showReject, setShowReject] = useState(false);
+  // Có kiểm soát: lý do bị từ chối (quá ngắn…) thì chữ vừa gõ vẫn còn để sửa.
+  const [reason, setReason] = useState("");
+  const notify = useActionNotice();
 
   const [approveState, approve] = useActionState<ManageState, FormData>(
-    approvePaymentAction.bind(null, venueId),
+    async (previous, formData) => {
+      const result = await approvePaymentAction(venueId, previous, formData);
+      if (result.ok) notify(`${item.transferNote} · ${formatVnd(item.amount)}: ${result.ok}`);
+      return result;
+    },
     {},
   );
   const [rejectState, reject] = useActionState<ManageState, FormData>(
-    rejectPaymentAction.bind(null, venueId),
+    async (previous, formData) => {
+      const result = await rejectPaymentAction(venueId, previous, formData);
+      if (result.ok) notify(`${item.transferNote} · ${formatVnd(item.amount)}: ${result.ok}`);
+      return result;
+    },
     {},
   );
 
   return (
-    <li className="rounded-token-lg border border-line bg-surface p-4 shadow-nang-1">
+    <li className="rounded-token-lg border border-line bg-surface p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-bold uppercase tracking-wide text-subtle">
@@ -104,7 +134,10 @@ export function ApprovalCard({ item, venueId }: { item: ApprovalData; venueId: s
       <dl className="mt-3 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
         <Row label="Khách">
           {item.customerName} ·{" "}
-          <a href={`tel:${item.customerPhone}`} className="font-medium text-brand hover:underline">
+          <a
+            href={`tel:${item.customerPhone}`}
+            className="font-semibold text-brand-text hover:underline"
+          >
             {item.customerPhone}
           </a>
         </Row>
@@ -119,7 +152,7 @@ export function ApprovalCard({ item, venueId }: { item: ApprovalData; venueId: s
           href={item.proofImageUrl}
           target="_blank"
           rel="noreferrer"
-          className="mt-3 inline-block text-sm font-medium text-brand hover:underline"
+          className="mt-3 inline-flex min-h-11 items-center text-sm font-semibold text-brand-text hover:underline"
         >
           Xem ảnh chụp màn hình khách gửi →
         </a>
@@ -131,25 +164,33 @@ export function ApprovalCard({ item, venueId }: { item: ApprovalData; venueId: s
       </p>
 
       {(approveState.error ?? rejectState.error) && (
-        <p role="alert" className="alert alert-danger mt-3">
+        <Notice tone="danger" role="alert" className="mt-3">
           {approveState.error ?? rejectState.error}
+        </Notice>
+      )}
+
+      {!canConfirm && (
+        <p className="mt-3 text-sm text-muted">
+          Bạn xem được hàng chờ nhưng chưa có quyền xác nhận tiền trên sân này.
         </p>
       )}
 
-      <div className="mt-3 flex flex-wrap gap-2">
-        <form action={approve}>
-          <PaymentIdInputs item={item} />
-          <ApproveButton />
-        </form>
+      {canConfirm && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <form action={approve}>
+            <PaymentIdInputs item={item} />
+            <ApproveButton />
+          </form>
 
-        {!showReject && (
-          <Button type="button" variant="outline" onClick={() => setShowReject(true)}>
-            Không thấy tiền
-          </Button>
-        )}
-      </div>
+          {!showReject && (
+            <Button type="button" variant="outline" onClick={() => setShowReject(true)}>
+              Không thấy tiền
+            </Button>
+          )}
+        </div>
+      )}
 
-      {showReject && (
+      {canConfirm && showReject && (
         <form action={reject} className="mt-3 rounded-token-md border border-line bg-elevated p-3">
           <PaymentIdInputs item={item} />
 
@@ -165,6 +206,8 @@ export function ApprovalCard({ item, venueId }: { item: ApprovalData; venueId: s
             required
             minLength={4}
             maxLength={300}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
             placeholder="Ví dụ: chưa thấy tiền về, kiểm tra lại nội dung chuyển khoản giúp bạn"
             className="mt-1.5 bg-surface"
           />
@@ -200,7 +243,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 function ApproveButton() {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" disabled={pending} className="shadow-chon">
+    <Button type="submit" disabled={pending}>
       {pending ? "Đang ghi nhận…" : "Đã nhận đủ tiền"}
     </Button>
   );

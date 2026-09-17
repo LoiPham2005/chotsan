@@ -33,3 +33,12 @@ export const registerDeviceSchema = z.object({
   deviceName: z.string().max(128).optional(),
 });
 export type RegisterDeviceInput = z.infer<typeof registerDeviceSchema>;
+
+/**
+ * Body của `DELETE /api/v1/devices`. Khai ở đây — không viết thẳng trong route —
+ * để đặc tả OpenAPI dùng CHÍNH schema route kiểm, không phải một bản chép tay.
+ */
+export const deactivateDeviceSchema = z.object({
+  fcmToken: z.string().min(1, "Thiếu FCM token"),
+});
+export type DeactivateDeviceInput = z.infer<typeof deactivateDeviceSchema>;

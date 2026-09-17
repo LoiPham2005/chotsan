@@ -1,6 +1,6 @@
-import { enforceRateLimit, requireApiUser } from "@/lib/api/auth";
+import { clientIp, enforceRateLimit, requireApiUser } from "@/lib/api/auth";
 import { apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
-import { RATE_LIMITS } from "@/lib/rate-limit";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS } from "@/lib/rate-limit";
 import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
 import { requestEmailChangeSchema } from "@/schemas/auth.schema";
 import { auditService } from "@/services/audit.service";
@@ -18,7 +18,11 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const session = await requireApiUser(request);
-    await enforceRateLimit(request, "api:change-email", RATE_LIMITS.emailVerificationRequest);
+    await enforceRateLimit(
+      request,
+      RATE_LIMIT_BUCKETS.emailChangeRequest,
+      RATE_LIMITS.emailVerificationRequest,
+    );
 
     const body = await parseJsonBody(request, requestEmailChangeSchema);
     await authService.requestEmailChange(session.sub, body.newEmail, body.password);
@@ -29,6 +33,8 @@ export async function POST(request: Request) {
       entityId: session.sub,
       actorId: session.sub,
       actorEmail: session.email,
+      metadata: { newEmail: body.newEmail },
+      ip: clientIp(request),
       userAgent: request.headers.get("user-agent"),
     });
 

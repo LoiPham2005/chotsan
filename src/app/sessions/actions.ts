@@ -1,8 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { defineAuthedAction } from "@/lib/define-action";
+import { actionClientIp, defineAuthedAction } from "@/lib/define-action";
 import { logger } from "@/lib/logger";
+import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
+import { auditService } from "@/services/audit.service";
 import { tokenService } from "@/services/token.service";
 
 /**
@@ -30,6 +32,18 @@ export const revokeSessionAction = defineAuthedAction(
     logger.info("Người dùng tự thu hồi một phiên", {
       userId: ctx.actorId,
       sessionId,
+    });
+
+    // Cùng bản ghi với `DELETE /api/v1/auth/sessions/[id]` — "ai đăng xuất thiết
+    // bị nào" không được phụ thuộc vào việc bấm từ web hay từ app.
+    await auditService.record({
+      action: AUDIT_ACTIONS.SESSION_REVOKED,
+      entity: "user",
+      entityId: ctx.actorId,
+      actorId: ctx.actorId,
+      actorEmail: ctx.session.email,
+      metadata: { sessionId, scope: "one_device", surface: "web" },
+      ip: await actionClientIp(),
     });
 
     revalidatePath("/sessions");

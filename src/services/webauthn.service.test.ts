@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { WebAuthnService } from "./webauthn.service";
 import { UserService } from "./user.service";
-import { ForbiddenError, InvalidCredentialsError, UserNotFoundError } from "@/lib/errors";
+import {
+  ForbiddenError,
+  InvalidCredentialsError,
+  PasskeyNotFoundError,
+  UserNotFoundError,
+} from "@/lib/errors";
 import { webAuthnConfig } from "@/lib/env";
 
 function createDb(overrides: Record<string, unknown> = {}) {
@@ -180,5 +185,23 @@ describe("WebAuthnService — quản lý", () => {
     expect(db.webAuthnCredential.deleteMany).toHaveBeenCalledWith({
       where: { id: "pk-1", userId: "u1" },
     });
+  });
+
+  it("passkey đã gỡ hoặc của người khác: nói đúng là PASSKEY không còn, không phải 'không tìm thấy người dùng'", async () => {
+    // Lỗi thật trước đây: màn quản lý passkey hiện "Không tìm thấy người dùng"
+    // cho người đang đăng nhập hẳn hoi — trông như tài khoản của họ biến mất.
+    const db = createDb({
+      webAuthnCredential: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+    });
+
+    await expect(service(db).rename("pk-khong-co", "u1", "Máy mới")).rejects.toBeInstanceOf(
+      PasskeyNotFoundError,
+    );
+    await expect(service(db).remove("pk-khong-co", "u1")).rejects.toBeInstanceOf(
+      PasskeyNotFoundError,
+    );
   });
 });

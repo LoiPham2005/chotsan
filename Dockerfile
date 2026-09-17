@@ -42,6 +42,12 @@ COPY . .
 ENV SKIP_ENV_VALIDATION=1 \
     DATABASE_URL=postgresql://build:build@localhost:5432/build
 RUN pnpm db:generate && pnpm build && pnpm realtime:build && pnpm worker:build
+# Danh sách gói mà bundle realtime/worker THẬT SỰ require (đọc từ metafile của
+# esbuild), phiên bản chính xác đang cài + Prisma Client đã generate — xem
+# deploy/runtime-package.mjs.
+RUN mkdir -p /runtime/realtime /runtime/worker \
+ && node deploy/runtime-package.mjs manifest realtime/dist/meta.json /runtime/realtime \
+ && node deploy/runtime-package.mjs manifest worker/dist/meta.json /runtime/worker
 
 # ---------------------------------------------------------------------------
 # migrator — image một-lần-chạy để apply migration trước khi web khởi động.
@@ -73,18 +79,60 @@ ENV NODE_ENV=production
 CMD ["npx", "prisma", "migrate", "deploy"]
 
 # ---------------------------------------------------------------------------
+# realtime-deps / worker-deps — node_modules TỐI THIỂU cho hai tiến trình phụ.
+#
+# Bundle esbuild dùng `--packages=external`: gói npm vẫn được `require` lúc
+# chạy. Image từng chỉ chép `dist/` → container chết ngay với
+# `Cannot find module 'socket.io'`/`'bullmq'` mà CI vẫn xanh (CI chỉ build `runner`).
+#
+# Không chép nguyên node_modules: bản đủ ~1,5GB, bản `--prod` ~760MB (next,
+# sharp, Prisma CLI…). Chỉ cài đúng gói bundle cần (worker ~110MB vì Prisma
+# Client, realtime ~27MB):
+#
+#   - lockfile GỐC đi kèm → pnpm giữ nguyên phiên bản đã khoá;
+#   - `auto-install-peers=false` → không kéo peer TUỲ CHỌN chỉ dùng lúc dev
+#     (Prisma CLI, typescript, react là peer của @prisma/client);
+#   - `--ignore-scripts` → không build gì, không cần Prisma CLI: client đã
+#     generate ở `builder` được chép sang;
+#   - `finalize` từ chối phiên bản không có trong lockfile gốc và `require` thử
+#     từng gói — thiếu gói thì BUILD đỏ, không đợi container chết.
+# ---------------------------------------------------------------------------
+FROM base AS realtime-deps
+WORKDIR /runtime
+COPY --from=builder /runtime/realtime ./
+COPY pnpm-lock.yaml ./
+COPY pnpm-lock.yaml /tmp/root-lock.yaml
+COPY deploy/runtime-package.mjs /tmp/runtime-package.mjs
+RUN pnpm install --prod --no-frozen-lockfile --ignore-scripts --config.auto-install-peers=false \
+ && node /tmp/runtime-package.mjs finalize /runtime /tmp/root-lock.yaml
+
+FROM base AS worker-deps
+WORKDIR /runtime
+COPY --from=builder /runtime/worker ./
+COPY pnpm-lock.yaml ./
+COPY pnpm-lock.yaml /tmp/root-lock.yaml
+COPY deploy/runtime-package.mjs /tmp/runtime-package.mjs
+RUN pnpm install --prod --no-frozen-lockfile --ignore-scripts --config.auto-install-peers=false \
+ && node /tmp/runtime-package.mjs finalize /runtime /tmp/root-lock.yaml
+
+# ---------------------------------------------------------------------------
 # realtime — máy chủ WebSocket, tiến trình RIÊNG với web.
 #
 # Tách vì App Router không giữ được kết nối lâu dài, và vì deploy web không
-# được phép làm rớt socket đang mở. esbuild gói thành một file duy nhất nên
-# image không cần node_modules của app.
+# được phép làm rớt socket đang mở.
 # ---------------------------------------------------------------------------
 FROM base AS realtime
 ENV NODE_ENV=production \
-    REALTIME_PORT=3002
+    REALTIME_PORT=3002 \
+    # Mặc định của tiến trình là loopback; trong container phải nghe mọi card
+    # mạng vì cổng compose công bố đi vào IP của container, không vào loopback.
+    # Cửa ra ngoài vẫn chỉ là `127.0.0.1:` ở `ports:` của compose.
+    HOST=0.0.0.0
 RUN addgroup -g 1001 -S nodejs \
  && adduser -u 1001 -S -G nodejs nextjs
-COPY --from=builder --chown=nextjs:nodejs /app/realtime/dist ./realtime/dist
+# node_modules thuộc root, user chạy app chỉ đọc: một lỗ RCE không sửa được thư viện.
+COPY --from=realtime-deps /runtime/node_modules ./node_modules
+COPY --from=builder --chown=nextjs:nodejs /app/realtime/dist/server.cjs ./realtime/dist/server.cjs
 USER nextjs
 EXPOSE 3002
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
@@ -98,16 +146,16 @@ CMD ["node", "realtime/dist/server.cjs"]
 # giết job đang chạy, job nặng không được làm chậm request, và hai bên cần
 # scale theo hai con số khác nhau.
 #
-# Không EXPOSE cổng nào và không có HEALTHCHECK qua HTTP: worker không phục vụ
-# request. Nó "khoẻ" khi còn lấy được job ra khỏi Redis — muốn giám sát thì
-# theo dõi độ dài hàng đợi, đừng ping cổng.
+# `/health` nghe loopback (mặc định của `HOST`): HEALTHCHECK chạy TRONG
+# container nên vẫn gọi được, còn số job trong hàng đợi không lộ ra mạng.
 # ---------------------------------------------------------------------------
 FROM base AS worker
 ENV NODE_ENV=production \
     WORKER_HEALTH_PORT=3003
 RUN addgroup -g 1001 -S nodejs \
  && adduser -u 1001 -S -G nodejs nextjs
-COPY --from=builder --chown=nextjs:nodejs /app/worker/dist ./worker/dist
+COPY --from=worker-deps /runtime/node_modules ./node_modules
+COPY --from=builder --chown=nextjs:nodejs /app/worker/dist/worker.cjs ./worker/dist/worker.cjs
 USER nextjs
 EXPOSE 3003
 # `/health` trả 503 khi không đếm được job — tức là mất kết nối Redis. Không có

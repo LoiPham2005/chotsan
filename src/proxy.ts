@@ -1,23 +1,27 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { SESSION_COOKIE_NAME, verifySession } from "@/lib/session";
+import { CURRENT_PATH_HEADER, SESSION_COOKIE_NAME, verifySession } from "@/lib/session";
 import { getRequestId, REQUEST_ID_HEADER } from "@/lib/request-id";
 
 /**
  * Proxy — tên mới của Middleware kể từ Next.js 16.
  *
- * Làm hai việc: dựng Content-Security-Policy có nonce, và chặn request chưa
- * đăng nhập ngay ở cửa ngõ.
+ * Làm ba việc: dựng Content-Security-Policy có nonce, gắn `x-pathname` cho
+ * `requireUser()` biết đường quay lại, và chặn request chưa đăng nhập ngay ở
+ * cửa ngõ.
  *
- * Lưu ý quan trọng: đây là lớp phòng thủ THỨ HAI, không phải lớp duy nhất.
- * Proxy không nhìn thấy logic nghiệp vụ, nên mọi Server Action và route
- * handler vẫn phải tự kiểm tra quyền. Xem `src/app/users/actions.ts`.
+ * ---
+ * CHỈ LÀ LỚP GIAO DIỆN — KHÔNG PHẢI RANH GIỚI BẢO MẬT
+ *
+ * Proxy CHỈ kiểm CHỮ KÝ cookie, cố ý không chạm database hay cache: nó chạy
+ * trước MỌI request trang và asset động. Nên nó không biết phiên đã bị thu hồi
+ * (tài khoản bị khoá, bị xoá, vừa đổi mật khẩu). Phép kiểm đó nằm ở
+ * `getSession()` — nơi mọi trang, layout và Server Action đều đi qua. Mọi
+ * Server Action và route handler vẫn phải tự kiểm quyền (`src/lib/define-action.ts`,
+ * `src/lib/api/auth.ts`).
  */
 
 /** Prefix yêu cầu đã đăng nhập. */
 const PROTECTED_PREFIXES = ["/users", "/roles", "/sessions", "/security"];
-
-/** Trang chỉ dành cho khách; đã đăng nhập rồi thì không cần vào nữa. */
-const GUEST_ONLY_PATHS = ["/login", "/register"];
 
 function buildContentSecurityPolicy(nonce: string, isDev: boolean): string {
   return [
@@ -52,29 +56,38 @@ export async function proxy(request: NextRequest) {
 
   const session = await verifySession(request.cookies.get(SESSION_COOKIE_NAME)?.value);
 
+  // Đường dẫn KÈM truy vấn: `/venues/a?chon=…` phải quay lại đúng lựa chọn cũ.
+  // (Next đã bỏ tham số nội bộ `_rsc` khỏi `nextUrl` trước khi tới đây.)
+  const currentPath = `${pathname}${request.nextUrl.search}`;
+
   const needsAuth = PROTECTED_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   );
 
   if (needsAuth && !session) {
     const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("next", pathname);
+    loginUrl.searchParams.set("next", currentPath);
     return NextResponse.redirect(loginUrl);
   }
 
-  if (session && GUEST_ONLY_PATHS.includes(pathname)) {
-    // Đích phải là trang MỌI người đăng nhập đều mở được. Bộ khung để lại
-    // `/users` — màn quản trị cần quyền `user:read`, mà gần như không ai trong
-    // ChốtSân có quyền đó. Hậu quả: đăng nhập xong, mở lại /login là rơi vào
-    // 404 và tưởng tài khoản hỏng.
-    return NextResponse.redirect(new URL("/", request.url));
-  }
+  /*
+   * ĐÃ ĐĂNG NHẬP MÀ VÀO /login, /register: KHÔNG chuyển hướng ở đây.
+   *
+   * Proxy chỉ thấy chữ ký. Cookie đúng chữ ký của phiên ĐÃ BỊ THU HỒI mà bị đá
+   * khỏi /login thì người đó không bao giờ tới được form để đăng nhập lại — còn
+   * trang cần đăng nhập thì đá họ ngược về /login: vòng lặp chuyển hướng. Hai
+   * trang đó tự chuyển hướng người đăng nhập THẬT về `safeRedirectPath(next,
+   * "/")` bằng `getSession()` đầy đủ.
+   */
 
   // Nonce phải đi vào REQUEST header thì Next.js mới đọc được và gắn vào các
   // thẻ <script> nó tự sinh; đặt mỗi ở response header là không đủ.
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);
   requestHeaders.set("Content-Security-Policy", csp);
+  // GHI ĐÈ, không nối: client tự gửi `x-pathname` thì giá trị đó bị thay. Nơi
+  // đọc (`requireUser`) vẫn lọc qua `safeRedirectPath`.
+  requestHeaders.set(CURRENT_PATH_HEADER, currentPath);
 
   // Mã định danh request: tôn trọng giá trị reverse proxy đã gắn, chỉ sinh mới
   // khi chưa có. Nhờ vậy log của ứng dụng nối được với log của Caddy/nginx
@@ -106,8 +119,8 @@ export const config = {
      * từ phía mobile vì nó trông như request thành công.
      *
      * Đổi lại, MỌI route handler trong src/app/api phải tự kiểm quyền bằng
-     * `requireApiUser()` / `requireApiAdmin()`. Header bảo mật không mất đi:
-     * chúng được set ở next.config.mjs cho toàn bộ đường dẫn.
+     * `requireApiUser()` / `requireApiPermission()`. Header bảo mật không mất
+     * đi: chúng được set ở next.config.mjs cho toàn bộ đường dẫn.
      */
     "/((?!api/|docs|_next/static|_next/image|favicon.ico|.*\\.[\\w]+$).*)",
   ],

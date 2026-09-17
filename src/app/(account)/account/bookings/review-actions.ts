@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { defineAuthedAction } from "@/lib/define-action";
 import { DomainError } from "@/lib/errors";
+import { firstIssueMessage } from "@/lib/form-errors";
 import { reviewService } from "@/services/review.service";
 
 export type ReviewState = { error?: string; ok?: string };
@@ -19,13 +20,27 @@ export const createReviewAction = defineAuthedAction(
   async (ctx, _prev: ReviewState, formData: FormData): Promise<ReviewState> => {
     const parsed = z
       .object({
-        bookingId: z.string().min(1),
-        rating: z.coerce.number().int().min(1).max(5),
-        comment: z.string().trim().max(1000).optional(),
+        bookingId: z
+          .string()
+          .min(1, "Không biết đang đánh giá lượt nào — tải lại trang rồi gửi lại giúp bạn nhé"),
+        rating: z.coerce
+          .number("Chọn số sao trước khi gửi")
+          .int("Chọn số sao trước khi gửi")
+          .min(1, "Chọn số sao trước khi gửi")
+          .max(5, "Chọn từ 1 tới 5 sao"),
+        comment: z
+          .string()
+          .trim()
+          .max(1000, "Nhận xét tối đa 1000 ký tự — rút gọn lại giúp bạn nhé")
+          .optional(),
       })
       .safeParse(Object.fromEntries(formData));
 
-    if (!parsed.success) return { error: "Chọn số sao trước khi gửi" };
+    // Câu của ĐÚNG ô sai. Bản trước báo "Chọn số sao" cho mọi lỗi — kể cả khi
+    // đã chọn sao mà nhận xét quá dài, người dùng không biết sửa chỗ nào.
+    if (!parsed.success) {
+      return { error: firstIssueMessage(parsed.error, "Chọn số sao trước khi gửi") };
+    }
 
     try {
       await reviewService.create({

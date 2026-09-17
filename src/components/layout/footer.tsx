@@ -1,28 +1,24 @@
-import Link from "next/link";
 import { Logo } from "@/components/layout/logo";
 
+/**
+ * Chân trang.
+ *
+ * Không có link "Chính sách bảo mật" / "Điều khoản sử dụng": hai trang đó chưa
+ * có nội dung thật, và một link dẫn tới trang 404 ở chân MỌI trang còn tệ hơn
+ * không có link. Văn bản pháp lý phải do người có trách nhiệm viết — thêm lại
+ * link cùng lúc với trang.
+ */
 export function Footer() {
   const currentYear = new Date().getFullYear();
 
   return (
     <footer className="mt-16 border-t border-line bg-canvas">
-      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
-        <div className="flex flex-col items-center justify-between gap-4 sm:flex-row">
-          <Logo size="sm" />
+      <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 py-8 text-center sm:flex-row sm:px-6 sm:text-left lg:px-8">
+        <Logo size="sm" />
 
-          <p className="text-xs text-muted">
-            &copy; {currentYear} ChốtSân. Đặt sân thể thao nhanh, rõ giá.
-          </p>
-
-          <div className="flex gap-6 text-xs">
-            <Link href="/privacy" className="text-muted transition-colors hover:text-content">
-              Chính sách bảo mật
-            </Link>
-            <Link href="/terms" className="text-muted transition-colors hover:text-content">
-              Điều khoản sử dụng
-            </Link>
-          </div>
-        </div>
+        <p className="text-xs text-muted">
+          &copy; {currentYear} ChốtSân. Đặt sân thể thao nhanh, rõ giá.
+        </p>
       </div>
     </footer>
   );

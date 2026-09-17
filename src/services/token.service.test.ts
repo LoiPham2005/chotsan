@@ -55,7 +55,7 @@ describe("TokenService", () => {
     expect(db.refreshToken.create).toHaveBeenCalled();
   });
 
-  it("dùng lại token ĐÃ WEEKDAY_NAMES HỒI thì huỷ đúng MỘT HỌ, không phải mọi phiên", async () => {
+  it("dùng lại token ĐÃ THU HỒI thì huỷ đúng MỘT HỌ, không phải mọi phiên", async () => {
     /*
      * Token đã xoay vòng mà còn được dùng lại chỉ có một cách giải thích hợp
      * lý: nó đã bị đánh cắp. Cả kẻ trộm lẫn thiết bị thật đều nằm trong họ đó,
@@ -100,12 +100,17 @@ describe("TokenService", () => {
       findUnique: vi.fn().mockResolvedValue(activeToken({ twoFactorAt })),
     });
 
-    await new TokenService(db).rotate("token-cu");
+    const result = await new TokenService(db).rotate("token-cu", { ip: "203.0.113.9" });
 
     const created = vi.mocked(db.refreshToken.create).mock.calls[0]![0].data as {
       twoFactorAt: Date;
+      ip: string;
     };
     expect(created.twoFactorAt).toEqual(twoFactorAt);
+    // Trả ra để route refresh ký lại claim `mfa`; lỗi thật trước đây: access
+    // token sau lần refresh đầu mất `mfa`, token mới cũng không lưu `ip`.
+    expect(result?.twoFactorAt).toEqual(twoFactorAt);
+    expect(created.ip).toBe("203.0.113.9");
   });
 
   it("phiên MỚI nhận familyId mới, không dùng lại của ai", async () => {
@@ -130,15 +135,19 @@ describe("TokenService", () => {
     await expect(new TokenService(createDb()).rotate("khong-co")).resolves.toBeNull();
   });
 
-  it("tài khoản bị BANNED không refresh được dù token còn hạn", async () => {
-    // Không có chốt này thì tài khoản vừa bị khoá vẫn tự gia hạn phiên vô thời hạn.
+  it.each([
+    ["BANNED", null],
+    ["INACTIVE", null],
+    ["ACTIVE", new Date("2026-09-01T00:00:00Z")],
+  ])("tài khoản %s (xoá lúc %s) không refresh được dù token còn hạn", async (status, deletedAt) => {
+    // Không có chốt này thì tài khoản vừa bị khoá vẫn tự gia hạn phiên vô
+    // thời hạn. Lỗi thật trước đây: chỉ BANNED bị chặn, INACTIVE vẫn gia hạn.
     const db = createDb({
-      findUnique: vi
-        .fn()
-        .mockResolvedValue(activeToken({ user: { status: "BANNED", deletedAt: null } })),
+      findUnique: vi.fn().mockResolvedValue(activeToken({ user: { status, deletedAt } })),
     });
 
     await expect(new TokenService(db).rotate("token")).resolves.toBeNull();
+    expect(db.refreshToken.create).not.toHaveBeenCalled();
   });
 
   it("revokeById ràng buộc userId ngay trong where", async () => {

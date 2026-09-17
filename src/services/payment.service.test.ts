@@ -4,29 +4,37 @@ import {
   BookingNotFoundError,
   BookingStateError,
   ManualApprovalNotAllowedError,
-  PaymentAmountMismatchError,
   PaymentNotFoundError,
   PaymentStateError,
   RefundAmountError,
   VenueBankAccountMissingError,
 } from "@/lib/errors";
+
+vi.mock("@/lib/logger", () => ({
+  logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+}));
+
+import { logger } from "@/lib/logger";
 import { PaymentService } from "./payment.service";
 
 /**
  * Đây là tầng động vào tiền thật. Ba loại lỗi phải chặn bằng test:
  * thu hai lần cho một lượt đặt, webhook chạy lại xác nhận lần nữa, và xác nhận
  * một giao dịch mà cổng báo về số tiền khác.
+ *
+ * Mốc dùng xuyên suốt: 10:00 ngày 04/09/2026 giờ VN.
  */
 
 const NOW = new Date("2026-09-04T03:00:00Z");
-const HET_HAN = new Date("2026-09-04T03:10:00Z");
+const HOLD_EXPIRES = new Date("2026-09-04T03:10:00Z");
 
 const BOOKING = {
   id: "b1",
   code: "8F3K2M",
+  checkoutCode: null as string | null,
   total: 360_000,
   status: "HOLDING",
-  holdExpiresAt: HET_HAN,
+  holdExpiresAt: HOLD_EXPIRES as Date | null,
   venueId: "v1",
 };
 
@@ -47,13 +55,33 @@ const VENUE_BANK = {
   bankAccountName: "NGUYEN VAN A",
 };
 
-/** Lỗi trùng chỉ số "một giao dịch sống cho mỗi lượt đặt". */
+/**
+ * Lỗi trùng chỉ số "một giao dịch sống cho mỗi lượt đặt" — CHÉP theo hình dạng
+ * thật của Prisma 7 + adapter-pg trong `src/lib/prisma-errors.test.ts`: tên ràng
+ * buộc chỉ nằm trong `meta.driverAdapterError.cause`, không có `meta.target`.
+ */
 function duplicateLivePayment(): Error {
   return Object.assign(
     new Error(
-      "Unique constraint failed on the constraint: `payments_mot_giao_dich_song_cho_moi_booking`",
+      "\nInvalid `db.payment.create()` invocation:\n\n" +
+        "Unique constraint failed on the fields: (`booking_id`)",
     ),
-    { code: "P2002" },
+    {
+      code: "P2002",
+      meta: {
+        modelName: "Payment",
+        driverAdapterError: {
+          name: "DriverAdapterError",
+          cause: {
+            originalCode: "23505",
+            originalMessage:
+              'duplicate key value violates unique constraint "payments_mot_giao_dich_song_cho_moi_booking"',
+            kind: "UniqueConstraintViolation",
+            constraint: { fields: ["booking_id"] },
+          },
+        },
+      },
+    },
   );
 }
 
@@ -61,14 +89,46 @@ function duplicateLivePayment(): Error {
 function duplicateEvent(): Error {
   return Object.assign(
     new Error("Unique constraint failed on the fields: (`provider`,`external_event_id`)"),
-    { code: "P2002", meta: { target: ["provider", "external_event_id"] } },
+    {
+      code: "P2002",
+      meta: {
+        modelName: "PaymentEvent",
+        driverAdapterError: {
+          cause: {
+            originalCode: "23505",
+            originalMessage:
+              'duplicate key value violates unique constraint "payment_events_provider_external_event_id_key"',
+            constraint: { fields: ["provider", "external_event_id"] },
+          },
+        },
+      },
+    },
   );
+}
+
+/** Trùng một ràng buộc KHÁC — không được nhầm thành "đã có giao dịch sống". */
+function duplicateMerchantRef(): Error {
+  return Object.assign(new Error("Unique constraint failed on the fields: (`merchant_ref`)"), {
+    code: "P2002",
+    meta: {
+      modelName: "Payment",
+      driverAdapterError: {
+        cause: {
+          originalCode: "23505",
+          originalMessage:
+            'duplicate key value violates unique constraint "payments_merchant_ref_key"',
+          constraint: { fields: ["merchant_ref"] },
+        },
+      },
+    },
+  });
 }
 
 type PaymentBooking = {
   code: string;
   checkoutCode: string | null;
   venueId: string;
+  status: string;
   customerName: string;
   customerPhone: string;
   startAt: Date;
@@ -86,6 +146,13 @@ type PaymentRow = Omit<typeof PAYMENT, "status" | "provider"> & {
   booking: PaymentBooking;
 };
 
+type RefundRow = {
+  id: string;
+  status: string;
+  amount: number;
+  paymentId: string;
+};
+
 type Options = {
   booking?: (Partial<typeof BOOKING> & { id: string }) | null;
   payment?: (Partial<typeof PAYMENT> & { id: string }) | null;
@@ -100,12 +167,21 @@ type Options = {
   venueBank?: Partial<Record<keyof typeof VENUE_BANK, string | null>> | null;
   createPaymentError?: Error;
   createEventError?: Error;
-  refund?: Record<string, unknown> | null;
+  refund?: RefundRow | null;
+  /** Tổng các khoản hoàn PENDING của giao dịch. */
+  pendingRefundSum?: number | null;
   /** Giao dịch sống mà `start()` đọc thấy TRƯỚC khi tạo. Mặc định: chưa có. */
   existingLivePayment?: Record<string, unknown> | null;
-  /** Số lượt đặt mà `booking.updateMany` báo đã cập nhật. */
+  /** Số lượt đặt mà `booking.updateMany` báo đã cập nhật. Mặc định: đủ số id gửi vào. */
   bookingUpdateCount?: number;
+  /** Số giao dịch mà `payment.updateMany` báo đã cập nhật. Mặc định: đủ số id gửi vào. */
+  paymentUpdateCount?: number;
 };
+
+function countOf(where: { id?: string | { in: string[] } }): number {
+  if (where.id === undefined) return 1;
+  return typeof where.id === "string" ? 1 : where.id.in.length;
+}
 
 function createDb(options: Options = {}) {
   const payment =
@@ -117,6 +193,7 @@ function createDb(options: Options = {}) {
     code: BOOKING.code,
     checkoutCode: null,
     venueId: "v1",
+    status: "HOLDING",
     customerName: "Nguyễn Văn A",
     customerPhone: "0900000000",
     startAt: new Date("2026-09-04T12:00:00Z"),
@@ -135,6 +212,11 @@ function createDb(options: Options = {}) {
       ? [{ ...payment, booking: baseBooking }]
       : [];
 
+  let refund: RefundRow | null =
+    "refund" in options
+      ? (options.refund ?? null)
+      : { id: "r1", status: "PENDING", amount: 360_000, paymentId: "p1" };
+
   type FindManyArgs = {
     where?: {
       id?: { in: string[] };
@@ -151,8 +233,8 @@ function createDb(options: Options = {}) {
           "booking" in options ? options.booking && { ...BOOKING, ...options.booking } : BOOKING,
         ),
       updateMany: vi.fn(
-        (_args: { where: Record<string, unknown>; data: Record<string, unknown> }) =>
-          Promise.resolve({ count: options.bookingUpdateCount ?? 1 }),
+        ({ where }: { where: { id?: string | { in: string[] } }; data: Record<string, unknown> }) =>
+          Promise.resolve({ count: options.bookingUpdateCount ?? countOf(where) }),
       ),
     },
     venue: {
@@ -164,9 +246,7 @@ function createDb(options: Options = {}) {
           ? Promise.reject(options.createPaymentError)
           : Promise.resolve({ ...PAYMENT, ...data, id: "p-moi" }),
       ),
-      findUnique: vi.fn(() =>
-        Promise.resolve(payment && { ...payment, booking: { code: BOOKING.code, venue } }),
-      ),
+      findUnique: vi.fn(() => Promise.resolve(payment)),
       findFirst: vi.fn().mockResolvedValue(options.existingLivePayment ?? null),
       // Lọc thật theo `id` và `booking.venueId` — bài kiểm "sân khác không duyệt
       // được" chỉ có nghĩa khi mock không trả bừa mọi thứ.
@@ -180,12 +260,19 @@ function createDb(options: Options = {}) {
           ),
         ),
       ),
-      update: vi.fn(({ where, data }: { where: { id: string }; data: Record<string, unknown> }) =>
-        Promise.resolve({ ...payment, ...data, id: where.id }),
+      update: vi.fn(
+        ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: Record<string, unknown>;
+          select?: unknown;
+        }) => Promise.resolve({ ...payment, ...data, id: where.id }),
       ),
       updateMany: vi.fn(
-        (_args: { where: Record<string, unknown>; data: Record<string, unknown> }) =>
-          Promise.resolve({ count: 2 }),
+        ({ where }: { where: { id?: string | { in: string[] } }; data: Record<string, unknown> }) =>
+          Promise.resolve({ count: options.paymentUpdateCount ?? countOf(where) }),
       ),
     },
     paymentEvent: {
@@ -197,23 +284,27 @@ function createDb(options: Options = {}) {
     },
     refund: {
       create: vi.fn(({ data }: { data: Record<string, unknown> }) =>
-        Promise.resolve({ ...data, id: "r1" }),
+        Promise.resolve({ ...data, id: "r-moi" }),
       ),
-      findUnique: vi.fn().mockResolvedValue(
-        "refund" in options
-          ? options.refund
-          : {
-              id: "r1",
-              status: "PENDING",
-              amount: 360_000,
-              payment: { id: "p1", amount: 360_000, refundedAmount: 0 },
-            },
+      findUnique: vi.fn(() => Promise.resolve(refund)),
+      findUniqueOrThrow: vi.fn(() => Promise.resolve(refund)),
+      // Cập nhật CÓ ĐIỀU KIỆN theo trạng thái thật của khoản hoàn — lần đánh dấu
+      // thứ hai không được khớp nữa.
+      updateMany: vi.fn(
+        ({ where, data }: { where: { status: string }; data: Record<string, unknown> }) => {
+          if (!refund || refund.status !== where.status) return Promise.resolve({ count: 0 });
+          refund = { ...refund, ...(data as Partial<RefundRow>) };
+          return Promise.resolve({ count: 1 });
+        },
       ),
-      update: vi.fn(({ data }: { data: Record<string, unknown> }) =>
-        Promise.resolve({ id: "r1", ...data }),
+      aggregate: vi.fn(() =>
+        Promise.resolve({ _sum: { amount: options.pendingRefundSum ?? null } }),
       ),
     },
-    $transaction: vi.fn((fn: (tx: unknown) => unknown) => Promise.resolve(fn(db))),
+    $queryRaw: vi.fn((..._args: unknown[]) => Promise.resolve([])),
+    $transaction: vi.fn((fn: (tx: unknown) => unknown, _options?: unknown) =>
+      Promise.resolve(fn(db)),
+    ),
   };
 
   return { db: db as unknown as PrismaClient, mock: db };
@@ -238,7 +329,7 @@ describe("start — mở giao dịch", () => {
     const { db, mock } = createDb();
     await new PaymentService(db).start({ bookingId: "b1", provider: "VNPAY", now: NOW });
 
-    expect(mock.payment.create.mock.calls[0]![0].data.expiresAt).toBe(HET_HAN);
+    expect(mock.payment.create.mock.calls[0]![0].data.expiresAt).toBe(HOLD_EXPIRES);
   });
 
   it("chuyển khoản tay được gắn sẵn nội dung đối soát", async () => {
@@ -251,7 +342,7 @@ describe("start — mở giao dịch", () => {
   it("lượt thuộc lần đặt nhiều lượt thì mang nội dung CHUNG của lần đặt", async () => {
     // Khách chuyển MỘT lần cho cả nhóm; chủ sân tìm MỘT dòng trong sao kê.
     const { db, mock } = createDb({
-      booking: { id: "b2", code: "QPMV9H", checkoutCode: "8F3K2M" } as never,
+      booking: { id: "b2", code: "QPMV9H", checkoutCode: "8F3K2M" },
     });
     await new PaymentService(db).start({ bookingId: "b2", provider: "BANK_TRANSFER", now: NOW });
 
@@ -268,11 +359,11 @@ describe("start — mở giao dịch", () => {
   });
 
   /**
-   * Màn thanh toán gọi `start()` MỖI LẦN tải trang. Cứ tạo rồi bắt lỗi trùng thì
-   * dữ liệu vẫn đúng, nhưng mỗi lần mở trang là một khối `prisma:error` trong
-   * log — y như sự cố thật.
+   * Khách tải lại trang hay bấm "Tạo mã chuyển khoản" hai lần. Cứ tạo rồi bắt
+   * lỗi trùng thì dữ liệu vẫn đúng, nhưng mỗi lần là một khối `prisma:error`
+   * trong log — y như sự cố thật.
    */
-  it("đã có giao dịch sống thì trả về NGAY, không thử INSERT", async () => {
+  it("đã có giao dịch sống CÙNG cách trả thì trả về NGAY, không thử INSERT", async () => {
     const { db, mock } = createDb({ existingLivePayment: { ...PAYMENT, id: "p-cu" } });
     const payment = await new PaymentService(db).start({
       bookingId: "b1",
@@ -282,10 +373,66 @@ describe("start — mở giao dịch", () => {
 
     expect(payment.id).toBe("p-cu");
     expect(mock.payment.create).not.toHaveBeenCalled();
+    expect(mock.payment.updateMany).not.toHaveBeenCalled();
   });
 
   /**
-   * Hai lần tải trang cùng lúc đều đọc thấy "chưa có". Chỉ chỉ số trong database
+   * Lỗi thật trước đây: giao dịch sống của cách trả KHÁC được trả về im lặng —
+   * xin chuyển khoản mà nhận giao dịch VNPay, và màn thanh toán dựng QR cho nó.
+   */
+  it("giao dịch sống KHÁC cách trả còn PENDING: huỷ có điều kiện rồi mở cái mới", async () => {
+    const { db, mock } = createDb({
+      existingLivePayment: { ...PAYMENT, id: "p-vnpay", provider: "VNPAY", status: "PENDING" },
+    });
+
+    const payment = await new PaymentService(db).start({
+      bookingId: "b1",
+      provider: "BANK_TRANSFER",
+      now: NOW,
+    });
+
+    expect(mock.payment.updateMany).toHaveBeenCalledWith({
+      where: { id: "p-vnpay", status: "PENDING" },
+      data: { status: "CANCELLED", expiresAt: null },
+    });
+    expect(mock.payment.updateMany.mock.invocationCallOrder[0]!).toBeLessThan(
+      mock.payment.create.mock.invocationCallOrder[0]!,
+    );
+    expect(payment.provider).toBe("BANK_TRANSFER");
+  });
+
+  it("giao dịch KHÁC cách trả mà khách ĐÃ BÁO CHUYỂN KHOẢN: từ chối, không huỷ, không tạo", async () => {
+    // Huỷ nó là vứt đi lời khai về một khoản tiền có thể đã về tài khoản sân.
+    const { db, mock } = createDb({
+      existingLivePayment: {
+        ...PAYMENT,
+        id: "p-ck",
+        provider: "BANK_TRANSFER",
+        status: "AWAITING_CONFIRMATION",
+      },
+    });
+
+    await expect(
+      new PaymentService(db).start({ bookingId: "b1", provider: "VNPAY", now: NOW }),
+    ).rejects.toBeInstanceOf(BookingStateError);
+    expect(mock.payment.updateMany).not.toHaveBeenCalled();
+    expect(mock.payment.create).not.toHaveBeenCalled();
+  });
+
+  it("giao dịch cũ vừa được khai đúng lúc định huỷ (huỷ có điều kiện khớp 0 dòng) → dừng, không tạo", async () => {
+    const { db, mock } = createDb({
+      existingLivePayment: { ...PAYMENT, id: "p-vnpay", provider: "VNPAY", status: "PENDING" },
+      paymentUpdateCount: 0,
+    });
+
+    await expect(
+      new PaymentService(db).start({ bookingId: "b1", provider: "BANK_TRANSFER", now: NOW }),
+    ).rejects.toBeInstanceOf(PaymentStateError);
+    expect(mock.payment.create).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Hai request cùng lúc đều đọc thấy "chưa có". Chỉ chỉ số trong database
    * quyết được ai tạo — bên thua phải trả về giao dịch của bên thắng.
    */
   it("thua cuộc đua tạo giao dịch thì TRẢ VỀ cái đang có, không tạo cái thứ hai", async () => {
@@ -293,6 +440,7 @@ describe("start — mở giao dịch", () => {
     mock.payment.findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({
       ...PAYMENT,
       id: "p-cu",
+      provider: "VNPAY",
     });
 
     const payment = await new PaymentService(db).start({
@@ -307,19 +455,29 @@ describe("start — mở giao dịch", () => {
     });
   });
 
+  it("thua cuộc đua vào tay một giao dịch KHÁC cách trả → báo đổi trạng thái, không trả nhầm", async () => {
+    const { db, mock } = createDb({ createPaymentError: duplicateLivePayment() });
+    mock.payment.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ...PAYMENT, id: "p-momo", provider: "MOMO" });
+
+    await expect(
+      new PaymentService(db).start({ bookingId: "b1", provider: "BANK_TRANSFER", now: NOW }),
+    ).rejects.toBeInstanceOf(PaymentStateError);
+  });
+
   it("lỗi trùng khác thì ném lên, không âm thầm trả về giao dịch bất kỳ", async () => {
-    const other = Object.assign(new Error("Unique constraint failed on `merchant_ref`"), {
-      code: "P2002",
-    });
-    const { db } = createDb({ createPaymentError: other });
+    const { db } = createDb({ createPaymentError: duplicateMerchantRef() });
 
     await expect(
       new PaymentService(db).start({ bookingId: "b1", provider: "VNPAY", now: NOW }),
     ).rejects.toThrow("merchant_ref");
   });
 
-  it("không nhận tiền cho lượt đã huỷ hay đã hết hạn", async () => {
-    for (const status of ["CANCELLED", "EXPIRED", "COMPLETED"]) {
+  it("chỉ lượt đang GIỮ CHỖ mới mở giao dịch — đã xác nhận, đã huỷ, hết hạn, xong đều từ chối", async () => {
+    // Lỗi thật trước đây: lượt CONFIRMED vẫn mở được giao dịch PENDING mới —
+    // mời khách trả lần hai cho lượt đã trả.
+    for (const status of ["CONFIRMED", "CANCELLED", "EXPIRED", "COMPLETED"]) {
       const { db, mock } = createDb({ booking: { id: "b1", status } });
       await expect(
         new PaymentService(db).start({ bookingId: "b1", provider: "VNPAY" }),
@@ -332,12 +490,21 @@ describe("start — mở giao dịch", () => {
     // Lịch đã coi các khung đó là trống — mở QR là mời khách trả tiền cho một
     // chỗ người khác đặt được bất cứ lúc nào.
     const { db, mock } = createDb();
-    const sau = new Date(HET_HAN.getTime() + 1_000);
+    const after = new Date(HOLD_EXPIRES.getTime() + 1_000);
 
     await expect(
-      new PaymentService(db).start({ bookingId: "b1", provider: "BANK_TRANSFER", now: sau }),
+      new PaymentService(db).start({ bookingId: "b1", provider: "BANK_TRANSFER", now: after }),
     ).rejects.toBeInstanceOf(BookingStateError);
     expect(mock.payment.findFirst).not.toHaveBeenCalled();
+    expect(mock.payment.create).not.toHaveBeenCalled();
+  });
+
+  it("lượt đặt 0đ không mở giao dịch — câu dùng được thay vì lỗi CHECK của database", async () => {
+    const { db, mock } = createDb({ booking: { id: "b1", total: 0 } });
+
+    await expect(
+      new PaymentService(db).start({ bookingId: "b1", provider: "BANK_TRANSFER", now: NOW }),
+    ).rejects.toThrow(/chưa có giá/);
     expect(mock.payment.create).not.toHaveBeenCalled();
   });
 
@@ -434,10 +601,10 @@ describe("declareTransfer — khách bấm 'tôi đã chuyển'", () => {
   });
 
   /**
-   * Lỗi thật trước đây: chỉ xoá hạn của GIAO DỊCH. Chủ sân đối chiếu chậm hơn 10
-   * phút là cron nhả chỗ của một khách đã trả tiền.
+   * Lỗi thật trước đây: chỉ xoá hạn của GIAO DỊCH. Chủ sân đối chiếu chậm hơn
+   * hạn giữ chỗ là cron nhả chỗ của một khách đã trả tiền.
    */
-  it("đang chờ người duyệt thì KHÔNG tự hết hạn — cả giao dịch lẫn LƯỢT ĐẶT", async () => {
+  it("đang chờ người duyệt thì KHÔNG tự hết hạn — cả giao dịch lẫn LƯỢT ĐẶT, lượt đặt khoá trước", async () => {
     const { db, mock } = createDb();
     await new PaymentService(db).declareTransfer({ paymentIds: ["p1"], now: NOW });
 
@@ -447,6 +614,9 @@ describe("declareTransfer — khách bấm 'tôi đã chuyển'", () => {
       where: { id: { in: ["b1"] }, status: "HOLDING" },
       data: { holdExpiresAt: null },
     });
+    expect(mock.booking.updateMany.mock.invocationCallOrder[0]!).toBeLessThan(
+      mock.payment.updateMany.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("khai cho CẢ lần đặt nhiều lượt trong một transaction", async () => {
@@ -455,7 +625,6 @@ describe("declareTransfer — khách bấm 'tôi đã chuyển'", () => {
         { id: "p1", bookingId: "b1" },
         { id: "p2", bookingId: "b2" },
       ],
-      bookingUpdateCount: 2,
     });
     await new PaymentService(db).declareTransfer({ paymentIds: ["p1", "p2"], now: NOW });
 
@@ -478,6 +647,34 @@ describe("declareTransfer — khách bấm 'tôi đã chuyển'", () => {
       new PaymentService(db).declareTransfer({ paymentIds: ["p1"], now: NOW }),
     ).rejects.toBeInstanceOf(BookingStateError);
     expect(mock.payment.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("giao dịch vừa bị cron huỷ đúng lúc khai → từ chối cả lần khai, không khai một nửa", async () => {
+    const { db } = createDb({
+      payments: [
+        { id: "p1", bookingId: "b1" },
+        { id: "p2", bookingId: "b2" },
+      ],
+      paymentUpdateCount: 1,
+    });
+
+    await expect(
+      new PaymentService(db).declareTransfer({ paymentIds: ["p1", "p2"], now: NOW }),
+    ).rejects.toBeInstanceOf(PaymentStateError);
+  });
+
+  /**
+   * Giao dịch của cổng tự động mà thành AWAITING_CONFIRMATION thì kẹt: cổng
+   * không báo về nữa, còn chủ sân không được duyệt tay.
+   */
+  it("CHỈ khai được cho giao dịch chuyển khoản ngân hàng", async () => {
+    for (const provider of ["VNPAY", "MOMO", "CASH"]) {
+      const { db, mock } = createDb({ payment: { id: "p1", provider } });
+      await expect(
+        new PaymentService(db).declareTransfer({ paymentIds: ["p1"], now: NOW }),
+      ).rejects.toBeInstanceOf(PaymentStateError);
+      expect(mock.$transaction).not.toHaveBeenCalled();
+    }
   });
 
   it("khai hai lần không hỏng", async () => {
@@ -506,16 +703,13 @@ describe("declareTransfer — khách bấm 'tôi đã chuyển'", () => {
 });
 
 describe("approveManual — chủ sân duyệt", () => {
-  it("xác nhận tiền VÀ xác nhận lượt đặt trong cùng một transaction", async () => {
+  const APPROVE = { paymentIds: ["p1"], venueId: "v1", reviewerId: "u9", now: NOW };
+
+  it("xác nhận lượt đặt VÀ tiền trong cùng một transaction — lượt đặt khoá trước", async () => {
     // Tiền đã nhận mà lượt đặt vẫn treo "chờ thanh toán" thì cron sẽ nhả chỗ
     // của một khách đã trả tiền.
     const { db, mock } = createDb({ payment: { id: "p1", status: "AWAITING_CONFIRMATION" } });
-    await new PaymentService(db).approveManual({
-      paymentIds: ["p1"],
-      venueId: "v1",
-      reviewerId: "u9",
-      now: NOW,
-    });
+    await new PaymentService(db).approveManual(APPROVE);
 
     expect(mock.$transaction).toHaveBeenCalledTimes(1);
     expect(mock.payment.updateMany.mock.calls[0]![0].data).toMatchObject({
@@ -527,6 +721,10 @@ describe("approveManual — chủ sân duyệt", () => {
       where: { id: { in: ["b1"] }, status: "HOLDING" },
       data: { status: "CONFIRMED", holdExpiresAt: null },
     });
+    // Cùng thứ tự khoá với huỷ lượt đặt — hai bên không chờ nhau thành vòng.
+    expect(mock.booking.updateMany.mock.invocationCallOrder[0]!).toBeLessThan(
+      mock.payment.updateMany.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("MỘT lần bấm xác nhận cả lần chuyển khoản trả cho nhiều lượt", async () => {
@@ -536,11 +734,7 @@ describe("approveManual — chủ sân duyệt", () => {
         { id: "p2", bookingId: "b2", status: "AWAITING_CONFIRMATION" },
       ],
     });
-    await new PaymentService(db).approveManual({
-      paymentIds: ["p1", "p2"],
-      venueId: "v1",
-      reviewerId: "u9",
-    });
+    await new PaymentService(db).approveManual({ ...APPROVE, paymentIds: ["p1", "p2"] });
 
     expect(mock.$transaction).toHaveBeenCalledTimes(1);
     expect(mock.booking.updateMany.mock.calls[0]![0].where).toEqual({
@@ -558,33 +752,56 @@ describe("approveManual — chủ sân duyệt", () => {
     const { db, mock } = createDb({ payment: { id: "p1", status: "AWAITING_CONFIRMATION" } });
 
     await expect(
-      new PaymentService(db).approveManual({
-        paymentIds: ["p1"],
-        venueId: "san-khac",
-        reviewerId: "u9",
-      }),
+      new PaymentService(db).approveManual({ ...APPROVE, venueId: "san-khac" }),
     ).rejects.toBeInstanceOf(PaymentNotFoundError);
     expect(mock.$transaction).not.toHaveBeenCalled();
   });
 
-  it("chỉ đụng lượt đặt còn HOLDING — không hồi sinh lượt đã huỷ", async () => {
-    const { db, mock } = createDb({ payment: { id: "p1", status: "AWAITING_CONFIRMATION" } });
-    await new PaymentService(db).approveManual({
-      paymentIds: ["p1"],
-      venueId: "v1",
-      reviewerId: "u9",
+  /**
+   * Lỗi thật trước đây: lượt đã huỷ hay hết hạn vẫn duyệt được — tiền SUCCEEDED
+   * mà không có sân, không ai được nhắc phải hoàn.
+   */
+  it("lượt đặt đã huỷ hoặc hết hạn → từ chối kèm câu chỉ việc phải làm, không ghi gì", async () => {
+    for (const status of ["CANCELLED", "EXPIRED"]) {
+      const { db, mock } = createDb({
+        payments: [{ id: "p1", status: "AWAITING_CONFIRMATION", booking: { status } }],
+      });
+
+      await expect(new PaymentService(db).approveManual(APPROVE)).rejects.toThrow(
+        new BookingStateError(
+          "Lượt đặt đã huỷ hoặc hết hạn nên không xác nhận được. Hãy từ chối khoản chuyển và hoàn tiền cho khách nếu đã nhận.",
+        ),
+      );
+      expect(mock.$transaction).not.toHaveBeenCalled();
+    }
+  });
+
+  it("khách huỷ đúng lúc chủ sân bấm duyệt (xác nhận có điều kiện khớp thiếu) → từ chối, không đụng tiền", async () => {
+    const { db, mock } = createDb({
+      payment: { id: "p1", status: "AWAITING_CONFIRMATION" },
+      bookingUpdateCount: 0,
     });
 
-    expect(mock.booking.updateMany.mock.calls[0]![0].where.status).toBe("HOLDING");
+    await expect(new PaymentService(db).approveManual(APPROVE)).rejects.toThrow(
+      /không xác nhận được/,
+    );
+    expect(mock.payment.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("giao dịch vừa đổi trạng thái giữa lúc đọc và lúc ghi → từ chối, transaction cuộn lại", async () => {
+    const { db } = createDb({
+      payment: { id: "p1", status: "AWAITING_CONFIRMATION" },
+      paymentUpdateCount: 0,
+    });
+
+    await expect(new PaymentService(db).approveManual(APPROVE)).rejects.toBeInstanceOf(
+      PaymentStateError,
+    );
   });
 
   it("duyệt được cả khi khách chưa kịp khai — chủ sân thấy tiền về là đủ", async () => {
     const { db, mock } = createDb({ payment: { id: "p1", status: "PENDING" } });
-    await new PaymentService(db).approveManual({
-      paymentIds: ["p1"],
-      venueId: "v1",
-      reviewerId: "u9",
-    });
+    await new PaymentService(db).approveManual(APPROVE);
 
     expect(mock.payment.updateMany.mock.calls[0]![0].data.status).toBe("SUCCEEDED");
   });
@@ -597,35 +814,25 @@ describe("approveManual — chủ sân duyệt", () => {
   it("TỪ CHỐI duyệt tay giao dịch của cổng thanh toán", async () => {
     for (const provider of ["VNPAY", "MOMO", "ZALOPAY", "SEPAY"]) {
       const { db, mock } = createDb({ payment: { id: "p1", provider, status: "PENDING" } });
-      await expect(
-        new PaymentService(db).approveManual({
-          paymentIds: ["p1"],
-          venueId: "v1",
-          reviewerId: "u9",
-        }),
-      ).rejects.toBeInstanceOf(ManualApprovalNotAllowedError);
+      await expect(new PaymentService(db).approveManual(APPROVE)).rejects.toBeInstanceOf(
+        ManualApprovalNotAllowedError,
+      );
       expect(mock.payment.updateMany).not.toHaveBeenCalled();
     }
   });
 
-  it("tiền mặt tại quầy thì duyệt tay được", async () => {
+  it("hàng chờ duyệt chuyển khoản chỉ nhận giao dịch chuyển khoản — tiền mặt không duyệt ở đây", async () => {
     const { db, mock } = createDb({ payment: { id: "p1", provider: "CASH", status: "PENDING" } });
-    await new PaymentService(db).approveManual({
-      paymentIds: ["p1"],
-      venueId: "v1",
-      reviewerId: "u9",
-    });
 
-    expect(mock.payment.updateMany.mock.calls[0]![0].data.status).toBe("SUCCEEDED");
+    await expect(new PaymentService(db).approveManual(APPROVE)).rejects.toBeInstanceOf(
+      PaymentStateError,
+    );
+    expect(mock.$transaction).not.toHaveBeenCalled();
   });
 
   it("duyệt hai lần không thu hai lần", async () => {
     const { db, mock } = createDb({ payment: { id: "p1", status: "SUCCEEDED" } });
-    await new PaymentService(db).approveManual({
-      paymentIds: ["p1"],
-      venueId: "v1",
-      reviewerId: "u9",
-    });
+    await new PaymentService(db).approveManual(APPROVE);
 
     expect(mock.$transaction).not.toHaveBeenCalled();
     expect(mock.booking.updateMany).not.toHaveBeenCalled();
@@ -634,44 +841,42 @@ describe("approveManual — chủ sân duyệt", () => {
   it("không duyệt được giao dịch đã huỷ hay đã thất bại", async () => {
     for (const status of ["CANCELLED", "FAILED", "REFUNDED"]) {
       const { db } = createDb({ payment: { id: "p1", status } });
-      await expect(
-        new PaymentService(db).approveManual({
-          paymentIds: ["p1"],
-          venueId: "v1",
-          reviewerId: "u9",
-        }),
-      ).rejects.toBeInstanceOf(PaymentStateError);
+      await expect(new PaymentService(db).approveManual(APPROVE)).rejects.toBeInstanceOf(
+        PaymentStateError,
+      );
     }
   });
 
   it("không tìm thấy giao dịch thì báo NOT_FOUND", async () => {
     const { db } = createDb({ payment: null });
-    await expect(
-      new PaymentService(db).approveManual({ paymentIds: ["p1"], venueId: "v1", reviewerId: "u9" }),
-    ).rejects.toBeInstanceOf(PaymentNotFoundError);
+    await expect(new PaymentService(db).approveManual(APPROVE)).rejects.toBeInstanceOf(
+      PaymentNotFoundError,
+    );
   });
 
   it("danh sách rỗng thì báo NOT_FOUND, không duyệt 'tất cả'", async () => {
     const { db, mock } = createDb();
     await expect(
-      new PaymentService(db).approveManual({ paymentIds: [], venueId: "v1", reviewerId: "u9" }),
+      new PaymentService(db).approveManual({ ...APPROVE, paymentIds: [] }),
     ).rejects.toBeInstanceOf(PaymentNotFoundError);
     expect(mock.payment.findMany).not.toHaveBeenCalled();
   });
 });
 
 describe("rejectManual — chủ sân không thấy tiền về", () => {
+  const REJECT = {
+    paymentIds: ["p1"],
+    venueId: "v1",
+    reviewerId: "u9",
+    reason: "Không thấy tiền về",
+    now: NOW,
+  };
+
   it("đánh dấu thất bại kèm lý do, lượt đặt vẫn HOLDING và được cấp HẠN GIỮ MỚI", async () => {
     // Lúc khách khai, hạn giữ chỗ đã bị xoá. Không cấp lại hạn là chỗ bị giữ
     // vĩnh viễn; cấp lại để khách kịp đọc lý do, sửa và báo lại.
     const { db, mock } = createDb({ payment: { id: "p1", status: "AWAITING_CONFIRMATION" } });
-    await new PaymentService(db).rejectManual({
-      paymentIds: ["p1"],
-      venueId: "v1",
-      reviewerId: "u9",
-      reason: "Không thấy tiền về",
-      now: NOW,
-    });
+    await new PaymentService(db).rejectManual(REJECT);
 
     expect(mock.payment.updateMany.mock.calls[0]![0].data).toMatchObject({
       status: "FAILED",
@@ -682,20 +887,41 @@ describe("rejectManual — chủ sân không thấy tiền về", () => {
       where: { id: { in: ["b1"] }, status: "HOLDING", holdExpiresAt: null },
       data: { holdExpiresAt: new Date(NOW.getTime() + 10 * 60_000) },
     });
+    expect(mock.booking.updateMany.mock.invocationCallOrder[0]!).toBeLessThan(
+      mock.payment.updateMany.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("giao dịch của SÂN KHÁC thì coi như không tồn tại", async () => {
     const { db, mock } = createDb({ payment: { id: "p1", status: "AWAITING_CONFIRMATION" } });
 
     await expect(
-      new PaymentService(db).rejectManual({
-        paymentIds: ["p1"],
-        venueId: "san-khac",
-        reviewerId: "u9",
-        reason: "Không thấy tiền về",
-      }),
+      new PaymentService(db).rejectManual({ ...REJECT, venueId: "san-khac" }),
     ).rejects.toBeInstanceOf(PaymentNotFoundError);
     expect(mock.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("CHỈ từ chối được giao dịch chuyển khoản ngân hàng", async () => {
+    for (const provider of ["VNPAY", "CASH"]) {
+      const { db, mock } = createDb({
+        payment: { id: "p1", provider, status: "AWAITING_CONFIRMATION" },
+      });
+      await expect(new PaymentService(db).rejectManual(REJECT)).rejects.toBeInstanceOf(
+        PaymentStateError,
+      );
+      expect(mock.$transaction).not.toHaveBeenCalled();
+    }
+  });
+
+  it("giao dịch vừa được duyệt đúng lúc bấm từ chối → dừng, transaction cuộn lại", async () => {
+    const { db } = createDb({
+      payment: { id: "p1", status: "AWAITING_CONFIRMATION" },
+      paymentUpdateCount: 0,
+    });
+
+    await expect(new PaymentService(db).rejectManual(REJECT)).rejects.toBeInstanceOf(
+      PaymentStateError,
+    );
   });
 });
 
@@ -749,35 +975,37 @@ describe("handleWebhook — cổng thanh toán báo về", () => {
     now: NOW,
   };
 
-  it("thành công thì xác nhận tiền và lượt đặt trong một transaction", async () => {
-    const { db, mock } = createDb();
+  it("thành công thì ghi sự kiện, xác nhận lượt đặt và tiền trong MỘT transaction", async () => {
+    const { db, mock } = createDb({ payment: { id: "p1", provider: "VNPAY" } });
     const result = await new PaymentService(db).handleWebhook({
       ...base,
       succeeded: true,
       providerTxnId: "vnp-999",
     });
 
-    expect(result.handled).toBe(true);
-    expect(mock.payment.update.mock.calls[0]![0].data).toMatchObject({
-      status: "SUCCEEDED",
-      providerTxnId: "vnp-999",
+    expect(result).toEqual({ handled: true });
+    expect(mock.$transaction).toHaveBeenCalledTimes(1);
+    expect(mock.payment.updateMany).toHaveBeenCalledWith({
+      where: { id: "p1", status: { in: ["PENDING", "AWAITING_CONFIRMATION"] } },
+      data: expect.objectContaining({ status: "SUCCEEDED", providerTxnId: "vnp-999" }) as unknown,
     });
     expect(mock.booking.updateMany).toHaveBeenCalledWith({
       where: { id: "b1", status: "HOLDING" },
       data: { status: "CONFIRMED", holdExpiresAt: null },
     });
+    expect(mock.refund.create).not.toHaveBeenCalled();
   });
 
   /**
    * Cổng nào cũng gửi lại khi không nhận được 200. Không có chốt này thì gửi
    * lại lần hai là xác nhận lần hai.
    */
-  it("gửi lại cùng một sự kiện thì KHÔNG xử lý lần nữa", async () => {
+  it("gửi lại cùng một sự kiện thì KHÔNG xử lý lần nữa, và không ném lỗi", async () => {
     const { db, mock } = createDb({ createEventError: duplicateEvent() });
     const result = await new PaymentService(db).handleWebhook({ ...base, succeeded: true });
 
     expect(result).toEqual({ handled: false, reason: "Sự kiện đã xử lý rồi" });
-    expect(mock.payment.update).not.toHaveBeenCalled();
+    expect(mock.payment.updateMany).not.toHaveBeenCalled();
     expect(mock.booking.updateMany).not.toHaveBeenCalled();
   });
 
@@ -787,8 +1015,9 @@ describe("handleWebhook — cổng thanh toán báo về", () => {
     const { db, mock } = createDb();
     await new PaymentService(db).handleWebhook({ ...base, succeeded: true });
 
-    const thuTuGoi = mock.paymentEvent.create.mock.invocationCallOrder[0]!;
-    expect(thuTuGoi).toBeLessThan(mock.payment.update.mock.invocationCallOrder[0]!);
+    const eventOrder = mock.paymentEvent.create.mock.invocationCallOrder[0]!;
+    expect(eventOrder).toBeLessThan(mock.booking.updateMany.mock.invocationCallOrder[0]!);
+    expect(eventOrder).toBeLessThan(mock.payment.updateMany.mock.invocationCallOrder[0]!);
   });
 
   it("chữ ký sai thì VẪN LƯU sự kiện nhưng không đụng vào tiền", async () => {
@@ -802,19 +1031,36 @@ describe("handleWebhook — cổng thanh toán báo về", () => {
 
     expect(result).toEqual({ handled: false, reason: "Chữ ký không hợp lệ" });
     expect(mock.paymentEvent.create).toHaveBeenCalledTimes(1);
-    expect(mock.payment.update).not.toHaveBeenCalled();
+    expect(mock.payment.updateMany).not.toHaveBeenCalled();
   });
 
   /**
    * Lệch tiền nghĩa là hoặc mã đối soát bị dùng lại, hoặc có người sửa số tiền
    * giữa đường. Cả hai đều phải có người xem, không được tự xác nhận.
+   *
+   * Lỗi thật trước đây: ghi sự kiện rồi mới NÉM lỗi — cổng gửi lại bị coi là
+   * trùng, và chuyện lệch tiền chỉ lộ ra đúng một lần trong log.
    */
-  it("số tiền lệch thì DỪNG dù webhook nói thành công", async () => {
+  it("số tiền lệch: ghi sự kiện VÀ đánh dấu giao dịch FAILED trong cùng transaction, không ném lỗi", async () => {
     const { db, mock } = createDb();
 
-    await expect(
-      new PaymentService(db).handleWebhook({ ...base, succeeded: true, amount: 1_000 }),
-    ).rejects.toBeInstanceOf(PaymentAmountMismatchError);
+    const result = await new PaymentService(db).handleWebhook({
+      ...base,
+      succeeded: true,
+      amount: 1_000,
+    });
+
+    expect(result).toEqual({
+      handled: false,
+      reason: "Số tiền không khớp: giao dịch 360000đ, cổng báo 1000đ",
+      amountMismatch: { expected: 360_000, received: 1_000 },
+    });
+    expect(mock.$transaction).toHaveBeenCalledTimes(1);
+    expect(mock.paymentEvent.create).toHaveBeenCalledTimes(1);
+    expect(mock.payment.updateMany.mock.calls[0]![0].data).toMatchObject({
+      status: "FAILED",
+      failReason: "Số tiền không khớp: giao dịch 360000đ, cổng báo 1000đ",
+    });
     expect(mock.booking.updateMany).not.toHaveBeenCalled();
   });
 
@@ -828,7 +1074,7 @@ describe("handleWebhook — cổng thanh toán báo về", () => {
     });
 
     expect(result.handled).toBe(true);
-    expect(mock.payment.update.mock.calls[0]![0].data).toMatchObject({
+    expect(mock.payment.updateMany.mock.calls[0]![0].data).toMatchObject({
       status: "FAILED",
       responseCode: "24",
       failReason: "Khách huỷ giao dịch",
@@ -852,12 +1098,44 @@ describe("handleWebhook — cổng thanh toán báo về", () => {
     expect(result.handled).toBe(false);
     expect(mock.paymentEvent.create).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * Lỗi thật trước đây: tiền về cho lượt đã huỷ/hết hạn vẫn đặt SUCCEEDED im
+   * lặng — không xác nhận lượt thì đúng, nhưng không ai được nhắc phải hoàn.
+   */
+  it("tiền về khi lượt đặt KHÔNG còn giữ chỗ: ghi tiền, KHÔNG xác nhận lượt, tạo yêu cầu hoàn PENDING, báo lỗi vào log", async () => {
+    const { db, mock } = createDb({ bookingUpdateCount: 0 });
+    mock.booking.findUnique.mockResolvedValueOnce({ status: "CANCELLED" });
+
+    const result = await new PaymentService(db).handleWebhook({ ...base, succeeded: true });
+
+    expect(mock.payment.updateMany.mock.calls[0]![0].data).toMatchObject({ status: "SUCCEEDED" });
+    expect(mock.refund.create.mock.calls[0]![0].data).toMatchObject({
+      paymentId: "p1",
+      amount: 360_000,
+      status: "PENDING",
+      requestedBy: null,
+    });
+    expect(String(mock.refund.create.mock.calls[0]![0].data.reason)).toContain("bị huỷ");
+    expect(result).toMatchObject({ handled: true, refundId: "r-moi" });
+    expect(logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("giao dịch vừa đổi trạng thái giữa chừng → ném để cuộn lại CẢ sự kiện, lần gửi lại sẽ xử lý", async () => {
+    const { db, mock } = createDb({ paymentUpdateCount: 0 });
+
+    await expect(
+      new PaymentService(db).handleWebhook({ ...base, succeeded: true }),
+    ).rejects.toBeInstanceOf(PaymentStateError);
+    expect(mock.refund.create).not.toHaveBeenCalled();
+  });
 });
 
 describe("expirePending — cron huỷ giao dịch quá hạn", () => {
   it("chỉ đụng PENDING, KHÔNG đụng giao dịch đang chờ người duyệt", async () => {
     // Tự huỷ một khoản khách đã chuyển thật là mất tiền của khách.
     const { db, mock } = createDb();
+    mock.payment.updateMany.mockResolvedValueOnce({ count: 2 });
     const count = await new PaymentService(db).expirePending({ now: NOW });
 
     expect(count).toBe(2);
@@ -869,15 +1147,12 @@ describe("expirePending — cron huỷ giao dịch quá hạn", () => {
 });
 
 describe("requestRefund — đề nghị hoàn tiền", () => {
+  const REQUEST = { paymentId: "p1", amount: 200_000, reason: "Khách huỷ sớm", requestedBy: "u9" };
+
   it("chỉ tạo bản ghi PENDING, không tự đánh dấu đã hoàn", async () => {
     // Đánh dấu đã hoàn ngay là sổ sách nói tiền đã ra trong khi tiền còn nguyên.
     const { db, mock } = createDb({ payment: { id: "p1", status: "SUCCEEDED" } });
-    await new PaymentService(db).requestRefund({
-      paymentId: "p1",
-      amount: 200_000,
-      reason: "Khách huỷ sớm",
-      requestedBy: "u9",
-    });
+    await new PaymentService(db).requestRefund(REQUEST);
 
     expect(mock.refund.create.mock.calls[0]![0].data).toMatchObject({
       status: "PENDING",
@@ -887,32 +1162,52 @@ describe("requestRefund — đề nghị hoàn tiền", () => {
     expect(mock.payment.update).not.toHaveBeenCalled();
   });
 
-  it("không hoàn quá số tiền còn lại", async () => {
+  it("khoá dòng giao dịch TRƯỚC khi đọc — hai yêu cầu đồng thời xếp hàng và thấy nhau", async () => {
+    const { db, mock } = createDb({ payment: { id: "p1", status: "SUCCEEDED" } });
+    await new PaymentService(db).requestRefund(REQUEST);
+
+    const [strings] = mock.$queryRaw.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
+    expect(strings.join("?")).toContain("FOR UPDATE");
+    expect(mock.$queryRaw.mock.invocationCallOrder[0]!).toBeLessThan(
+      mock.payment.findUnique.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  /**
+   * Lỗi thật trước đây: không trừ khoản hoàn đang PENDING — hai yêu cầu liên
+   * tiếp đều thấy "còn nguyên", tổng yêu cầu vượt số tiền đã nhận.
+   */
+  it("trừ cả khoản hoàn đang CHỜ, không chỉ khoản đã xong", async () => {
+    const { db, mock } = createDb({
+      payment: { id: "p1", status: "SUCCEEDED" },
+      pendingRefundSum: 300_000,
+    });
+
+    const error = await new PaymentService(db)
+      .requestRefund({ ...REQUEST, amount: 100_000 })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(RefundAmountError);
+    expect((error as RefundAmountError).remaining).toBe(60_000);
+    expect(mock.refund.create).not.toHaveBeenCalled();
+  });
+
+  it("trừ khoản đã hoàn xong (refundedAmount) — không hoàn quá số tiền còn lại", async () => {
     const { db } = createDb({
       payment: { id: "p1", status: "PARTIALLY_REFUNDED", refundedAmount: 300_000 },
     });
 
     await expect(
-      new PaymentService(db).requestRefund({
-        paymentId: "p1",
-        amount: 100_000,
-        reason: "x",
-        requestedBy: "u9",
-      }),
+      new PaymentService(db).requestRefund({ ...REQUEST, amount: 100_000 }),
     ).rejects.toBeInstanceOf(RefundAmountError);
   });
 
-  it("không hoàn số âm hoặc số 0", async () => {
+  it("không hoàn số âm, số 0 hay số lẻ", async () => {
     const { db } = createDb({ payment: { id: "p1", status: "SUCCEEDED" } });
 
-    for (const amount of [0, -1000]) {
+    for (const amount of [0, -1000, 1000.5]) {
       await expect(
-        new PaymentService(db).requestRefund({
-          paymentId: "p1",
-          amount,
-          reason: "x",
-          requestedBy: "u9",
-        }),
+        new PaymentService(db).requestRefund({ ...REQUEST, amount }),
       ).rejects.toBeInstanceOf(RefundAmountError);
     }
   });
@@ -921,60 +1216,104 @@ describe("requestRefund — đề nghị hoàn tiền", () => {
     for (const status of ["PENDING", "FAILED", "CANCELLED"]) {
       const { db } = createDb({ payment: { id: "p1", status } });
       await expect(
-        new PaymentService(db).requestRefund({
-          paymentId: "p1",
-          amount: 1_000,
-          reason: "x",
-          requestedBy: "u9",
-        }),
+        new PaymentService(db).requestRefund({ ...REQUEST, amount: 1_000 }),
       ).rejects.toBeInstanceOf(PaymentStateError);
     }
+  });
+
+  it("không có giao dịch thì NOT_FOUND", async () => {
+    const { db } = createDb({ payment: null });
+    await expect(new PaymentService(db).requestRefund(REQUEST)).rejects.toBeInstanceOf(
+      PaymentNotFoundError,
+    );
   });
 });
 
 describe("settleRefund — tiền đã thật sự ra", () => {
-  it("hoàn hết thì giao dịch thành REFUNDED", async () => {
+  it("đánh dấu CÓ ĐIỀU KIỆN (chỉ khi còn PENDING) và cộng tiền bằng `increment` trong transaction", async () => {
     const { db, mock } = createDb();
+    mock.payment.update.mockResolvedValueOnce({
+      amount: 360_000,
+      refundedAmount: 360_000,
+    } as never);
+
     await new PaymentService(db).settleRefund({ refundId: "r1", approvedBy: "u9", now: NOW });
 
-    expect(mock.payment.update.mock.calls[0]![0].data).toMatchObject({
-      refundedAmount: 360_000,
-      status: "REFUNDED",
+    expect(mock.$transaction).toHaveBeenCalledTimes(1);
+    expect(mock.refund.updateMany).toHaveBeenCalledWith({
+      where: { id: "r1", status: "PENDING" },
+      data: { status: "SUCCEEDED", approvedBy: "u9", refundedAt: NOW },
+    });
+    expect(mock.payment.update.mock.calls[0]![0].data).toEqual({
+      refundedAmount: { increment: 360_000 },
     });
   });
 
-  it("hoàn một phần thì thành PARTIALLY_REFUNDED và CỘNG DỒN, không ghi đè", async () => {
+  it("hoàn hết thì giao dịch thành REFUNDED", async () => {
+    const { db, mock } = createDb();
+    mock.payment.update.mockResolvedValueOnce({
+      amount: 360_000,
+      refundedAmount: 360_000,
+    } as never);
+
+    await new PaymentService(db).settleRefund({ refundId: "r1", approvedBy: "u9", now: NOW });
+
+    expect(mock.payment.update.mock.calls[1]![0].data).toEqual({ status: "REFUNDED" });
+  });
+
+  it("hoàn một phần thì thành PARTIALLY_REFUNDED — tính từ số ĐÃ cộng dồn trong database", async () => {
     // Cộng dồn sai là đối soát cuối tháng không bao giờ khớp.
     const { db, mock } = createDb({
-      refund: {
-        id: "r1",
-        status: "PENDING",
-        amount: 100_000,
-        payment: { id: "p1", amount: 360_000, refundedAmount: 60_000 },
-      },
+      refund: { id: "r1", status: "PENDING", amount: 100_000, paymentId: "p1" },
     });
+    mock.payment.update.mockResolvedValueOnce({
+      amount: 360_000,
+      refundedAmount: 160_000,
+    } as never);
 
     await new PaymentService(db).settleRefund({ refundId: "r1", approvedBy: "u9" });
 
-    expect(mock.payment.update.mock.calls[0]![0].data).toMatchObject({
-      refundedAmount: 160_000,
-      status: "PARTIALLY_REFUNDED",
+    expect(mock.payment.update.mock.calls[0]![0].data).toEqual({
+      refundedAmount: { increment: 100_000 },
     });
+    expect(mock.payment.update.mock.calls[1]![0].data).toEqual({ status: "PARTIALLY_REFUNDED" });
   });
 
+  /**
+   * Lỗi thật trước đây: đọc khoản hoàn NGOÀI transaction — hai lần bấm "đã
+   * hoàn" gần như cùng lúc đều thấy PENDING và cộng tiền hai lần.
+   */
   it("đánh dấu hai lần không cộng tiền hai lần", async () => {
+    const { db, mock } = createDb();
+    const service = new PaymentService(db);
+    mock.payment.update.mockResolvedValueOnce({
+      amount: 360_000,
+      refundedAmount: 360_000,
+    } as never);
+
+    await service.settleRefund({ refundId: "r1", approvedBy: "u9" });
+    const again = await service.settleRefund({ refundId: "r1", approvedBy: "u9" });
+
+    expect(again.status).toBe("SUCCEEDED");
+    expect(mock.payment.update).toHaveBeenCalledTimes(2); // chỉ của lần đầu
+  });
+
+  it("khoản hoàn đã thất bại thì không đánh dấu xong được", async () => {
     const { db, mock } = createDb({
-      refund: {
-        id: "r1",
-        status: "SUCCEEDED",
-        amount: 100_000,
-        payment: { id: "p1", amount: 360_000, refundedAmount: 100_000 },
-      },
+      refund: { id: "r1", status: "FAILED", amount: 100_000, paymentId: "p1" },
     });
 
-    await new PaymentService(db).settleRefund({ refundId: "r1", approvedBy: "u9" });
-
-    expect(mock.$transaction).not.toHaveBeenCalled();
+    await expect(
+      new PaymentService(db).settleRefund({ refundId: "r1", approvedBy: "u9" }),
+    ).rejects.toBeInstanceOf(PaymentStateError);
     expect(mock.payment.update).not.toHaveBeenCalled();
+  });
+
+  it("không có khoản hoàn thì NOT_FOUND", async () => {
+    const { db } = createDb({ refund: null });
+
+    await expect(
+      new PaymentService(db).settleRefund({ refundId: "r1", approvedBy: "u9" }),
+    ).rejects.toBeInstanceOf(PaymentNotFoundError);
   });
 });

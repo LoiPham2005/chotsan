@@ -3,8 +3,9 @@
 import { useActionState } from "react";
 import Link from "next/link";
 import { verifyEmailAction, type AuthFormState } from "../actions";
-import { FORM_STYLE } from "../auth-form";
+import { AUTH_FORM_CLASS } from "../auth-form";
 import { Button } from "@/components/ui/button";
+import { Notice } from "@/components/ui/notice";
 
 const initialState: AuthFormState = {};
 
@@ -14,10 +15,10 @@ export function VerifyEmailForm({ token }: { token: string }) {
   if (state.success) {
     return (
       <>
-        <div className="alert alert-success" role="status">
+        <Notice tone="success" role="status">
           {state.success}
-        </div>
-        <p style={{ marginTop: 20, fontSize: "0.9rem", color: "var(--text-muted)" }}>
+        </Notice>
+        <p className="mt-5 text-sm text-muted">
           <Link href="/login">Đăng nhập</Link>
         </p>
       </>
@@ -25,16 +26,16 @@ export function VerifyEmailForm({ token }: { token: string }) {
   }
 
   return (
-    <form action={formAction} style={FORM_STYLE}>
+    <form action={formAction} className={AUTH_FORM_CLASS}>
       <input type="hidden" name="token" value={token} />
 
       {state.error && (
-        <div className="alert alert-danger" role="alert">
+        <Notice tone="danger" role="alert">
           {state.error}
-        </div>
+        </Notice>
       )}
 
-      <Button type="submit" disabled={isPending}>
+      <Button type="submit" size="lg" disabled={isPending}>
         {isPending ? "Đang xác thực…" : "Xác thực email của tôi"}
       </Button>
     </form>

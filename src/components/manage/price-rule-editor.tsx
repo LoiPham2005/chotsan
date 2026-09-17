@@ -7,6 +7,9 @@ import {
   type CourtState,
 } from "@/app/(manage)/manage/[venueId]/courts/actions";
 import { Button } from "@/components/ui/button";
+import { fieldClassName } from "@/components/ui/input";
+import { Notice } from "@/components/ui/notice";
+import { cn } from "@/lib/cn";
 import { formatHhMm, formatVnd } from "@/lib/slots";
 
 const WEEKDAYS = [
@@ -42,26 +45,40 @@ const MINUTES = Array.from({ length: 49 }, (_, i) => i * 30);
  * dòng có thể đổi giá của khung khác mà người sửa không nhìn thấy. Ở đây họ sửa
  * cả bảng, thấy toàn cảnh, rồi bấm Lưu một lần — thứ họ nhìn đúng là thứ sẽ áp.
  *
+ * Bảng nằm trong state của React, NGOÀI thẻ `<form>` (form chỉ mang một ô ẩn):
+ * lưu báo lỗi thì React 19 xoá trắng form, nhưng không đụng tới state — bảng
+ * đang sửa dở còn nguyên.
+ *
  * ---
  * Ô "ƯU TIÊN" CÓ GIẢI THÍCH NGAY TẠI CHỖ
  *
  * Đây là khái niệm duy nhất trong màn này người dùng không đoán được. Giấu nó
- * trong tài liệu nghĩa là không ai đọc.
+ * trong tài liệu nghĩa là không ai đọc. Mỗi luật có số thứ tự ("Luật 2") để câu
+ * báo "luật 2 và luật 3 chồng nhau" chỉ thẳng được vào dòng cần sửa.
+ *
+ * `canEdit = false` (không có `pricing:update`): chỉ xem, không ô nhập, không nút.
  */
 export function PriceRuleEditor({
   venueId,
   courts,
   initial,
+  canEdit,
 }: {
   venueId: string;
   courts: { id: string; name: string }[];
   initial: PriceRuleItem[];
+  canEdit: boolean;
 }) {
   const [rules, setRules] = useState<PriceRuleItem[]>(initial);
   const [state, save] = useActionState<CourtState, FormData>(
     savePriceRulesAction.bind(null, venueId),
     {},
   );
+
+  const courtName = (courtId: string | null) =>
+    courtId
+      ? `Riêng ${courts.find((court) => court.id === courtId)?.name ?? "sân đã xoá"}`
+      : "Cả cơ sở";
 
   const update = (index: number, patch: Partial<PriceRuleItem>) =>
     setRules((prev) => prev.map((rule, i) => (i === index ? { ...rule, ...patch } : rule)));
@@ -74,71 +91,104 @@ export function PriceRuleEditor({
     });
 
   return (
-    <section className="mt-8" aria-labelledby="bang-gia">
+    <section className="mt-8" aria-labelledby="pricing-heading">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2 id="bang-gia" className="text-lg font-bold text-content">
+        <h2 id="pricing-heading" className="text-lg font-bold text-content">
           Bảng giá
           <span className="ml-2 text-sm font-medium text-muted">{rules.length} luật</span>
         </h2>
 
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={() =>
-            setRules((prev) => [
-              ...prev,
-              {
-                courtId: null,
-                weekdays: [],
-                startMinute: 6 * 60,
-                endMinute: 22 * 60,
-                pricePerSlot: 70_000,
-                isPeak: false,
-                priority: prev.length === 0 ? 0 : 10,
-              },
-            ])
-          }
-        >
-          + Thêm luật
-        </Button>
+        {canEdit && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              setRules((prev) => [
+                ...prev,
+                {
+                  courtId: null,
+                  weekdays: [],
+                  startMinute: 6 * 60,
+                  endMinute: 22 * 60,
+                  pricePerSlot: 70_000,
+                  isPeak: false,
+                  priority: nextPriority(prev),
+                },
+              ])
+            }
+          >
+            + Thêm luật
+          </Button>
+        )}
       </div>
 
       <p className="mt-1 text-sm text-muted">
         Giá tính theo <strong>mỗi 30 phút</strong>. Luật có <strong>ưu tiên</strong> cao hơn thắng
-        khi hai luật cùng phủ một khung giờ.
+        khi hai luật cùng phủ một khung giờ; cùng ưu tiên thì luật riêng một sân thắng luật cả cơ
+        sở.
+        {!canEdit && " Bạn đang xem — sửa bảng giá cần quyền sửa giá."}
       </p>
 
       {state.error && (
-        <p role="alert" className="alert alert-danger mt-3">
+        <Notice tone="danger" role="alert" className="mt-3">
           {state.error}
-        </p>
+        </Notice>
       )}
       {state.ok && (
-        <p role="status" className="mt-3 text-sm font-medium text-brand-hover">
+        <p role="status" className="mt-3 text-sm font-semibold text-brand-text">
           {state.ok}
         </p>
       )}
 
       {rules.length === 0 ? (
         <p className="mt-3 rounded-token-lg border border-dashed border-line bg-surface p-8 text-center text-sm text-muted">
-          Chưa có luật giá nào. Không có bảng giá thì lưới đặt sân hiện giá 0đ.
+          Chưa có luật giá nào. Chưa có bảng giá thì cơ sở chưa gửi duyệt hay mở bán được.
         </p>
+      ) : !canEdit ? (
+        <ul className="mt-3 space-y-2">
+          {rules.map((rule, index) => (
+            <li
+              key={index}
+              className={`flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-token-lg border bg-surface p-3 text-sm ${
+                rule.isPeak ? "border-peak-line" : "border-line"
+              }`}
+            >
+              <span className="text-xs font-bold uppercase tracking-wide text-subtle">
+                Luật {index + 1}
+              </span>
+              <span className="font-semibold text-content">{courtName(rule.courtId)}</span>
+              <span className="text-muted">{weekdaysText(rule.weekdays)}</span>
+              <span className="tabular-nums text-muted">
+                {formatHhMm(rule.startMinute)}–{formatHhMm(rule.endMinute)}
+              </span>
+              <span className="font-semibold tabular-nums text-content">
+                {formatVnd(rule.pricePerSlot)}
+              </span>
+              {rule.isPeak && <span className="text-peak-text">Giờ vàng</span>}
+              <span className="ml-auto text-muted">Ưu tiên {rule.priority}</span>
+            </li>
+          ))}
+        </ul>
       ) : (
         <ul className="mt-3 space-y-3">
           {rules.map((rule, index) => (
             <li
               key={index}
-              className={`rounded-token-lg border bg-surface p-3 shadow-nang-1 ${
+              className={`rounded-token-lg border bg-surface p-3 ${
                 rule.isPeak ? "border-peak-line" : "border-line"
               }`}
             >
+              <p className="mb-2 text-xs font-bold uppercase tracking-wide text-subtle">
+                Luật {index + 1}
+              </p>
+
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <Field label="Áp cho">
                   <select
                     value={rule.courtId ?? ""}
                     onChange={(e) => update(index, { courtId: e.target.value || null })}
-                    className="h-10 w-full rounded-token-md border border-line bg-surface px-2 text-sm"
+                    className={cn(fieldClassName, "h-11 cursor-pointer")}
                   >
                     <option value="">Cả cơ sở</option>
                     {courts.map((court) => (
@@ -170,13 +220,13 @@ export function PriceRuleEditor({
                     step={5000}
                     value={rule.pricePerSlot}
                     onChange={(e) => update(index, { pricePerSlot: Number(e.target.value) })}
-                    className="h-10 w-full rounded-token-md border border-line bg-surface px-2 text-sm tabular-nums"
+                    className={cn(fieldClassName, "h-11 tabular-nums")}
                   />
                 </Field>
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-3">
-                <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <span className="mr-1 text-xs font-bold uppercase tracking-wide text-subtle">
                     Ngày
                   </span>
@@ -188,10 +238,11 @@ export function PriceRuleEditor({
                         type="button"
                         onClick={() => toggleWeekday(index, day.value)}
                         aria-pressed={on}
-                        className={`h-8 w-9 rounded-token-sm border text-xs font-semibold transition ${
+                        // 44px mỗi nút thứ — chủ sân sửa bảng giá trên máy tính bảng.
+                        className={`h-11 min-w-11 rounded-token-control border-[1.5px] px-1 text-xs font-semibold transition-colors ${
                           on
                             ? "border-brand bg-brand text-white"
-                            : "border-line bg-surface text-muted hover:border-brand-line"
+                            : "border-line-strong bg-surface text-muted hover:border-brand-line"
                         }`}
                       >
                         {day.label}
@@ -203,12 +254,12 @@ export function PriceRuleEditor({
                   )}
                 </div>
 
-                <label className="flex items-center gap-2 text-sm text-content">
+                <label className="flex min-h-11 cursor-pointer items-center gap-2 text-sm text-content">
                   <input
                     type="checkbox"
                     checked={rule.isPeak}
                     onChange={(e) => update(index, { isPeak: e.target.checked })}
-                    className="h-4 w-4"
+                    className="h-4 w-4 accent-brand"
                   />
                   Giờ vàng
                 </label>
@@ -219,7 +270,7 @@ export function PriceRuleEditor({
                     type="number"
                     value={rule.priority}
                     onChange={(e) => update(index, { priority: Number(e.target.value) })}
-                    className="h-8 w-16 rounded-token-sm border border-line bg-surface px-2 text-sm tabular-nums"
+                    className={cn(fieldClassName, "h-11 w-20 tabular-nums")}
                   />
                 </label>
 
@@ -242,12 +293,31 @@ export function PriceRuleEditor({
         </ul>
       )}
 
-      <form action={save} className="mt-4">
-        <input type="hidden" name="rules" value={JSON.stringify(rules)} />
-        <SaveButton />
-      </form>
+      {canEdit && (
+        <form action={save} className="mt-4">
+          <input type="hidden" name="rules" value={JSON.stringify(rules)} />
+          <SaveButton />
+        </form>
+      )}
     </section>
   );
+}
+
+/**
+ * Ưu tiên cho luật vừa thêm: cao hơn mọi luật đang có. Luật mới mặc định phủ
+ * 06:00–22:00 mọi ngày cho cả cơ sở — đặt cố định một số (trước đây luôn là 10)
+ * thì thêm hai luật liền nhau là lưu bị từ chối vì "cùng ưu tiên, chồng nhau".
+ */
+export function nextPriority(rules: readonly PriceRuleItem[]): number {
+  return rules.length === 0 ? 0 : Math.max(...rules.map((rule) => rule.priority)) + 10;
+}
+
+/** "Mọi ngày" hoặc "T2, T3, T7" theo thứ tự trong tuần. */
+function weekdaysText(weekdays: number[]): string {
+  if (weekdays.length === 0) return "Mọi ngày";
+  return WEEKDAYS.filter((day) => weekdays.includes(day.value))
+    .map((day) => day.label)
+    .join(", ");
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -266,7 +336,7 @@ function TimeSelect({ value, onChange }: { value: number; onChange: (v: number) 
     <select
       value={value}
       onChange={(e) => onChange(Number(e.target.value))}
-      className="h-10 w-full rounded-token-md border border-line bg-surface px-2 text-sm tabular-nums"
+      className={cn(fieldClassName, "h-11 cursor-pointer tabular-nums")}
     >
       {MINUTES.map((minute) => (
         <option key={minute} value={minute}>
@@ -280,7 +350,7 @@ function TimeSelect({ value, onChange }: { value: number; onChange: (v: number) 
 function SaveButton() {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" disabled={pending} className="shadow-chon">
+    <Button type="submit" disabled={pending}>
       {pending ? "Đang lưu…" : "Lưu bảng giá"}
     </Button>
   );

@@ -70,7 +70,7 @@ example.com {
 	# để tránh hai nguồn sự thật đá nhau.
 
 	log {
-		output file /var/log/caddy/nextjs-base.log
+		output file /var/log/caddy/chotsan.log
 		format json
 	}
 }

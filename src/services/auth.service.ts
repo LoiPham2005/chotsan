@@ -18,6 +18,7 @@ import {
   PhoneOtpThrottledError,
   PhoneVerificationDisabledError,
   TwoFactorRequiredError,
+  UserNotFoundError,
   assertLoginAllowed,
 } from "@/lib/errors";
 import {
@@ -30,6 +31,7 @@ import {
 import { sendPhoneOtpSms } from "@/lib/sms";
 import { isPhoneVerificationEnabled } from "@/lib/smser";
 import { rateLimit } from "@/lib/rate-limit";
+import { isUniqueViolation } from "@/lib/prisma-errors";
 import { type UserService, toPublicUser } from "./user.service";
 import type { VerificationService } from "./verification.service";
 import type { TokenService } from "./token.service";
@@ -38,10 +40,10 @@ import type { SecurityStampService } from "./security-stamp.service";
 /**
  * Luồng xác thực: đăng ký, đăng nhập, xác thực email, đặt lại / đổi mật khẩu.
  *
- * ⚠️ Service này KHÔNG ký JWT. Việc đó thuộc về `apps/api` (nơi có
- * `JwtService` của NestJS và biết `JWT_SECRET`) — giữ `packages/core` không
- * phụ thuộc framework, và nhờ vậy `apps/worker` import được nó mà không phải
- * khai `JWT_SECRET`.
+ * ⚠️ Service này KHÔNG ký JWT và KHÔNG đặt cookie. Hai bề mặt tự cấp phiên theo
+ * cách của mình từ `PublicUser` trả về: web qua `createSession` (`@/lib/auth`),
+ * mobile qua `issueTokenPair` (`@/lib/api/tokens`). Nhờ vậy service dùng chung
+ * được cho Server Action, route REST, và cả job nền trong `worker/`.
  */
 export class AuthService {
   constructor(
@@ -59,14 +61,19 @@ export class AuthService {
    * `POST /auth/register` cũng tự phong mình làm ADMIN.
    */
   async register(input: RegisterInput): Promise<PublicUser> {
-    const user = await this.users.create({
-      email: input.email,
-      password: input.password,
-      username: input.username,
-      fullName: input.fullName,
-      status: "ACTIVE",
-      roleKeys: [SYSTEM_ROLES.USER],
-    });
+    const user = await this.users.create(
+      {
+        email: input.email,
+        password: input.password,
+        username: input.username,
+        fullName: input.fullName,
+        status: "ACTIVE",
+        roleKeys: [SYSTEM_ROLES.USER],
+      },
+      // Không có ai "thao tác" — người đăng ký chưa tồn tại. Vai trò USER bậc 0
+      // nên chốt bậc cũng chẳng có gì để chặn.
+      { actorId: null },
+    );
 
     // Gửi thư xác thực nhưng KHÔNG chặn việc đăng ký nếu gửi hỏng: tài khoản
     // đã tạo xong rồi, ném lỗi ở đây chỉ khiến người dùng thấy "đăng ký thất
@@ -85,9 +92,19 @@ export class AuthService {
    * sai mật khẩu — đều ném CÙNG một lỗi và đều tiêu tốn thời gian như nhau.
    * Nếu không, chỉ cần đo thời gian phản hồi là biết được email nào đã đăng ký.
    *
-   * Tài khoản BANNED hoặc đang `lockedUntil` chỉ bị tiết lộ SAU KHI mật khẩu đã
-   * đúng. Tiết lộ trước là một oracle: kẻ dò mật khẩu mù sẽ biết tài khoản nào
-   * tồn tại/đã bị khoá mà không cần đoán trúng gì.
+   * Tài khoản BANNED/INACTIVE chỉ bị tiết lộ SAU KHI mật khẩu đã đúng: tiết lộ
+   * trước là cho kẻ dò mù biết tài khoản nào tồn tại mà không cần đoán trúng gì.
+   *
+   * ---
+   * KHOÁ TẠM THÌ NGƯỢC LẠI: CHẶN TRƯỚC KHI SO MẬT KHẨU
+   *
+   * Bản cũ so mật khẩu trước: trong lúc khoá, sai nhận "Thông tin đăng nhập
+   * không chính xác", ĐÚNG nhận "Tài khoản tạm khoá". Tức là khoá tạm vẫn để
+   * kẻ dò đoán tiếp, và còn báo cho họ biết lúc nào vừa đoán trúng — mất hẳn
+   * tác dụng của việc khoá. Giờ trong lúc khoá, đúng hay sai đều cùng một lỗi
+   * (vẫn chạy phép so giả để thời gian phản hồi không khác), và không đếm thêm
+   * lần sai. Cái giá: người không có mật khẩu biết được tài khoản đó tồn tại và
+   * đang bị khoá — nhẹ hơn hẳn việc để lộ mật khẩu.
    */
   async validateCredentials(input: LoginInput): Promise<PublicUser> {
     // Ký tự `@` là thứ duy nhất phân biệt được hai loại: `usernameSchema` cấm
@@ -123,21 +140,19 @@ export class AuthService {
       throw new InvalidCredentialsError();
     }
 
+    if (user.lockedUntil && user.lockedUntil > new Date()) {
+      await CryptoUtils.fakeCompare(input.password);
+      throw new AccountLockedError(user.lockedUntil, user.id);
+    }
+
     const check = await CryptoUtils.verifyPassword(input.password, user.password);
 
     if (!check.valid) {
-      await this.registerFailedAttempt(
-        user.id,
-        Boolean(user.lockedUntil && user.lockedUntil > new Date()),
-      );
-      throw new InvalidCredentialsError();
+      await this.registerFailedAttempt(user.id);
+      throw new InvalidCredentialsError(user.id);
     }
 
-    assertLoginAllowed(user.status);
-
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
-      throw new AccountLockedError(user.lockedUntil);
-    }
+    assertLoginAllowed(user.status, user.id);
 
     // Đăng nhập đúng sau một chuỗi lần sai — xoá dấu vết, đừng bắt họ trả giá
     // cho những lần gõ nhầm đã qua.
@@ -180,7 +195,7 @@ export class AuthService {
     const user = await this.users.findById(userId);
     if (!user) throw new InvalidCredentialsError();
 
-    assertLoginAllowed(user.status);
+    assertLoginAllowed(user.status, user.id);
 
     return user;
   }
@@ -191,12 +206,11 @@ export class AuthService {
    * Bổ sung cho rate-limit theo IP: rate-limit chặn MỘT IP dò NHIỀU tài khoản,
    * còn cái này chặn NHIỀU IP cùng dò MỘT tài khoản.
    *
-   * Không tăng/khoá lại nếu đã đang bị khoá — tránh việc một loạt request tới
-   * trong lúc khoá cứ đẩy `lockedUntil` lùi thêm vô hạn.
+   * Chỉ được gọi khi tài khoản KHÔNG đang khoá (`validateCredentials` chặn từ
+   * trước) — nên một loạt request trong lúc khoá không đẩy `lockedUntil` lùi
+   * thêm vô hạn.
    */
-  private async registerFailedAttempt(userId: string, alreadyLocked: boolean): Promise<void> {
-    if (alreadyLocked) return;
-
+  private async registerFailedAttempt(userId: string): Promise<void> {
     const updated = await this.db.user.update({
       where: { id: userId },
       data: { failedLoginAttempts: { increment: 1 } },
@@ -231,6 +245,34 @@ export class AuthService {
     } catch (error) {
       logger.error("Không nâng cấp được hash mật khẩu", error, { userId });
     }
+  }
+
+  /**
+   * Tình trạng bảo mật của CHÍNH tài khoản — cho màn `/security`.
+   *
+   * Tách khỏi `PublicUser` có chủ đích: `pendingEmail` và việc "có mật khẩu
+   * hay không" là chuyện riêng của chủ tài khoản, không nên đi vào mọi danh
+   * sách người dùng mà quản trị viên đọc.
+   */
+  async accountSecurity(userId: string): Promise<{
+    email: string | null;
+    emailVerified: boolean;
+    pendingEmail: string | null;
+    hasPassword: boolean;
+  }> {
+    const user = await this.db.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: { email: true, emailVerifiedAt: true, pendingEmail: true, password: true },
+    });
+
+    if (!user) throw new UserNotFoundError(userId);
+
+    return {
+      email: user.email,
+      emailVerified: user.emailVerifiedAt !== null,
+      pendingEmail: user.pendingEmail,
+      hasPassword: user.password !== null,
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -305,17 +347,31 @@ export class AuthService {
     const user = await this.users.findByEmail(email);
     if (!user?.email) return;
 
-    const { token } = await this.verification.issue(user.id, "PASSWORD_RESET");
+    // Ghi ĐỊA CHỈ nhận link vào token: bấm link chứng minh quyền sở hữu đúng
+    // địa chỉ đó, và `resetPassword` chỉ dựa vào nó để đánh dấu email đã xác
+    // thực khi tài khoản vẫn còn mang địa chỉ ấy.
+    const { token } = await this.verification.issue(user.id, "PASSWORD_RESET", user.email);
     await sendPasswordResetEmail(user.email, token);
   }
 
   /**
    * Đặt mật khẩu mới bằng token trong link.
    *
-   * Thu hồi TOÀN BỘ refresh token sau khi đổi. Đây là phần bắt buộc, không phải
-   * tuỳ chọn: kịch bản điển hình của luồng này là tài khoản đã bị chiếm. Đổi
-   * mật khẩu mà để phiên cũ của kẻ tấn công còn sống thì việc đổi gần như vô
-   * nghĩa.
+   * Thu hồi TOÀN BỘ phiên sau khi đổi — refresh token lẫn cookie web/access
+   * token đang cầm. Đây là phần bắt buộc, không phải tuỳ chọn: kịch bản điển
+   * hình của luồng này là tài khoản đã bị chiếm. Đổi mật khẩu mà để phiên cũ
+   * của kẻ tấn công còn sống thì việc đổi gần như vô nghĩa.
+   *
+   * ---
+   * LINK TRONG EMAIL CŨNG LÀ BẰNG CHỨNG SỞ HỮU EMAIL
+   *
+   * Tài khoản chưa xác thực email thì bấm được link này là đã chứng minh đọc
+   * được hộp thư đó → đánh dấu `emailVerifiedAt`. Đây cũng là đường LẤY LẠI
+   * tài khoản bị tiền-chiếm (kẻ xấu đăng ký trước bằng email nạn nhân), nên
+   * trong đúng trường hợp đó, mọi thứ gắn vào tài khoản khi chưa ai chứng minh
+   * được quyền sở hữu cũng bị gỡ: passkey và 2FA. Không gỡ thì kẻ xấu vẫn đăng
+   * nhập được bằng passkey của họ, hoặc khoá chủ thật ở bước mã 2FA mà chỉ kẻ
+   * xấu có.
    */
   async resetPassword(token: string, newPassword: string): Promise<string> {
     const consumed = await this.verification.consume(token, "PASSWORD_RESET");
@@ -323,22 +379,56 @@ export class AuthService {
 
     const userId = consumed.userId;
     const password = await CryptoUtils.hashPassword(newPassword);
+    const now = new Date();
 
-    const user = await this.db.user.update({
+    const current = await this.db.user.findUnique({
       where: { id: userId },
-      data: {
-        password,
-        passwordChangedAt: new Date(),
-        failedLoginAttempts: 0,
-        lockedUntil: null,
-      },
-      select: { id: true, email: true },
+      select: { email: true, emailVerifiedAt: true },
     });
 
+    // Chỉ khi link được gửi tới ĐÚNG địa chỉ tài khoản đang mang: admin đổi
+    // email giữa lúc xin link và lúc bấm thì link không chứng minh gì về địa
+    // chỉ mới. Token cấp trước khi có cột `destination` cho luồng này → `null`
+    // → không đánh dấu (an toàn).
+    const provesUnverifiedEmail =
+      current !== null &&
+      current.emailVerifiedAt === null &&
+      consumed.destination !== null &&
+      consumed.destination === current.email;
+
+    const [user] = await this.db.$transaction([
+      this.db.user.update({
+        where: { id: userId },
+        data: {
+          password,
+          passwordChangedAt: now,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+          ...(provesUnverifiedEmail
+            ? { emailVerifiedAt: now, twoFactorSecret: null, twoFactorEnabledAt: null }
+            : {}),
+        },
+        select: { id: true, email: true },
+      }),
+      ...(provesUnverifiedEmail
+        ? [
+            this.db.webAuthnCredential.deleteMany({ where: { userId } }),
+            this.db.recoveryCode.deleteMany({ where: { userId } }),
+          ]
+        : []),
+    ]);
+
     await this.tokens.revokeAllForUser(userId);
-    // Refresh token đã thu hồi ở trên, nhưng access token đang cầm thì chưa —
-    // dòng này mới là thứ đá kẻ tấn công ra NGAY thay vì sau 15 phút.
+    // Refresh token đã thu hồi ở trên, nhưng cookie web và access token đang
+    // cầm thì chưa — dòng này (cùng `passwordChangedAt`) mới là thứ đá kẻ tấn
+    // công ra ở request KẾ TIẾP thay vì sau 7 ngày.
     await this.securityStamp.invalidate(userId);
+
+    if (provesUnverifiedEmail) {
+      logger.warn("Đặt lại mật khẩu xác thực email lần đầu — đã gỡ passkey và 2FA gắn trước đó", {
+        userId,
+      });
+    }
 
     if (user.email) {
       await sendPasswordChangedEmail(user.email).catch((error: unknown) => {
@@ -397,6 +487,10 @@ export class AuthService {
 
     const { token } = await this.verification.issue(userId, "EMAIL_CHANGE", normalized);
 
+    // Chỉ để HIỂN THỊ "đang chờ xác nhận" ở /security. Nguồn sự thật vẫn là
+    // `destination` của token: `confirmEmailChange` không đọc cột này.
+    await this.db.user.update({ where: { id: userId }, data: { pendingEmail: normalized } });
+
     await sendEmailChangeVerificationEmail(normalized, token);
 
     if (user.email) {
@@ -411,8 +505,11 @@ export class AuthService {
   /**
    * Bước 2: xác nhận bằng link gửi tới địa chỉ MỚI.
    *
-   * Thu hồi mọi phiên sau khi đổi: email là danh tính khôi phục tài khoản, nên
-   * đổi nó xong mà để phiên cũ còn sống thì kẻ đã chiếm phiên vẫn ở nguyên đó.
+   * Thu hồi mọi REFRESH TOKEN sau khi đổi: email là danh tính khôi phục tài
+   * khoản, nên đổi nó xong mà để phiên mobile cũ gia hạn mãi thì kẻ đã chiếm
+   * phiên vẫn ở nguyên đó. Cookie web và access token đang cầm thì KHÔNG bị cắt
+   * — email không nằm trong ảnh phiên (`security-stamp.service`); muốn cắt hết
+   * thì đổi mật khẩu.
    */
   async confirmEmailChange(token: string): Promise<PublicUser> {
     const consumed = await this.verification.consume(token, "EMAIL_CHANGE");
@@ -430,7 +527,7 @@ export class AuthService {
       });
     } catch (error) {
       // Ai đó đã đăng ký địa chỉ này trong lúc chờ — partial unique index chặn.
-      if ((error as { code?: string }).code === "P2002") {
+      if (isUniqueViolation(error, "users_email_active_key")) {
         throw new DuplicateFieldError("email", consumed.destination);
       }
       throw error;
@@ -458,7 +555,8 @@ export class AuthService {
    * Đây là endpoint DUY NHẤT trong bộ khung có chi phí trực tiếp trên mỗi lần
    * gọi. Một lỗ hổng ở đây không dẫn tới mất dữ liệu — nó dẫn tới một hoá đơn.
    *
-   *   1. Rate limit theo IP — do `@RateLimit("phoneOtp")` ở tầng HTTP lo.
+   *   1. Rate limit theo IP — route `POST /auth/phone/request-otp` lo
+   *      (`RATE_LIMITS.phoneOtp`).
    *      Chặn một máy bắn liên tục. KHÔNG chặn được kẻ xoay vòng IP.
    *   2. **Giãn cách theo SỐ ĐIỆN THOẠI** (mặc định 60 giây). Chặn "SMS
    *      bombing": nhiều IP cùng dội mã vào một nạn nhân để quấy rối.
@@ -531,7 +629,7 @@ export class AuthService {
       });
     } catch (error) {
       // Ai đó vừa đăng ký số này trong lúc chờ — partial unique index chặn.
-      if ((error as { code?: string }).code === "P2002") {
+      if (isUniqueViolation(error, "users_phone_active_key")) {
         throw new DuplicateFieldError("phone", pending.destination);
       }
       throw error;
@@ -550,15 +648,17 @@ export class AuthService {
    * Bắt nhập lại mật khẩu hiện tại DÙ đã đăng nhập: nếu không, ai ngồi vào máy
    * đang mở sẵn phiên là chiếm được tài khoản vĩnh viễn.
    *
-   * @param keepFamilyId Phiên được giữ lại — chính là phiên đang thực hiện
-   * thao tác này. Không có tham số này thì người dùng bị đăng xuất khỏi chính
-   * thiết bị họ vừa thao tác, một trải nghiệm trông y như lỗi.
+   * Thu hồi MỌI phiên, kể cả phiên đang thao tác — kể cả refresh token của
+   * chính thiết bị này, vì một bản sao của nó có thể đã nằm trong tay kẻ gian.
+   * Nơi gọi CẤP LẠI phiên cho người đang thao tác ngay sau đó: web đặt cookie
+   * mới (`changePasswordAction`), mobile nhận cặp token mới cùng `familyId`
+   * (`POST /auth/change-password`). Nhờ vậy người dùng không bị đá ra khỏi
+   * chính thiết bị họ vừa đổi mật khẩu — một trải nghiệm trông y như lỗi.
    */
   async changePassword(
     userId: string,
     currentPassword: string,
     newPassword: string,
-    keepFamilyId?: string,
   ): Promise<void> {
     const user = await this.db.user.findFirst({
       where: { id: userId, deletedAt: null },
@@ -579,7 +679,7 @@ export class AuthService {
       where: { id: userId },
       data: { password, passwordChangedAt: new Date() },
     });
-    await this.tokens.revokeAllForUser(userId, { exceptFamilyId: keepFamilyId });
+    await this.tokens.revokeAllForUser(userId);
     await this.securityStamp.invalidate(userId);
 
     if (user.email) {

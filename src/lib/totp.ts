@@ -49,7 +49,7 @@ export type TotpSetup = {
  * Sinh bí mật mới cho một người dùng.
  *
  * @param issuer Tên hiển thị trong app xác thực. Nên là tên sản phẩm.
- * @param nhãn Định danh tài khoản trong app — email hoặc tên đăng nhập.
+ * @param label Định danh tài khoản trong app — email hoặc tên đăng nhập.
  */
 export function createTotpSecret(issuer: string, label: string): TotpSetup {
   // 20 byte = 160 bit, đúng độ dài khoá mà RFC 4226 khuyến nghị cho HMAC-SHA1.
@@ -71,12 +71,23 @@ export function createTotpSecret(issuer: string, label: string): TotpSetup {
  * Kiểm tra mã người dùng nhập.
  *
  * Trả về `null` khi sai, hoặc số bước lệch khi đúng (0 = đúng cửa sổ hiện tại).
- * Nơi gọi chỉ cần biết đúng/sai; giá trị lệch dùng để phát hiện phát lại mã.
+ * Giá trị lệch đổi sang bước thời gian thật bằng `totpTimeStep` — đó là thứ
+ * `TwoFactorService` nhớ lại để một mã đã dùng không dùng lại được trong
+ * chính cửa sổ ±30 giây của nó.
  *
  * KHÔNG BAO GIỜ ném lỗi: bí mật hỏng trong database phải dẫn tới "mã sai", chứ
  * không phải lỗi 500 làm lộ ra rằng bản ghi đó có vấn đề.
  */
-export function verifyTotp(secretBase32: string, code: string): number | null {
+export function verifyTotp(
+  secretBase32: string,
+  code: string,
+  /**
+   * Mốc thời gian để so (ms). Truyền CÙNG giá trị cho `totpTimeStep`: gọi
+   * `Date.now()` hai lần có thể rơi vào hai khung 30 giây khác nhau, và bước
+   * thời gian tính ra lệch một — đủ để mã bị dùng lại lọt qua.
+   */
+  now: number = Date.now(),
+): number | null {
   try {
     const totp = new TOTP({
       algorithm: ALGORITHM,
@@ -86,10 +97,27 @@ export function verifyTotp(secretBase32: string, code: string): number | null {
     });
 
     // Người dùng hay chép cả khoảng trắng từ app xác thực.
-    const delta = totp.validate({ token: code.replace(/\s/g, ""), window: VALIDATION_WINDOW });
+    const delta = totp.validate({
+      token: code.replace(/\s/g, ""),
+      window: VALIDATION_WINDOW,
+      timestamp: now,
+    });
 
     return delta === null ? null : delta;
   } catch {
     return null;
   }
+}
+
+/**
+ * Bước thời gian (số thứ tự khung 30 giây kể từ epoch) mà một mã vừa khớp.
+ *
+ * Mã TOTP hợp lệ suốt cả khung của nó và thêm một khung mỗi bên, tức là tới
+ * 90 giây. Không nhớ bước đã dùng thì ai nhìn trộm được mã (qua vai, qua màn
+ * hình chia sẻ, qua trang giả chuyển tiếp) đăng nhập lại được bằng đúng mã đó.
+ *
+ * @param delta Giá trị `verifyTotp` trả về khi mã đúng.
+ */
+export function totpTimeStep(delta: number, now: number = Date.now()): number {
+  return Math.floor(now / 1000 / PERIOD_SECONDS) + delta;
 }

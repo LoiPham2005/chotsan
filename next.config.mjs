@@ -2,7 +2,7 @@
  * Header bảo mật tĩnh, áp cho mọi response.
  *
  * Content-Security-Policy KHÔNG nằm ở đây: nó cần nonce sinh riêng theo từng
- * request nên được set trong `src/middleware.ts`.
+ * request nên được set trong `src/proxy.ts` (Next 16 đổi tên middleware → proxy).
  */
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },

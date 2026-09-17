@@ -13,6 +13,18 @@ import { env, isProduction } from "./env";
 
 export const SESSION_COOKIE_NAME = "session";
 
+/**
+ * Header proxy gắn vào MỌI request trang: đường dẫn + truy vấn đang mở.
+ *
+ * Server Component không đọc được URL của chính nó. `requireUser()` cần nó để
+ * đưa người chưa đăng nhập về ĐÚNG trang họ định vào (`/login?next=…`) mà nơi
+ * gọi không phải tự viết cứng đường dẫn — bản cũ viết cứng `/users` trong
+ * layout quản trị, nên người mở `/invoices` đăng nhập xong bị đưa sang trang khác.
+ *
+ * Khai ở đây vì cả `src/proxy.ts` lẫn `src/lib/auth.ts` đều đã import file này.
+ */
+export const CURRENT_PATH_HEADER = "x-pathname";
+
 const ALGORITHM = "HS256";
 const secretKey = new TextEncoder().encode(env.SESSION_SECRET);
 
@@ -39,8 +51,12 @@ const sessionPayloadSchema = z.object({
    *
    * Dùng DANH SÁCH TRẮNG, không phải danh sách đen: loại thêm sau này bị từ
    * chối theo mặc định.
+   *
+   * BẮT BUỘC, không có giá trị mặc định: `.default("access")` từng khiến một
+   * JWT THIẾU hẳn `typ` được nhận như phiên — tức là mọi JWT tương lai quên
+   * khai loại đều thành phiên đăng nhập.
    */
-  typ: z.literal("access").default("access"),
+  typ: z.literal("access"),
 
   sub: z.string().min(1),
   email: z.email().nullable(),
@@ -58,10 +74,11 @@ const sessionPayloadSchema = z.object({
   roles: z.array(z.string()).default([]),
 
   /**
-   * `familyId` của phiên — ĐỊNH DANH PHIÊN, không đổi qua các lần refresh.
+   * `familyId` của phiên MOBILE — ĐỊNH DANH PHIÊN, không đổi qua các lần refresh.
+   * Cookie web không có (phiên web không có bản ghi refresh token).
    *
    * Dùng để đánh dấu "thiết bị này" trong danh sách phiên, và để đổi mật khẩu
-   * biết phiên nào được giữ lại thay vì đăng xuất chính người đang thao tác.
+   * biết phiên nào được cấp lại thay vì đăng xuất chính người đang thao tác.
    */
   sid: z.string().optional(),
 
@@ -71,9 +88,10 @@ const sessionPayloadSchema = z.object({
   /**
    * `iat` — thời điểm cấp, giây epoch. Do `jose` tự thêm.
    *
-   * So với `User.passwordChangedAt` để thu hồi TỨC THÌ token cũ khi mật khẩu
-   * đổi — JWT không thu hồi được, nên không có phép so này thì kẻ đã chiếm tài
-   * khoản còn thao tác thêm tới hết hạn token.
+   * `securityStampService` so nó với `User.passwordChangedAt` ở MỌI lần đọc
+   * phiên (`getSession`, `getApiSession`, handshake realtime): token cấp trước
+   * lần đổi mật khẩu gần nhất bị từ chối, nên kẻ đã chiếm tài khoản không thao
+   * tác thêm được tới hết hạn token.
    */
   iat: z.number().optional(),
 });

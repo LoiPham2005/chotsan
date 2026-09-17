@@ -1,6 +1,11 @@
 import type { PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { BookingNotFoundError, BookingStateError, DomainError } from "@/lib/errors";
+import {
+  BookingNotFoundError,
+  BookingStateError,
+  ReviewNotFoundError,
+  ReviewRatingError,
+} from "@/lib/errors";
 
 /**
  * Đánh giá sân.
@@ -33,6 +38,12 @@ export class ReviewService {
     comment?: string | null;
     now?: Date;
   }) {
+    // Kiểm điểm TRƯỚC mọi thứ và KHÔNG làm tròn: `Math.round(NaN)` là NaN, lọt
+    // qua `< 1 || > 5`; còn 4.6 làm tròn thành 5 là tự chấm hộ khách một điểm.
+    if (!Number.isInteger(input.rating) || input.rating < 1 || input.rating > 5) {
+      throw new ReviewRatingError();
+    }
+
     const booking = await this.db.booking.findFirst({
       where: { id: input.bookingId, userId: input.userId },
       select: {
@@ -55,16 +66,29 @@ export class ReviewService {
       throw new BookingStateError("Chỉ đánh giá được lượt đặt đã diễn ra");
     }
 
-    const rating = Math.round(input.rating);
-    if (rating < 1 || rating > 5) throw new ReviewRatingError();
-
     return this.db.$transaction(async (tx) => {
+      /*
+       * Khoá dòng cơ sở TRƯỚC khi ghi đánh giá.
+       *
+       * Không khoá thì hai đánh giá cùng lúc cho một sân đua nhau: mỗi bên tính
+       * trung bình từ ảnh chụp KHÔNG thấy đánh giá chưa commit của bên kia, bên
+       * ghi sau đè mất phần của bên ghi trước — điểm lệch vĩnh viễn. Một câu
+       * UPDATE có subquery cũng KHÔNG đủ: ở READ COMMITTED, câu chờ khoá xong vẫn
+       * dùng ảnh chụp lấy từ lúc nó bắt đầu. Khoá ở đây thì mọi câu lệnh sau đều
+       * bắt đầu SAU khi bên kia commit, nên thấy đủ.
+       *
+       * `FOR NO KEY UPDATE` chứ không `FOR UPDATE`: hai người ghi đánh giá vẫn
+       * phải xếp hàng, nhưng phép kiểm khoá ngoại của lượt đặt/sân con đang ghi
+       * vào cùng cơ sở (`FOR KEY SHARE`) không bị chặn theo.
+       */
+      await tx.$queryRaw`SELECT id FROM venues WHERE id = ${booking.venueId} FOR NO KEY UPDATE`;
+
       const review = await tx.review.create({
         data: {
           venueId: booking.venueId,
           bookingId: booking.id,
           userId: input.userId,
-          rating,
+          rating: input.rating,
           comment: input.comment?.trim() || null,
         },
       });
@@ -76,12 +100,14 @@ export class ReviewService {
 
   /** Chủ sân trả lời một đánh giá. Không sửa được nội dung của khách. */
   async reply(input: { reviewId: string; venueId: string; reply: string; now?: Date }) {
+    // `venueId` nằm TRONG câu truy vấn: id đánh giá đến từ form, đánh giá của
+    // sân khác thì coi như không tồn tại (GOTCHAS #19).
     const review = await this.db.review.findFirst({
       where: { id: input.reviewId, venueId: input.venueId },
       select: { id: true },
     });
 
-    if (!review) throw new BookingNotFoundError();
+    if (!review) throw new ReviewNotFoundError();
 
     return this.db.review.update({
       where: { id: input.reviewId },
@@ -113,6 +139,8 @@ export class ReviewService {
    * Đọc lại toàn bộ thay vì cộng dồn: cộng dồn sai một lần là sai vĩnh viễn và
    * không có cách nào phát hiện, còn tính lại thì luôn đúng. Một sân có vài
    * nghìn đánh giá vẫn là một câu `aggregate` trong vài mili giây.
+   *
+   * ⚠️ Chỉ đúng khi dòng cơ sở ĐÃ bị khoá trong transaction đang chạy — xem `create`.
    */
   private async recomputeRating(db: PrismaClient, venueId: string) {
     const stats = await db.review.aggregate({
@@ -128,14 +156,6 @@ export class ReviewService {
         ratingCount: stats._count._all,
       },
     });
-  }
-}
-
-/** Điểm nằm ngoài 1–5. Database cũng chặn, đây là lớp báo lỗi tử tế. */
-export class ReviewRatingError extends DomainError {
-  readonly code = "VALIDATION_ERROR" as const;
-  constructor() {
-    super("Điểm đánh giá phải từ 1 tới 5 sao");
   }
 }
 

@@ -41,7 +41,7 @@ export default defineConfig({
           name: "node",
           environment: "node",
           env: testEnv,
-          include: ["src/**/*.test.ts", "realtime/**/*.test.ts"],
+          include: ["src/**/*.test.ts", "realtime/**/*.test.ts", "worker/**/*.test.ts"],
         },
       },
       {

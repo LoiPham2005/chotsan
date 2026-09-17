@@ -3,7 +3,14 @@ import { headers } from "next/headers";
 import { getSession } from "@/lib/auth";
 import { logger } from "@/lib/logger";
 import type { Permission } from "@/lib/permissions";
-import { rateLimit } from "@/lib/rate-limit";
+import {
+  clientIpFromHeaders,
+  ipRateLimitKey,
+  rateLimit,
+  type RateLimitBucket,
+  type RateLimitOptions,
+  type RateLimitResult,
+} from "@/lib/rate-limit";
 import type { SessionPayload } from "@/lib/session";
 import { permissionService } from "@/services/permission.service";
 
@@ -35,6 +42,13 @@ import { permissionService } from "@/services/permission.service";
  * Đây vẫn là lớp kiểm quyền của TẦNG ACTION. Ba lớp còn lại giữ nguyên:
  * proxy chặn người chưa đăng nhập vào trang, trang tự gọi `requirePermission`,
  * và route handler của REST API tự kiểm. Xem README mục "Mô hình bảo mật".
+ *
+ * ---
+ * "ĐÃ ĐĂNG NHẬP" NGHĨA LÀ GÌ Ở ĐÂY
+ *
+ * Mọi wrapper đọc phiên qua `getSession()`: cookie đúng chữ ký VÀ tài khoản
+ * vẫn ACTIVE, chưa xoá, chưa đổi mật khẩu kể từ lúc cấp cookie. Người vừa bị
+ * khoá bị chặn ngay ở action kế tiếp, không đợi cookie hết hạn.
  */
 
 /**
@@ -74,6 +88,32 @@ export type PublicActionContext = {
 };
 
 /**
+ * IP người gọi Server Action — CÙNG luật đọc header với REST API
+ * (`clientIpFromHeaders`, `TRUSTED_PROXY_HOPS`). Hai bản đọc IP khác nhau là
+ * hai xô đếm khác nhau cho cùng một người.
+ */
+export async function actionClientIp(): Promise<string> {
+  return clientIpFromHeaders(await headers());
+}
+
+/**
+ * Rate limit theo IP cho Server Action viết trần (luồng đăng nhập công khai).
+ *
+ * Đi qua `ipRateLimitKey` như `enforceRateLimit` của API, nên cùng một luồng
+ * trên web và trên API đếm vào CÙNG một xô — kẻ dò không nhân đôi được số lần
+ * thử bằng cách luân phiên hai cửa.
+ *
+ * @returns Kết quả kèm `key` — để `resetRateLimit(key)` sau khi thành công.
+ */
+export async function rateLimitAction(
+  bucket: RateLimitBucket,
+  options: RateLimitOptions,
+): Promise<RateLimitResult & { key: string }> {
+  const key = ipRateLimitKey(bucket, await actionClientIp());
+  return { ...(await rateLimit(key, options)), key };
+}
+
+/**
  * Tạo một Server Action đã tự kiểm quyền.
  *
  * @param permission Quyền bắt buộc phải có. Đây là lý do hàm này tồn tại —
@@ -83,7 +123,8 @@ export type PublicActionContext = {
  * export const deleteRoleAction = defineAction(
  *   "role:delete",
  *   async (ctx, key: string) => {
- *     await roleService.delete(key);
+ *     // `actorId` thật — không có nó thì chốt `Role.level` không chạy.
+ *     await roleService.remove(key, { actorId: ctx.actorId });
  *     revalidatePath("/roles");
  *     return {};
  *   },
@@ -162,21 +203,22 @@ export function defineAuthedAction<TArgs extends unknown[], TState extends Actio
  * ---
  * VÌ SAO PHẢI CÓ HÀM RIÊNG THAY VÌ VIẾT MỘT HÀM TRẦN
  *
- * Khách vãng lai đặt sân được — không có tài khoản, không có quyền nào. Nhưng
- * một action không bọc gì trông y hệt một action mà người viết QUÊN kiểm quyền,
- * và đó chính là lỗi im lặng cả file này sinh ra để chặn.
+ * Có những việc người chưa đăng nhập phải làm được (gửi liên hệ, tra cứu công
+ * khai…). Hiện chưa action nào cần — đặt sân và khai chuyển khoản đều bắt đăng
+ * nhập. Nhưng khi cần, một action không bọc gì trông y hệt một action mà người
+ * viết QUÊN kiểm quyền, và đó chính là lỗi im lặng cả file này sinh ra để chặn.
  *
  * Hàm này biến "công khai" thành một quyết định phải nói ra:
  *
- *   - `lyDo` bắt buộc, và nó nằm trong log — đọc log là biết vì sao action này
- *     không cần đăng nhập, không phải đi đọc lại code.
- *   - Luôn có rate limit theo địa chỉ IP. Endpoint công khai KHÔNG có trần là
- *     một endpoint chờ bị dội; ở đây action tạo lượt đặt, nên dội nó nghĩa là
- *     khoá sạch khung giờ của một sân.
+ *   - `reason` bắt buộc, và nó đứng ngay đầu lời gọi — đọc code là biết vì sao
+ *     action này không cần đăng nhập. Nó cũng đi vào log mỗi lần action bị
+ *     chặn vì gọi quá dày (không log ở lần gọi bình thường — sẽ ngập log).
+ *   - Luôn có rate limit: theo người dùng nếu đã đăng nhập, theo IP nếu chưa.
+ *     Endpoint công khai KHÔNG có trần là một endpoint chờ bị dội.
  *   - `grep definePublicAction src/` liệt kê đủ mọi bề mặt công khai.
  */
 export function definePublicAction<TArgs extends unknown[], TState extends ActionState>(
-  lyDo: string,
+  reason: string,
   options: { key: string; limit: number; windowSeconds: number },
   handler: (ctx: PublicActionContext, ...args: TArgs) => Promise<TState>,
 ): (...args: TArgs) => Promise<TState> {
@@ -186,18 +228,14 @@ export function definePublicAction<TArgs extends unknown[], TState extends Actio
     /*
      * Định danh người gọi để đếm: đã đăng nhập thì theo user, chưa thì theo IP.
      *
-     * IP đọc từ header do proxy đặt. Header giả mạo được — nhưng đây là trần
-     * chống dội, không phải kiểm quyền; kẻ giả mạo header chỉ tự tách mình sang
-     * một xô đếm khác, không leo được quyền gì.
+     * IP đọc qua `actionClientIp` — phần tử `X-Forwarded-For` do proxy TIN CẬY
+     * thêm vào, không phải phần tử đầu do client tự gửi. Đọc phần tử đầu thì kẻ
+     * dội chỉ cần đổi header mỗi request là mỗi lần một xô đếm mới.
      */
-    const headerList = await headers();
-    const ip =
-      headerList.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-      headerList.get("x-real-ip") ??
-      "khong-ro";
+    const ip = await actionClientIp();
 
-    const danhTinh = session?.sub ?? `ip:${ip}`;
-    const result = await rateLimit(`action:${options.key}:${danhTinh}`, {
+    const identity = session?.sub ?? `ip:${ip}`;
+    const result = await rateLimit(`action:${options.key}:${identity}`, {
       limit: options.limit,
       windowSeconds: options.windowSeconds,
     });
@@ -205,8 +243,8 @@ export function definePublicAction<TArgs extends unknown[], TState extends Actio
     if (!result.success) {
       logger.warn("Server Action công khai bị chặn vì quá nhiều lần gọi", {
         action: options.key,
-        lyDo,
-        danhTinh,
+        reason,
+        identity,
       });
       return denied<TState>("Bạn thao tác hơi nhanh. Chờ một chút rồi thử lại giúp bạn nhé.");
     }

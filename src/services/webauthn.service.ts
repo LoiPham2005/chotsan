@@ -13,13 +13,13 @@ import type {
 } from "@simplewebauthn/server";
 
 /**
- * Phản hồi thô từ `navigator.credentials.create()` / `.get()`, nhìn từ bên
- * ngoài package này.
+ * Phản hồi thô từ `navigator.credentials.create()` / `.get()`, như route và
+ * Server Action nhận được.
  *
- * Cố ý là `unknown` chứ không phải kiểu của `@simplewebauthn/server`: kiểu đó
- * sẽ rò vào file `.d.ts` mà `packages/core` sinh ra, và lúc đó `apps/api` phải
- * cài thư viện WebAuthn chỉ để BIÊN DỊCH được — dù nó không gọi dòng nào của
- * thư viện đó. Toàn bộ WebAuthn phải nằm gọn trong package này.
+ * Cố ý là `unknown` chứ không phải kiểu của `@simplewebauthn/server`: dữ liệu
+ * đến thẳng từ trình duyệt hoặc app mobile, và `webAuthnResponseSchema` chỉ
+ * chặn "không phải object". Khai nó là `RegistrationResponseJSON` ở ranh giới
+ * là nói với TypeScript một điều chưa ai kiểm.
  *
  * Ép kiểu diễn ra đúng một chỗ, ngay trước khi gọi thư viện. An toàn vì chính
  * thư viện mới là bên kiểm tra thật: chữ ký, origin, RP ID, challenge — dữ
@@ -35,6 +35,7 @@ import { logger } from "@/lib/logger";
 import {
   ForbiddenError,
   InvalidCredentialsError,
+  PasskeyNotFoundError,
   UserNotFoundError,
   WebAuthnVerificationError,
   assertLoginAllowed,
@@ -299,7 +300,7 @@ export class WebAuthnService {
     // BANNED chặn mọi đường đăng nhập. `lockedUntil` thì KHÔNG áp dụng: đó là
     // khoá do dò MẬT KHẨU, mà passkey không dùng mật khẩu — khoá nó ở đây là
     // phạt người dùng vì hành vi của kẻ tấn công.
-    assertLoginAllowed(user.status);
+    assertLoginAllowed(user.status, user.id);
 
     return user;
   }
@@ -334,7 +335,8 @@ export class WebAuthnService {
       data: { name: name.trim() || null },
     });
 
-    if (result.count === 0) throw new UserNotFoundError();
+    // Id không có, hoặc thuộc người khác — hai ca cố ý cùng một câu.
+    if (result.count === 0) throw new PasskeyNotFoundError();
 
     return this.db.webAuthnCredential.findFirstOrThrow({
       where: { id, userId },
@@ -370,7 +372,7 @@ export class WebAuthnService {
 
     const result = await this.db.webAuthnCredential.deleteMany({ where: { id, userId } });
 
-    if (result.count === 0) throw new UserNotFoundError();
+    if (result.count === 0) throw new PasskeyNotFoundError();
 
     logger.info("Đã xoá passkey", { userId });
   }

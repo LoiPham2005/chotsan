@@ -4,11 +4,15 @@ import { env } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { CryptoUtils } from "@/lib/crypto";
 import { decryptSecret, encryptSecret, isEncryptionConfigured } from "@/lib/encryption";
-import { createTotpSecret, verifyTotp } from "@/lib/totp";
+import { createTotpSecret, totpTimeStep, verifyTotp } from "@/lib/totp";
 import { generateRecoveryCode, hashScopedToken, normalizeRecoveryCode } from "@/lib/opaque-token";
+import { cacheGet, cacheSet } from "@/lib/cache";
+import { claimOnce, RATE_LIMITS, rateLimit, resetRateLimit } from "@/lib/rate-limit";
 import {
   InvalidCredentialsError,
   InvalidTwoFactorCodeError,
+  ProviderNotConfiguredError,
+  TooManyTwoFactorAttemptsError,
   TwoFactorAlreadyEnabledError,
   TwoFactorNotEnabledError,
   UserNotFoundError,
@@ -39,6 +43,18 @@ import {
  * thể.
  *
  * ---
+ * BA CHỐT CHỐNG DÒ VÀ PHÁT LẠI MÃ
+ *
+ *   1. Bộ đếm theo TÀI KHOẢN (`RATE_LIMITS.twoFactorAccount`), chung cho web,
+ *      API, và cả tắt 2FA/cấp lại mã. Rate limit theo IP không cản được kẻ dò
+ *      xoay IP; bộ đếm này thì có. Vượt ngưỡng là chặn cả mã ĐÚNG tới hết cửa
+ *      sổ; nhập đúng thì đếm lại từ đầu.
+ *   2. Nhớ BƯỚC THỜI GIAN của mã TOTP đã dùng (cache ~90 giây, đúng bằng thời
+ *      gian một mã còn hợp lệ). Không nhớ thì ai nhìn trộm được mã đăng nhập
+ *      lại được bằng chính mã đó trong cửa sổ ±30 giây.
+ *   3. Mã khôi phục dùng một lần — đánh dấu nguyên tử trong database.
+ *
+ * ---
  * KHÔNG CÓ "THIẾT BỊ TIN CẬY"
  *
  * Cố ý bỏ tính năng "đừng hỏi mã trên máy này trong 30 ngày". Nó là một cơ chế
@@ -62,6 +78,12 @@ export type TwoFactorStatus = {
 
 /** Số mã khôi phục cấp mỗi lần. 10 là mức chuẩn của hầu hết dịch vụ lớn. */
 const RECOVERY_CODE_COUNT = 10;
+
+/**
+ * Giữ dấu bước TOTP đã dùng bao lâu: bước hiện tại + một bước mỗi bên của cửa
+ * sổ xác minh = 90 giây. Sau đó mã đã tự hết hạn, không cần nhớ nữa.
+ */
+const USED_STEP_TTL_SECONDS = 90;
 
 export class TwoFactorService {
   constructor(private readonly db: PrismaClient = prisma) {}
@@ -101,6 +123,13 @@ export class TwoFactorService {
    * lại là chuyện bình thường, và để lại bí mật mồ côi chỉ tạo nhầm lẫn.
    */
   async beginSetup(userId: string): Promise<TwoFactorSetup> {
+    // Kiểm TRƯỚC khi đọc gì: thiếu `ENCRYPTION_KEY` thì `encryptSecret` ném
+    // `Error` thường, và API trả 500 "thử lại" cho một lỗi mà thử lại bao
+    // nhiêu lần cũng vậy — thứ cần làm là thêm một dòng vào `.env`.
+    if (!this.isAvailable()) {
+      throw new ProviderNotConfiguredError("xác thực hai lớp (máy chủ chưa đặt ENCRYPTION_KEY)");
+    }
+
     const user = await this.db.user.findFirst({
       where: { id: userId, deletedAt: null },
       select: { email: true, username: true, twoFactorEnabledAt: true },
@@ -136,7 +165,7 @@ export class TwoFactorService {
     if (user.twoFactorEnabledAt) throw new TwoFactorAlreadyEnabledError();
     if (!user.twoFactorSecret) throw new TwoFactorNotEnabledError();
 
-    if (verifyTotp(this.decrypt(user.twoFactorSecret), code) === null) {
+    if (!(await this.acceptTotp(userId, this.decrypt(user.twoFactorSecret), code))) {
       throw new InvalidTwoFactorCodeError();
     }
 
@@ -170,8 +199,20 @@ export class TwoFactorService {
    * Mã khôi phục được đánh dấu đã dùng bằng `updateMany` có điều kiện
    * `usedAt: null` — cùng lý do với `VerificationService.consume`: hai request
    * song song với cùng một mã thì chỉ một cái được đi tiếp.
+   *
+   * @throws {TooManyTwoFactorAttemptsError} khi tài khoản đã nhập quá số lần
+   * trong cửa sổ — kể cả khi lần này mã ĐÚNG.
    */
   async verifyCode(userId: string, code: string): Promise<boolean> {
+    /*
+     * Đếm LẦN THỬ trước khi kiểm, không đếm lần sai sau khi kiểm: INCR nguyên
+     * tử thì 20 request song song bị tính đủ 20. "Kiểm rồi mới tăng số lần
+     * sai" thì cả 20 cùng đọc thấy 0 lần sai và cùng được thử.
+     */
+    const attemptKey = `2fa-account:${userId}`;
+    const attempt = await rateLimit(attemptKey, RATE_LIMITS.twoFactorAccount);
+    if (!attempt.success) throw new TooManyTwoFactorAttemptsError(attempt.retryAfterSeconds);
+
     const user = await this.db.user.findFirst({
       where: { id: userId, deletedAt: null },
       select: { twoFactorSecret: true, twoFactorEnabledAt: true },
@@ -179,9 +220,47 @@ export class TwoFactorService {
 
     if (!user?.twoFactorEnabledAt || !user.twoFactorSecret) return false;
 
-    if (verifyTotp(this.decrypt(user.twoFactorSecret), code) !== null) return true;
+    const valid =
+      (await this.acceptTotp(userId, this.decrypt(user.twoFactorSecret), code)) ||
+      (await this.consumeRecoveryCode(userId, code));
 
-    return this.consumeRecoveryCode(userId, code);
+    // Nhập đúng thì đếm lại từ đầu — không bắt người dùng trả giá cho những
+    // lần gõ nhầm đã qua.
+    if (valid) await resetRateLimit(attemptKey);
+
+    return valid;
+  }
+
+  /**
+   * Mã TOTP đúng VÀ chưa từng được dùng.
+   *
+   * Hai lớp nhớ, mỗi lớp chặn một kiểu:
+   *   • `claimOnce` theo bước thời gian — nguyên tử, nên hai request cùng nộp
+   *     MỘT mã thì chỉ một bên qua.
+   *   • Bước lớn nhất đã dùng — mã của bước CŨ hơn (vẫn nằm trong cửa sổ ±1)
+   *     không dùng được sau khi mã mới hơn đã được nhận (RFC 6238 §5.2).
+   */
+  private async acceptTotp(userId: string, secret: string, code: string): Promise<boolean> {
+    const now = Date.now();
+    const delta = verifyTotp(secret, code, now);
+    if (delta === null) return false;
+
+    const step = totpTimeStep(delta, now);
+    const lastKey = `totp:last-step:${userId}`;
+    const lastStep = await cacheGet<number>(lastKey);
+
+    if (lastStep !== null && step <= lastStep) {
+      logger.warn("Mã TOTP bị nộp lại hoặc cũ hơn mã đã dùng", { userId });
+      return false;
+    }
+
+    if (!(await claimOnce(`totp:${userId}:${step}`, USED_STEP_TTL_SECONDS))) {
+      logger.warn("Mã TOTP bị nộp lại hoặc cũ hơn mã đã dùng", { userId });
+      return false;
+    }
+
+    await cacheSet(lastKey, step, USED_STEP_TTL_SECONDS);
+    return true;
   }
 
   private async consumeRecoveryCode(userId: string, code: string): Promise<boolean> {

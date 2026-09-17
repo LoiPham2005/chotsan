@@ -6,9 +6,9 @@ import { defineConfig, devices } from "@playwright/test";
  * ---
  * VÌ SAO DỰ ÁN NÀY CẦN E2E
  *
- * Đã có ~170 unit test phủ kín tầng service, và chúng vẫn để lọt một lỗi làm
- * ĐĂNG NHẬP WEB HỎNG HOÀN TOÀN: form gửi trường `email` trong khi schema đã
- * đổi sang `identifier`. Không lớp nào bắt được —
+ * Hàng trăm unit test phủ tầng service vẫn để lọt những lỗi làm DỊCH VỤ CHẾT:
+ * form đăng nhập gửi `email` trong khi schema đòi `identifier`, form đặt sân gửi
+ * `days` thay vì `date` (GOTCHAS #1, #13). Không lớp nào khác bắt được —
  *
  *   - TypeScript không bắt, vì `safeParse()` nhận `unknown`;
  *   - unit test không bắt, vì chúng gọi thẳng service, không đi qua form;
@@ -17,9 +17,10 @@ import { defineConfig, devices } from "@playwright/test";
  * Chỉ có một thứ bắt được: mở trình duyệt thật và bấm nút. Đó chính là công
  * việc của thư mục `e2e/`.
  *
- * Vì vậy bộ test ở đây cố tình HẸP — chỉ những luồng mà "hỏng là dịch vụ chết":
- * đăng nhập, đăng ký, chặn quyền. Không dùng E2E để kiểm nghiệp vụ chi tiết;
- * phần đó thuộc về unit test, vốn nhanh hơn hàng trăm lần.
+ * Bộ test vì vậy cố tình HẸP — những luồng mà "hỏng là dịch vụ chết": đăng
+ * nhập/đăng ký, chặn quyền theo vai, khách đặt sân tới màn thanh toán, thanh
+ * toán gộp nhiều sân, các màn quản lý của chủ sân. Nghiệp vụ chi tiết (giá,
+ * giữ chỗ, hoàn tiền) thuộc về unit test và `pnpm db:check-conflict`.
  */
 const PORT = Number(process.env.E2E_PORT ?? 3100);
 const baseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${PORT}`;
@@ -27,21 +28,21 @@ const baseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${PORT}`;
 export default defineConfig({
   testDir: "./e2e",
 
-  // Mỗi test tự đăng nhập bằng tài khoản riêng, không dùng chung trạng thái,
-  // nên chạy song song được. Riêng trên CI thì tắt: một runner chia sẻ CPU với
-  // Postgres và server Next, chạy song song chỉ làm test chập chờn.
-  fullyParallel: !process.env.CI,
   /*
-   * MỘT worker, kể cả ở máy cá nhân.
+   * MỘT worker, kể cả ở máy cá nhân — nên các bài chạy TUẦN TỰ, và
+   * `fullyParallel` phải tắt cho khớp (bật mà chỉ một worker thì chỉ gây hiểu lầm).
    *
    * `loginAction` có rate limit theo ĐỊA CHỈ IP, mà mọi bài e2e đều đến từ
    * 127.0.0.1. Chạy song song bốn worker là bốn bài cùng đăng nhập trong vài
    * giây và tự đâm vào ngưỡng của chính mình — đỏ ngẫu nhiên, mỗi lần một bài
    * khác nhau, và không liên quan gì tới thứ đang kiểm.
    *
-   * Đánh đổi: bộ e2e chạy ~4 phút thay vì ~1 phút. Đáng, vì một bộ test đỏ
-   * ngẫu nhiên là một bộ test không ai tin nữa.
+   * Đánh đổi: bộ e2e chạy lâu hơn vài phút. Đáng, vì một bộ test đỏ ngẫu nhiên
+   * là một bộ test không ai tin nữa.
    */
+  fullyParallel: false,
+  workers: 1,
+
   /*
    * 60 giây mỗi bài, thay vì 30 mặc định.
    *
@@ -52,14 +53,19 @@ export default defineConfig({
    */
   timeout: 60_000,
 
-  workers: 1,
-
   // Cấm `test.only` lọt lên nhánh chính — nó làm CI xanh trong khi hầu hết
   // test không hề chạy.
   forbidOnly: !!process.env.CI,
 
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
+  /*
+   * CI sinh báo cáo HTML thật ở `playwright-report/` để workflow tải lên khi hỏng.
+   * Bản trước chỉ có `github` + `list` — bước upload chạy mà artifact rỗng, nên
+   * lần hỏng đầu tiên trên CI không có gì để mở ra xem.
+   */
+  reporter: process.env.CI
+    ? [["github"], ["list"], ["html", { open: "never", outputFolder: "playwright-report" }]]
+    : [["list"]],
 
   /*
    * 15 giây cho mỗi phép chờ, thay vì 5 giây mặc định.
@@ -92,11 +98,28 @@ export default defineConfig({
   webServer: {
     command: "pnpm build && pnpm start",
     url: `${baseURL}/api/health`,
-    reuseExistingServer: !process.env.CI,
+    /*
+     * KHÔNG dùng lại server đang nghe cổng này, kể cả ở máy cá nhân.
+     *
+     * Bản trước bật ở máy cá nhân: cổng 3100 còn một `pnpm start` CŨ từ lần chạy
+     * trước là cả bộ test chạy trên bản build cũ — xanh cho mã đã sửa hỏng, đỏ
+     * cho mã đã sửa đúng. Cổng bị chiếm thì Playwright báo lỗi ngay; dừng tiến
+     * trình cũ (`lsof -nP -iTCP:3100 -sTCP:LISTEN`) rồi chạy lại.
+     */
+    reuseExistingServer: false,
     timeout: 180_000,
     env: {
       PORT: String(PORT),
       NODE_ENV: "production",
+      /*
+       * Job chạy NGAY trong request, không cần Redis lẫn worker.
+       *
+       * Bản production mà `QUEUE_ENABLED` bật (mặc định) và `.env` thiếu
+       * `REDIS_URL` thì `enqueue()` NÉM LỖI — luồng nào gửi email mà không tự
+       * bắt lỗi sẽ làm e2e đỏ vì hạ tầng, không vì mã. Biến đặt ở đây thắng
+       * `.env` (`--env-file-if-exists` không ghi đè biến đã có).
+       */
+      QUEUE_ENABLED: "0",
     },
   },
 });

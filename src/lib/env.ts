@@ -69,8 +69,9 @@ const envSchema = z.object({
     ),
 
   /**
-   * URL công khai của ứng dụng — dùng dựng link trong email và redirect_uri
-   * của OAuth.
+   * URL công khai của ứng dụng — MỘT nguồn cho mọi link tuyệt đối: link trong
+   * email (xác thực, đặt lại mật khẩu, đổi email), `redirect_uri` của OAuth, và
+   * rpID/origin của passkey. Xem `appBaseUrl()`.
    *
    * Không có giá trị mặc định `localhost`: một email đặt lại mật khẩu chứa
    * link localhost là email vô dụng, mà người dùng thì đã nhận rồi.
@@ -78,23 +79,44 @@ const envSchema = z.object({
   APP_URL: optionalString(z.string().url("APP_URL phải là URL tuyệt đối").optional()),
 
   /**
-   * URL công khai của chính API. Dùng dựng `redirect_uri` cho OAuth.
+   * Cùng giá trị với `APP_URL`, tên có tiền tố để Next nhúng được vào bundle
+   * trình duyệt.
    *
-   * Bỏ trống thì lấy theo `APP_URL` — đúng khi web và API nằm sau CÙNG một tên
-   * miền (reverse proxy chuyển tiếp `/api/*` sang API).
-   *
-   * ⚠️ BẮT BUỘC phải đặt khi API ở tên miền RIÊNG (`api.example.com` trong
-   * `Caddyfile` mẫu). Không đặt thì `redirect_uri` trỏ vào tên miền web, nơi
-   * không có route callback nào — và lỗi đó chỉ lộ ra khi có người bấm nút
-   * "Đăng nhập bằng Google" thật.
+   * Server chỉ dùng nó làm ĐƯỜNG LUI khi thiếu `APP_URL`: `.env.example` từng
+   * chỉ khai biến này, và thiếu `APP_URL` là email đăng ký/quên mật khẩu hỏng
+   * im lặng (lỗi gửi thư bị nuốt có chủ đích), passkey bị ẩn — không ai biết vì
+   * sao cho tới khi có người không nhận được thư.
    */
-  API_PUBLIC_URL: optionalString(z.string().url("API_PUBLIC_URL phải là URL tuyệt đối").optional()),
+  NEXT_PUBLIC_APP_URL: optionalString(
+    z.string().url("NEXT_PUBLIC_APP_URL phải là URL tuyệt đối").optional(),
+  ),
 
   /**
-   * Tên sản phẩm, hiển thị trong app xác thực (Google Authenticator…) và làm
-   * `issuer` của URI TOTP.
+   * Tên sản phẩm, hiển thị trong app xác thực (Google Authenticator…) — làm
+   * `issuer` của URI TOTP và `rpName` của passkey.
+   *
+   * Đổi sau khi người dùng đã bật 2FA thì tài khoản CŨ trong app xác thực vẫn
+   * mang tên cũ (tên nằm trong mã QR đã quét), chỉ lần cài mới mang tên mới.
    */
-  APP_NAME: z.string().default("Base Template"),
+  APP_NAME: z.string().default("ChốtSân"),
+
+  /**
+   * Số reverse proxy TIN CẬY đứng trước app (Caddy, nginx, load balancer).
+   *
+   * Quyết định phần tử nào của `X-Forwarded-For` là IP thật của người gọi — đếm
+   * từ PHẢI qua đúng chừng này tầng. Rate limit đăng nhập, 2FA, quên mật khẩu
+   * và định danh của `definePublicAction` đều dựa vào IP đó. Xem
+   * `clientIpFromHeaders()` trong `rate-limit.ts`.
+   *
+   *   • 1 (mặc định): một Caddy/nginx trước app — đúng cho `deploy/` mẫu.
+   *   • 2: có thêm CDN/load balancer phía trước proxy đó.
+   *   • 0: không tin `X-Forwarded-For` chút nào, chỉ đọc `x-real-ip`. Không có
+   *     cả hai thì MỌI người chung một xô đếm — chỉ dùng khi biết mình đang làm gì.
+   *
+   * Khai THỪA số tầng là để client tự chọn IP cho mình; khai THIẾU là cả một
+   * văn phòng chung một IP của proxy.
+   */
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(1),
 
   /**
    * Khoá mã hoá bí mật lưu trong database (hiện dùng cho khoá TOTP).
@@ -115,7 +137,8 @@ const envSchema = z.object({
   /**
    * "Relying Party ID" — TÊN MIỀN mà passkey gắn vào.
    *
-   * Bỏ trống = lấy hostname của `APP_URL`. Đúng cho phần lớn dự án.
+   * Bỏ trống = lấy hostname của `APP_URL` (hoặc `NEXT_PUBLIC_APP_URL`). Đúng
+   * cho phần lớn dự án.
    *
    * ⚠️ Đây là thứ tạo ra khả năng chống phishing, nên nó rất khắt khe:
    *
@@ -131,7 +154,7 @@ const envSchema = z.object({
   /**
    * Danh sách origin được chấp nhận, phân tách bằng dấu phẩy.
    *
-   * Bỏ trống = lấy origin của `APP_URL`. Cần khai thêm khi app mobile cũng
+   * Bỏ trống = lấy origin của `APP_URL` (hoặc `NEXT_PUBLIC_APP_URL`). Cần khai thêm khi app mobile cũng
    * dùng passkey — Android gửi origin dạng `android:apk-key-hash:...`, iOS gửi
    * `https://<domain>` theo Associated Domains.
    */
@@ -187,12 +210,14 @@ const envSchema = z.object({
   PHONE_OTP_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().positive().max(3600).default(60),
 
   /**
-   * Số lần nhập SAI tối đa cho một mã dùng-một-lần (OTP, mã khôi phục 2FA),
-   * tính trên chính mã đó.
+   * Số lần nhập SAI tối đa cho một mã OTP gửi qua SMS, tính trên chính mã đó.
    *
    * Đây là chốt chặn ĐỘC LẬP với rate limit theo IP: rate limit chặn một IP dò
    * nhiều tài khoản, còn ngưỡng này chặn việc dò một mã 6 chữ số bằng nhiều IP.
    * Chạm ngưỡng thì mã bị huỷ, buộc phải xin mã mới.
+   *
+   * KHÔNG áp cho mã 2FA (TOTP, mã khôi phục): chúng không có bản ghi riêng để
+   * đếm, nên dùng bộ đếm theo tài khoản `RATE_LIMITS.twoFactorAccount`.
    */
   VERIFICATION_MAX_ATTEMPTS: z.coerce.number().int().positive().max(20).default(5),
 
@@ -208,15 +233,22 @@ const envSchema = z.object({
   AUDIT_RETENTION_DAYS: z.coerce.number().int().positive().max(3650).default(365),
 
   /**
-   * Thu hồi TỨC THÌ mọi access token cũ khi mật khẩu đổi.
+   * Vô hiệu MỌI phiên cấp trước lần đổi/đặt lại mật khẩu gần nhất.
    *
-   * JWT đã ký thì không thu hồi được — đó là lý do hạn của nó ngắn (15 phút).
-   * Nhưng 15 phút vẫn là 15 phút mà kẻ đã chiếm tài khoản còn thao tác được
-   * SAU KHI chủ thật đã đổi mật khẩu. Bật cờ này thì `JwtAuthGuard` đối chiếu
-   * `iat` của token với `passwordChangedAt`, và cửa sổ đó biến mất.
+   * JWT đã ký thì không thu hồi được. Cookie web sống `SESSION_MAX_AGE_DAYS`,
+   * access token mobile 15 phút — quãng đó kẻ đã chiếm tài khoản vẫn thao tác
+   * được SAU KHI chủ thật đổi mật khẩu. Bật cờ này thì `getSession()` (web),
+   * `getApiSession()` (REST) và handshake realtime so `iat` của token với
+   * `passwordChangedAt`, và cửa sổ đó biến mất (trễ tối đa 60 giây khi mật
+   * khẩu bị đổi bằng đường không gọi `securityStampService.invalidate`).
+   *
+   * `0` CHỈ tắt phép so mốc đổi mật khẩu. Tài khoản bị khoá (BANNED, INACTIVE)
+   * hoặc đã xoá mềm thì LUÔN bị cắt phiên, không cờ nào tắt được — đó là
+   * quyết định hành chính, không phải tối ưu hiệu năng.
    *
    * Cái giá: một lần đọc CACHE ở mỗi request đã xác thực (RAM nếu chưa có
-   * Redis). Tắt đi nếu bạn đo được nó thành nút thắt — nhưng hãy đo trước.
+   * Redis) — cùng lần đọc với phép kiểm trạng thái, nên tắt cờ gần như không
+   * tiết kiệm được gì.
    */
   SESSION_STRICT_REVOCATION: featureFlag(true),
 
@@ -253,7 +285,7 @@ const envSchema = z.object({
   REDIS_URL: optionalString(z.string().min(1).optional()),
 
   /**
-   * Hàng đợi job nền (BullMQ + apps/worker).
+   * Hàng đợi job nền (BullMQ + tiến trình `worker/`).
    *
    * `0` = `enqueue()` chạy handler NGAY trong request. Việc vẫn xong đủ, chỉ
    * đổi CHỖ chạy — đổi lại là không cần Redis, không cần dựng worker.
@@ -271,7 +303,7 @@ const envSchema = z.object({
 
   /**
    * Cấu hình SMTP. Thiếu `SMTP_HOST` thì mailer mặc định chỉ ghi ra log ở dev
-   * và NÉM LỖI ở production — xem `infra/mailer.ts`.
+   * và NÉM LỖI ở production — xem `src/lib/mailer.ts`.
    */
   SMTP_HOST: optionalString(z.string().min(1).optional()),
   SMTP_PORT: z.coerce.number().int().positive().max(65535).default(587),
@@ -354,31 +386,41 @@ export const isDevelopment = env.NODE_ENV === "development";
 export const isTest = env.NODE_ENV === "test";
 
 /**
- * Dựng URL tuyệt đối trỏ về ứng dụng.
+ * Gốc URL công khai của ứng dụng: `APP_URL`, thiếu thì `NEXT_PUBLIC_APP_URL`.
  *
- * Ném lỗi khi thiếu `APP_URL` thay vì đoán bừa `localhost` — xem lý do ở phần
- * khai báo biến.
+ * MỘT hàm cho mọi nơi cần URL tuyệt đối (email, OAuth, passkey). Trước đây
+ * email đòi `APP_URL`, OAuth ưu tiên `NEXT_PUBLIC_APP_URL`: khai một trong hai
+ * là một nửa hệ thống chạy, nửa kia hỏng im lặng.
+ *
+ * `null` khi thiếu cả hai — nơi gọi quyết định ẩn tính năng hay báo lỗi.
  */
-export function appUrl(path: string): string {
-  if (!env.APP_URL) {
-    throw new Error(
-      "Thiếu APP_URL — không dựng được link tuyệt đối (email xác thực, callback OAuth). " +
-        "Đặt biến này trong .env trước khi bật các luồng đó.",
-    );
-  }
-
-  return new URL(path, env.APP_URL).toString();
+export function appBaseUrl(): string | null {
+  return env.APP_URL ?? env.NEXT_PUBLIC_APP_URL ?? null;
 }
 
 /**
- * Dựng URL tuyệt đối trỏ về chính API này.
+ * Dựng URL tuyệt đối trỏ về ứng dụng.
  *
- * Lùi về `APP_URL` khi chưa đặt `API_PUBLIC_URL` — xem ghi chú ở phần khai báo
- * biến để biết khi nào bắt buộc phải tách hai giá trị.
+ * Ném lỗi khi thiếu cả `APP_URL` lẫn `NEXT_PUBLIC_APP_URL` thay vì đoán bừa
+ * `localhost` — xem lý do ở phần khai báo biến.
  */
+export function appUrl(path: string): string {
+  const base = appBaseUrl();
+
+  if (!base) {
+    throw new Error(
+      "Thiếu APP_URL (và cả NEXT_PUBLIC_APP_URL) — không dựng được link tuyệt đối cho email " +
+        "xác thực, đặt lại mật khẩu, đổi email, callback OAuth và passkey. " +
+        "Đặt APP_URL=https://<tên-miền-công-khai> trong .env rồi khởi động lại.",
+    );
+  }
+
+  return new URL(path, base).toString();
+}
+
 /**
- * `rpID` và danh sách `origin` cho WebAuthn, dẫn xuất từ `APP_URL` khi không
- * khai tường minh.
+ * `rpID` và danh sách `origin` cho WebAuthn, dẫn xuất từ `appBaseUrl()` khi
+ * không khai tường minh.
  *
  * Ném lỗi thay vì đoán bừa: một passkey đăng ký với `rpID` sai sẽ đăng ký
  * THÀNH CÔNG rồi không bao giờ đăng nhập được — lỗi chỉ lộ ra ở lần thử thứ
@@ -393,7 +435,9 @@ export function webAuthnConfig(): { rpID: string; rpName: string; origins: strin
     return { rpID: env.WEBAUTHN_RP_ID, rpName: env.APP_NAME, origins: explicitOrigins };
   }
 
-  if (!env.APP_URL) {
+  const base = appBaseUrl();
+
+  if (!base) {
     /*
      * `ProviderNotConfiguredError` chứ không phải `Error` thường.
      *
@@ -406,11 +450,11 @@ export function webAuthnConfig(): { rpID: string; rpName: string; origins: strin
      * gọi: mỗi nơi gọi tự canh là sớm muộn cũng có một nơi quên.
      */
     throw new ProviderNotConfiguredError(
-      "passkey (thiếu APP_URL, hoặc cả WEBAUTHN_RP_ID lẫn WEBAUTHN_ORIGINS)",
+      "passkey (thiếu APP_URL/NEXT_PUBLIC_APP_URL, hoặc cả WEBAUTHN_RP_ID lẫn WEBAUTHN_ORIGINS)",
     );
   }
 
-  const appUrlParsed = new URL(env.APP_URL);
+  const appUrlParsed = new URL(base);
 
   return {
     rpID: env.WEBAUTHN_RP_ID ?? appUrlParsed.hostname,
@@ -427,24 +471,4 @@ export function isWebAuthnConfigured(): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * Bí danh của `APP_URL` cho mã chạy PHÍA TRÌNH DUYỆT.
- *
- * Next chỉ nhúng vào bundle những biến có tiền tố `NEXT_PUBLIC_`. Server thì
- * dùng `env.APP_URL` — cùng một giá trị, khai một lần.
- */
-export const publicAppUrl = process.env.NEXT_PUBLIC_APP_URL ?? env.APP_URL ?? "";
-
-export function apiUrl(path: string): string {
-  const base = env.API_PUBLIC_URL ?? env.APP_URL;
-
-  if (!base) {
-    throw new Error(
-      "Thiếu API_PUBLIC_URL (và cả APP_URL) — không dựng được redirect_uri cho OAuth.",
-    );
-  }
-
-  return new URL(path, base).toString();
 }

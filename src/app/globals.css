@@ -1,7 +1,11 @@
 /*
  * Tailwind CSS v4 (cấu hình bằng CSS, không cần tailwind.config.js).
- * Các class thủ công bên dưới vẫn giữ nguyên và vẫn hoạt động — Tailwind ở đây
- * là tuỳ chọn thêm cho code mới, không phải bắt buộc phải viết lại UI cũ.
+ *
+ * Toàn bộ giao diện viết bằng class Tailwind đọc TOKEN ở dưới (`bg-surface`,
+ * `text-muted`, `rounded-token-md`…). Tệp này chỉ còn: bảng token, ánh xạ token
+ * sang Tailwind, reset/kiểu thẻ HTML thuần, và một tiện ích thanh cuộn. Các class
+ * thủ công của bộ khung cũ (thẻ, nhãn, hộp báo, lưới form…) đã bỏ — dùng
+ * `<Notice>`, `<Button>`, `<Input>` trong `src/components/ui`.
  */
 @import "tailwindcss";
 
@@ -34,6 +38,10 @@
   --primary-hover: #059669;
   --primary-tint: #ecfdf5;
   --primary-line: #a7f3d0;
+  /* CHỮ màu xanh (link, câu "Đã lưu", nhãn trạng thái trên nền nhạt). `#10b981`
+     làm chữ trên nền trắng chỉ đạt 2,5:1 — đọc không nổi ngoài nắng và dưới
+     chuẩn AA (4,5:1). Mã này là màu link trong chính bản vẽ `design/`. */
+  --primary-text: #047857;
 
   /* ⚠️ CAM CHỈ NÓI MỘT ĐIỀU: KHUNG GIỜ VÀNG, GIÁ CAO HƠN.
      Không dùng cho nút, không dùng cho biểu tượng, không dùng để nhấn mạnh.
@@ -47,9 +55,40 @@
   --danger-hover: #dc2626;
   --danger-tint: #fef2f2;
   --danger-line: #fca5a5;
+  /* CHỮ đỏ cỡ nhỏ (câu lỗi, nhãn "Không tới"). `#ef4444` trên nền trắng chỉ
+     3,8:1 — dưới AA cho chữ 12–14px; bản đậm này đạt ~6:1 cả trên nền đỏ nhạt. */
+  --danger-text: #b91c1c;
 
-  --success-color: #10b981;
-  --warning-color: #f59e0b;
+  /* Sao đánh giá — đúng màu bản vẽ `design/`. KHÔNG dùng cho việc gì khác: nó
+     đứng sát tông cam, dùng lan ra là lẫn với tín hiệu giờ vàng. */
+  --rating-color: #f59e0b;
+
+  /* Nền thanh điều hướng khu quản trị — tối để biết ngay đang ở khu khác,
+     vùng nội dung vẫn sáng (SKILL.md §2). */
+  --admin-nav: #0f172a;
+
+  /* ---------------------------------------------------------------------
+   * MÀU NHẬN DIỆN MÔN — chỉ để PHÂN BIỆT môn khi lướt danh sách.
+   * Tránh xanh emerald (bấm được/còn trống) và cam (giờ vàng). Cặp nào cũng
+   * là chữ/biểu tượng bậc 700 trên nền bậc 100: biểu tượng đạt ≥3:1 trên nền.
+   * ------------------------------------------------------------------- */
+  --sport-badminton: #0369a1;
+  --sport-badminton-tint: #e0f2fe;
+  --sport-football: #4338ca;
+  --sport-football-tint: #e0e7ff;
+  --sport-pickleball: #6d28d9;
+  --sport-pickleball-tint: #ede9fe;
+  --sport-tennis: #4d7c0f;
+  --sport-tennis-tint: #ecfccb;
+  /* Bóng rổ ngoài đời màu cam — nhưng cam đã là giờ vàng. */
+  --sport-basketball: #a21caf;
+  --sport-basketball-tint: #fae8ff;
+  --sport-volleyball: #be123c;
+  --sport-volleyball-tint: #ffe4e6;
+  --sport-table-tennis: #0e7490;
+  --sport-table-tennis-tint: #cffafe;
+  --sport-other: #475569;
+  --sport-other-tint: #f1f5f9;
 
   /* Ô đã có người đặt — xám, KHÔNG phải đỏ. Kín chỗ là chuyện bình thường,
      không phải lỗi. */
@@ -62,16 +101,27 @@
    * Nhiều bóng chồng lên nhau trong cùng một bóng đổ (một lớp sát, một lớp
    * xa) là thứ tách "phẳng lì" khỏi "có chiều sâu". Một lớp duy nhất luôn
    * trông như dán decal.
+   *
+   * CHỈ cho thứ NỔI hoặc DÍNH trên trang (thông báo nổi, thanh dính đáy, cột
+   * đứng yên của lưới). Thẻ, hộp, bảng thường KHÔNG đổ bóng — viền 1px là đủ
+   * (SKILL.md §4, §7). Màu bóng nằm ở đây, không viết `rgba(...)` vào component.
    * ------------------------------------------------------------------- */
-  --card-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
   --shadow-nang-1: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
   --shadow-nang-2: 0 2px 4px rgba(15, 23, 42, 0.04), 0 4px 12px rgba(15, 23, 42, 0.08);
   --shadow-nang-3: 0 4px 8px rgba(15, 23, 42, 0.04), 0 12px 28px rgba(15, 23, 42, 0.12);
   /* Bóng mang màu thương hiệu — chỉ cho thứ đang được CHỌN, không phải mọi nút. */
   --shadow-chon: 0 2px 8px rgba(16, 185, 129, 0.28), 0 8px 24px rgba(16, 185, 129, 0.16);
+  /* Thanh DÍNH ĐÁY màn điện thoại (hoá đơn thu gọn — SKILL.md §4, §6): bóng hắt
+     LÊN trên, tách thanh khỏi nội dung đang cuộn bên dưới nó. */
+  --shadow-dock: 0 -4px 16px rgba(15, 23, 42, 0.08);
+  /* Mép phải cột tên sân đứng yên trong lưới: vệt bóng mảnh báo "phần giờ đang
+     trượt dưới cột này" — tín hiệu cuộn, không phải trang trí. */
+  --shadow-sticky-edge: 8px 0 12px -10px rgba(15, 23, 42, 0.25);
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
+  /* Nút và ô nhập (SKILL.md §4–5: "Nút 8–9px", "ô nhập bo 8px"). */
+  --radius-control: 8px;
 
   /* Chiều cao tối thiểu của mọi thứ bấm được. 44px là ngưỡng chạm, không
      phải gợi ý — chủ sân bấm trên máy tính bảng, một tay còn cầm điện thoại. */
@@ -79,25 +129,18 @@
 }
 
 /*
- * Cầu nối giữa hai hệ thiết kế đang cùng tồn tại trong dự án.
+ * Token ngữ nghĩa cho Tailwind, trỏ thẳng vào chính các biến ở trên.
  *
  * ---
- * VẤN ĐỀ ĐÃ XẢY RA
+ * VÌ SAO CÓ LỚP NÀY
  *
- * Trang được viết bằng class thủ công (`.card`, `.badge`) đọc bảng màu tối ở
- * `:root` bên trên. Còn `src/components/**` được viết bằng Tailwind theo lối
- * shadcn: `bg-white dark:bg-gray-950`. Nhánh `dark:` chỉ bật khi thẻ `<html>`
- * mang class `dark` — mà KHÔNG chỗ nào đặt class đó.
+ * Bộ khung cũ trộn hai hệ: class thủ công đọc bảng màu ở `:root`, và component
+ * Tailwind viết `bg-white dark:bg-gray-950` — nhánh `dark:` không bao giờ bật,
+ * header trắng đè lên nền tối, nút "Đăng ký" chữ xanh trên nền xanh.
  *
- * Hậu quả nhìn thấy được: header và footer hiện màu TRẮNG đè lên nền tối của
- * trang, còn nút "Đăng ký" thì chữ xanh trên nền xanh, đọc không ra.
- *
- * ---
- * CÁCH SỬA
- *
- * Khai báo token ngữ nghĩa cho Tailwind, trỏ thẳng vào chính các biến ở trên.
- * Từ giờ `bg-surface` và `.card` lấy màu từ CÙNG MỘT nguồn — muốn đổi giao
- * diện chỉ sửa bảng màu ở `:root`, không phải đi lùng từng file.
+ * Mọi class màu/bóng/bo góc giờ lấy từ CÙNG MỘT nguồn — muốn đổi giao diện chỉ
+ * sửa bảng màu ở `:root`, không phải đi lùng từng file. Thêm token mới ở đây
+ * thì thêm tên vào `src/lib/cn.ts` để `cn()` gộp class đúng.
  *
  * Dùng tên theo VAI TRÒ (`surface`, `muted`, `line`) chứ không theo màu
  * (`gray-800`): tên màu sẽ nói dối ngay lần đầu đổi tông, còn tên vai trò thì
@@ -114,6 +157,7 @@
   --color-brand-hover: var(--primary-hover);
   --color-brand-tint: var(--primary-tint);
   --color-brand-line: var(--primary-line);
+  --color-brand-text: var(--primary-text);
   --color-peak: var(--accent-color);
   --color-peak-tint: var(--accent-tint);
   --color-peak-line: var(--accent-line);
@@ -123,8 +167,29 @@
   --color-line-strong: var(--border-strong);
   --color-subtle: var(--text-subtle);
   --color-danger: var(--danger-color);
-  --color-success: var(--success-color);
-  --color-warning: var(--warning-color);
+  --color-danger-hover: var(--danger-hover);
+  --color-danger-tint: var(--danger-tint);
+  --color-danger-line: var(--danger-line);
+  --color-danger-text: var(--danger-text);
+  --color-rating: var(--rating-color);
+  --color-admin-nav: var(--admin-nav);
+
+  --color-sport-badminton: var(--sport-badminton);
+  --color-sport-badminton-tint: var(--sport-badminton-tint);
+  --color-sport-football: var(--sport-football);
+  --color-sport-football-tint: var(--sport-football-tint);
+  --color-sport-pickleball: var(--sport-pickleball);
+  --color-sport-pickleball-tint: var(--sport-pickleball-tint);
+  --color-sport-tennis: var(--sport-tennis);
+  --color-sport-tennis-tint: var(--sport-tennis-tint);
+  --color-sport-basketball: var(--sport-basketball);
+  --color-sport-basketball-tint: var(--sport-basketball-tint);
+  --color-sport-volleyball: var(--sport-volleyball);
+  --color-sport-volleyball-tint: var(--sport-volleyball-tint);
+  --color-sport-table-tennis: var(--sport-table-tennis);
+  --color-sport-table-tennis-tint: var(--sport-table-tennis-tint);
+  --color-sport-other: var(--sport-other);
+  --color-sport-other-tint: var(--sport-other-tint);
 
   --font-sans: var(--font-sans);
 
@@ -132,11 +197,14 @@
   --radius-token-md: var(--radius-md);
   --radius-token-lg: var(--radius-lg);
   --radius-token-xl: 20px;
+  --radius-token-control: var(--radius-control);
 
   --shadow-nang-1: var(--shadow-nang-1);
   --shadow-nang-2: var(--shadow-nang-2);
   --shadow-nang-3: var(--shadow-nang-3);
   --shadow-chon: var(--shadow-chon);
+  --shadow-dock: var(--shadow-dock);
+  --shadow-sticky-edge: var(--shadow-sticky-edge);
 }
 
 /* ===========================================================================
@@ -157,8 +225,9 @@
  *
  * Quy ước từ giờ:
  *   - reset và style cho thẻ HTML thuần  → @layer base
- *   - class dùng lại được (.card, .badge…) → @layer components
- * Cả hai đều đứng dưới `utilities`, nên class Tailwind luôn ghi đè được.
+ *   - tiện ích tự viết                   → @layer utilities
+ * Kiểu dáng dùng lại được viết thành COMPONENT React (`src/components/ui`), không
+ * viết thành class CSS thủ công.
  * ========================================================================= */
 
 @layer base {
@@ -178,6 +247,17 @@
   }
 
   /*
+   * Chừa chỗ ở ĐÁY TRANG cho thanh "Tiếp tục ↓" dính đáy màn hình điện thoại
+   * (`select-and-book.tsx` — chỉ hiện dưới `sm` và khi khách đã chọn ô). Thanh
+   * cao ~57px, không chừa thì nó che mất chân trang khi cuộn tới cuối.
+   */
+  @media (width < 40rem) {
+    body:has([data-booking-bar]) {
+      padding-bottom: 4rem;
+    }
+  }
+
+  /*
  * CHỈ tô màu cho thẻ <a> không mang class nào.
  *
  * Quy tắc cũ (`a { color: ... }`) tô mọi liên kết, kể cả liên kết đã được dựng
@@ -189,305 +269,47 @@
  * gì đã tự khai báo kiểu dáng thì tự quyết định màu chữ của nó.
  */
   a:not([class]) {
-    color: var(--primary-color);
+    color: var(--primary-text);
+    font-weight: 600;
     text-decoration: none;
     transition: color 0.2s ease;
   }
 
+  /* Rê chuột thì GẠCH CHÂN, không đổi màu. Bản trước đổi sang cam — mà cam chỉ
+     được nói "giờ vàng, giá cao hơn" (SKILL.md §2). */
   a:not([class]):hover {
-    color: var(--accent-color);
+    text-decoration: underline;
+    text-underline-offset: 3px;
   }
 
   a {
     text-decoration: none;
   }
-}
 
-/*
- * Class dùng lại được của dự án.
- *
- * Nằm trong `components` để class tiện ích của Tailwind luôn ghi đè được —
- * ví dụ `<div className="card p-8">` phải cho ra padding 8, không phải 24 của
- * `.card`. Viết trần ngoài layer thì `.card` sẽ thắng và `p-8` bị bỏ qua.
- */
-@layer components {
-  /* 1152px = `max-w-6xl` của Tailwind, trùng với header và footer. Lệch nhau thì
-   logo trên header không thẳng hàng với nội dung bên dưới — chi tiết nhỏ nhưng
-   là thứ khiến trang trông cẩu thả. */
-  .container {
-    max-width: 1152px;
-    margin: 0 auto;
-    padding: 40px 24px;
-  }
-
-  .card {
-    background: var(--surface-color);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: 24px;
-    box-shadow: var(--card-shadow);
-    margin-bottom: 24px;
-  }
-
-  /* Tiêu đề trang, dùng chung cho các màn quản trị. */
-  .page-title {
-    font-size: 1.75rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    margin-top: 4px;
-  }
-
-  .page-subtitle {
-    color: var(--text-muted);
-    font-size: 0.9rem;
-    margin-top: 6px;
-  }
-
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 10px;
-    border-radius: 9999px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .badge-primary {
-    background: rgba(99, 102, 241, 0.15);
-    color: var(--primary-color);
-    border: 1px solid rgba(99, 102, 241, 0.3);
-  }
-
-  .badge-success {
-    background: rgba(16, 185, 129, 0.15);
-    color: var(--success-color);
-    border: 1px solid rgba(16, 185, 129, 0.3);
-  }
-
-  .badge-warning {
-    background: rgba(245, 158, 11, 0.15);
-    color: var(--warning-color);
-    border: 1px solid rgba(245, 158, 11, 0.3);
-  }
-
-  /* Vòng focus nhìn thấy được cho liên kết. Nút và ô nhập giờ do
-   `components/ui/button.tsx` và `input.tsx` tự lo phần này. */
-  a:focus-visible {
-    outline: 2px solid var(--primary-color);
-    outline-offset: 2px;
-  }
-
-  /* Số ô trong form thay đổi theo thời gian (email → +họ tên → +tên đăng nhập),
-   nên KHÔNG cố định số cột. `auto-fit` tự chia lại, và nút bấm nằm ở hàng
-   riêng bên dưới thay vì bị đẩy vào giữa các ô nhập. */
-  .form-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 12px;
-    align-items: flex-start;
-  }
-
-  .form-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-  }
-
-  @media (max-width: 640px) {
-    .form-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .form-actions > * {
-      width: 100%;
-    }
-  }
-
-  .user-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    list-style: none;
-  }
-
-  .user-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 20px;
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    transition: background 0.2s ease;
-  }
-
-  .user-item:hover {
-    background: var(--surface-hover);
-  }
-
-  .user-info {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .user-email {
-    font-weight: 600;
-    font-size: 1rem;
-  }
-
-  .user-meta {
-    font-size: 0.85rem;
-    color: var(--text-muted);
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  /* ---------------------------------------------------------------------------
- * Bổ sung: header, alert, spinner, tiện ích a11y
- * ------------------------------------------------------------------------- */
-
-  .site-header {
-    border-bottom: 1px solid var(--border-color);
-    background: rgba(15, 23, 42, 0.85);
-    backdrop-filter: blur(8px);
-    position: sticky;
-    top: 0;
-    z-index: 10;
-  }
-
-  .site-header__inner {
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 14px 24px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-
-  .site-header__brand {
-    font-weight: 700;
-    color: var(--text-main);
-    letter-spacing: -0.01em;
-  }
-
-  .site-header__actions {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    font-size: 0.9rem;
-  }
-
-  .site-header__user {
-    color: var(--text-muted);
-    font-size: 0.85rem;
-  }
-
-  .badge-danger {
-    background: rgba(239, 68, 68, 0.15);
-    color: var(--danger-color);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-  }
-
-  .alert {
-    padding: 10px 14px;
-    border-radius: var(--radius-md);
-    font-size: 0.9rem;
-  }
-
-  .alert-danger {
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    color: var(--danger-color);
-  }
-
-  .alert-success {
-    background: rgba(16, 185, 129, 0.15);
-    border: 1px solid rgba(16, 185, 129, 0.3);
-    color: var(--success-color);
-  }
-
-  .alert-warning {
-    background: rgba(245, 158, 11, 0.12);
-    border: 1px solid rgba(245, 158, 11, 0.3);
-    color: var(--warning-color);
-  }
-
-  /* Bảng tick quyền trên trang /roles. */
-  .permission-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-    gap: 10px;
-  }
-
-  .permission-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 10px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    font-size: 0.88rem;
-    cursor: pointer;
-  }
-
-  .permission-item:has(input:disabled) {
-    cursor: default;
-    opacity: 0.7;
-  }
-
-  .permission-item input {
-    margin-top: 3px;
-  }
-
-  .spinner {
-    width: 32px;
-    height: 32px;
-    margin: 0 auto;
-    border-radius: 9999px;
-    border: 3px solid var(--border-color);
-    border-top-color: var(--primary-color);
-    animation: spin 0.7s linear infinite;
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  /* Người dùng bật "giảm chuyển động" trong hệ điều hành thì không quay nữa. */
-  @media (prefers-reduced-motion: reduce) {
-    .spinner {
-      animation: none;
-    }
-
-    * {
-      transition-duration: 0.01ms !important;
-    }
-  }
-
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  /* Viền focus rõ ràng cho người dùng bàn phím. */
+  /* Viền focus rõ ràng cho người dùng bàn phím — mọi thứ bấm được. */
   :focus-visible {
     outline: 2px solid var(--primary-color);
     outline-offset: 2px;
+  }
+
+  /*
+   * NGƯỜI BẬT "GIẢM CHUYỂN ĐỘNG" TRONG HỆ ĐIỀU HÀNH
+   *
+   * Tắt mọi hiệu ứng trang trí: chấm "đang nhận đặt" nhấp nháy (`animate-ping`),
+   * thẻ trượt/phóng khi rê chuột, thanh tiến trình trượt, và cuộn trang bằng CSS.
+   * `!important` trong `@layer base` thắng mọi khai báo thường ở `utilities` —
+   * đúng thứ cần ở đây. Cuộn bằng JavaScript (`scrollIntoView`) tự kiểm
+   * `matchMedia` ở nơi gọi — CSS không với tới được lệnh đó.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 

@@ -16,13 +16,15 @@ env:
 
 jobs:
   validate:
-    name: Lint · Typecheck · Test · Build
+    name: Check · Chống trùng chỗ · Build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
+    # Postgres 17 — CÙNG major với Neon (database dev/production). Chạy 16 thì
+    # migration/ràng buộc có thể xanh ở CI mà lệch ở nơi dùng thật.
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -69,17 +71,18 @@ jobs:
       - name: Apply migrations
         run: pnpm db:deploy
 
-      - name: Format check
-        run: pnpm format:check
+      # ĐÚNG lệnh chạy ở máy dev (typecheck → lint → format:check → test kèm
+      # ngưỡng coverage). Bản trước CI chạy coverage còn `pnpm check` thì không:
+      # máy xanh mà CI đỏ vì tụt ngưỡng. Một lệnh, một bộ kiểm.
+      - name: pnpm check
+        run: pnpm check
 
-      - name: Lint
-        run: pnpm lint
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Test
-        run: pnpm test:coverage
+      # Thao tác ĐỒNG THỜI thật trên database thật: hai người đặt cùng khung,
+      # hai lần bấm thanh toán, webhook gửi lại… Unit test với mock không chứng
+      # minh được — chỉ ràng buộc trong Postgres quyết được ai thắng. Script tự
+      # tạo sân riêng (không cần seed) và tự dọn; exit ≠ 0 khi hỏng.
+      - name: Chống trùng chỗ / trùng tiền trên Postgres thật
+        run: pnpm db:check-conflict
 
       - name: Build
         run: pnpm build
@@ -87,14 +90,14 @@ jobs:
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     # Job riêng chứ không gộp vào `validate`: E2E cần build production + tải
     # trình duyệt, nên nó chậm hơn hẳn phần còn lại. Gộp vào là mọi lần chạy
     # CI đều phải chờ, kể cả khi chỉ sửa một dòng comment.
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:17-alpine
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -107,12 +110,31 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # Máy chủ SMTP GIẢ nhận mọi thư, không gửi đi đâu.
+      #
+      # Bản production mà thiếu SMTP thì mailer NÉM LỖI — cố ý, để production
+      # thật không lặng lẽ nuốt thư. CI không được nới chốt đó (không có cờ
+      # "cho phép ghi log ở production"); thay vào đó cho nó một SMTP thật để
+      # nói chuyện, và đường gửi thư được chạy thật đầu-cuối.
+      mailpit:
+        image: axllent/mailpit:latest
+        ports:
+          - 1025:1025
+
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/chotsan_e2e?schema=public
       SESSION_SECRET: ci-session-secret-must-be-at-least-32-characters-long
-      # Bộ test đăng ký tài khoản mới, mà đăng ký lại gửi email xác thực —
-      # thiếu biến này thì `emails.ts` ném lỗi thay vì dựng được link.
+      # Link trong email (xác thực, đặt lại mật khẩu) dựng từ APP_URL.
+      APP_URL: http://127.0.0.1:3100
       NEXT_PUBLIC_APP_URL: http://127.0.0.1:3100
+      # Job chạy ngay trong request — không Redis, không worker. Bản production
+      # mà bật cờ và thiếu REDIS_URL thì `enqueue()` ném lỗi. (playwright.config.ts
+      # cũng đặt biến này cho webServer.)
+      QUEUE_ENABLED: "0"
+      SMTP_HOST: 127.0.0.1
+      SMTP_PORT: "1025"
+      SMTP_SECURE: "0"
+      MAIL_FROM: "ChốtSân CI <no-reply@ci.local>"
 
     steps:
       - uses: actions/checkout@v4
@@ -143,12 +165,17 @@ jobs:
       - name: Chạy E2E
         run: pnpm test:e2e
 
-      # Chỉ tải lên khi hỏng: report của lần chạy xanh không ai mở.
+      # Chỉ tải lên khi hỏng: report của lần chạy xanh không ai mở. Reporter
+      # `html` chỉ bật trên CI (playwright.config.ts) — thiếu nó thì thư mục rỗng.
+      # `test-results/` giữ trace + ảnh chụp của bài hỏng:
+      #   pnpm exec playwright show-trace test-results/<bài>/trace.zip
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: playwright-report
-          path: playwright-report/
+          path: |
+            playwright-report/
+            test-results/
           retention-days: 7
 
   audit:
@@ -164,13 +191,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
+      # ĐỎ khi có lỗ hổng mức high trở lên trong dependency production. Bản trước
+      # có `|| true` nên không bao giờ đỏ — và Next.js mang lỗ RCE critical mà
+      # không ai thấy. Lỗ hổng chưa có bản vá: nâng bằng `pnpm.overrides`, hoặc
+      # ghi rõ lý do chấp nhận trong PR rồi mới tạm bỏ qua.
       - name: Audit production dependencies
-        run: pnpm audit --prod --audit-level high || true
+        run: pnpm audit --prod --audit-level high
 
   docker:
-    name: Docker build
+    name: Docker build (runner, realtime, worker)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      SMOKE_ENV: >-
+        -e DATABASE_URL=postgresql://ci:ci@127.0.0.1:5432/ci
+        -e SESSION_SECRET=ci-session-secret-must-be-at-least-32-characters-long
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -184,8 +219,8 @@ jobs:
           push: false
           load: true
           tags: app:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=runner
+          cache-to: type=gha,mode=max,scope=runner
 
       # Build xong KHÔNG có nghĩa là chạy được.
       #
@@ -198,12 +233,9 @@ jobs:
       # Node khởi động và phục vụ được HTTP. `/api/health` trả 503 khi mất
       # database — 503 vẫn là một phản hồi, tức là server đã lên. Thứ cần bắt
       # là container chết ngay hoặc từ chối kết nối.
-      - name: Chạy thử container
+      - name: Chạy thử container web
         run: |
-          docker run -d --name app-ci -p 3000:3000 \
-            -e DATABASE_URL=postgresql://ci:ci@127.0.0.1:5432/ci \
-            -e SESSION_SECRET=ci-session-secret-must-be-at-least-32-characters-long \
-            app:ci
+          docker run -d --name app-ci -p 3000:3000 $SMOKE_ENV app:ci
 
           for i in $(seq 1 30); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/health || echo 000)
@@ -219,3 +251,64 @@ jobs:
 
           echo "✓ Container đã khởi động và phản hồi HTTP $code"
           docker rm -f app-ci
+
+      # realtime/worker là bundle esbuild `--packages=external`: gói npm vẫn
+      # `require` lúc chạy. Image từng thiếu node_modules và chết ngay khi lên,
+      # mà CI không thấy vì chỉ build `runner`. Stage `*-deps` đã `require` thử
+      # từng gói lúc BUILD; bước chạy thử dưới đây kiểm phần còn lại (env, cổng).
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: realtime
+          push: false
+          load: true
+          tags: app-realtime:ci
+          cache-from: type=gha,scope=realtime
+          cache-to: type=gha,mode=max,scope=realtime
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: worker
+          push: false
+          load: true
+          tags: app-worker:ci
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,mode=max,scope=worker
+
+      # `/health` gọi TỪ TRONG container (docker exec): worker nghe loopback.
+      #   - realtime: không cần Redis → phải 200.
+      #   - worker: trỏ vào Redis không tồn tại → phải 503 trong vài giây (không
+      #     treo), và log không được có lỗi nạp module.
+      - name: Chạy thử container realtime và worker
+        run: |
+          probe() {
+            docker exec "$1" node -e "fetch('http://127.0.0.1:$2/health').then(r=>{console.log(r.status);process.exit(0)}).catch(()=>process.exit(1))" 2>/dev/null
+          }
+
+          docker run -d --name realtime-ci $SMOKE_ENV app-realtime:ci
+          docker run -d --name worker-ci $SMOKE_ENV -e REDIS_URL=redis://127.0.0.1:6399 app-worker:ci
+
+          for name_port_expect in realtime-ci:3002:200 worker-ci:3003:503; do
+            IFS=: read -r name port expect <<< "$name_port_expect"
+            status=""
+            for i in $(seq 1 20); do
+              status=$(probe "$name" "$port" || true)
+              [ -n "$status" ] && break
+              sleep 2
+            done
+
+            if [ "$status" != "$expect" ]; then
+              echo "::error::$name: /health trả '${status:-không phản hồi}', mong đợi $expect."
+              docker logs "$name"
+              exit 1
+            fi
+            echo "✓ $name phản hồi /health $status"
+          done
+
+          if docker logs worker-ci 2>&1 | grep -E "Cannot find module|could not load the optional"; then
+            echo "::error::worker thiếu gói npm lúc chạy."
+            exit 1
+          fi
+
+          docker rm -f realtime-ci worker-ci

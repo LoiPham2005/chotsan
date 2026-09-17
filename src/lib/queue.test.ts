@@ -105,3 +105,19 @@ describe("giá trị cờ không hợp lệ", () => {
     await expect(loadQueue()).rejects.toThrow(/1 \(bật\) hoặc 0 \(tắt\)/);
   });
 });
+
+describe("gói ioredis — BullMQ nạp lười, không import nào trong mã trỏ tới", () => {
+  it("BullMQ tìm thấy `ioredis` từ CHÍNH vị trí của nó", async () => {
+    // Lỗi thật trước đây: package.json không có `ioredis`. BullMQ 6 chỉ
+    // `require("ioredis")` lúc dựng kết nối, nên typecheck/lint/build đều xanh —
+    // còn worker và mọi `enqueue()` có Redis thì chết lúc chạy với
+    // "BullMQ could not load the optional 'ioredis' package".
+    const { createRequire } = await import("node:module");
+    const fromHere = createRequire(import.meta.url);
+    const fromBullmq = createRequire(fromHere.resolve("bullmq"));
+
+    const IORedis = fromBullmq("ioredis") as { default?: unknown };
+
+    expect(typeof (IORedis.default ?? IORedis)).toBe("function");
+  });
+});

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { InvoiceRow } from "@/components/admin/invoice-row";
 import { requirePermission } from "@/lib/auth";
+import { dateKey } from "@/lib/date";
 import { formatVnd } from "@/lib/slots";
 import { invoiceService } from "@/services/invoice.service";
 
@@ -37,13 +38,13 @@ export default async function InvoicesPage({
   const invoices = await invoiceService.listByStatus(status);
   const total = invoices.reduce((sum, invoice) => sum + invoice.commissionAmount, 0);
 
-  const dateVN = (date: Date) =>
-    new Intl.DateTimeFormat("vi-VN", { timeZone: "Asia/Ho_Chi_Minh", dateStyle: "short" }).format(
-      date,
-    );
+  // Cột ngày của hoá đơn là nửa đêm UTC của ngày VN — đọc qua `dateKey` (giờ VN)
+  // thay vì tự dựng `Intl` thêm một lần nữa ở đây.
+  const dateVN = (date: Date) => dateKey(date).split("-").reverse().join("/");
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+    // Lề và khoảng đệm do `(admin)/layout.tsx` lo — trang chỉ giới hạn bề rộng chữ.
+    <div className="max-w-4xl">
       <h1 className="text-2xl font-bold tracking-tight text-content sm:text-3xl">
         Hoá đơn hoa hồng
       </h1>
@@ -52,15 +53,18 @@ export default async function InvoicesPage({
         tảng, thu theo tháng.
       </p>
 
-      <nav className="mt-4 flex gap-1 overflow-x-auto border-b border-line pb-2" aria-label="Lọc">
+      <nav
+        className="scrollbar-thin mt-4 flex min-w-0 gap-1 overflow-x-auto border-b border-line pb-2"
+        aria-label="Lọc"
+      >
         {TABS.map((tab) => (
           <Link
             key={tab.key}
             href={`/invoices?status=${tab.key}`}
             aria-current={tab.key === status ? "page" : undefined}
-            className={`whitespace-nowrap rounded-token-md px-3 py-2 text-sm font-semibold transition ${
+            className={`flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-token-md px-3 text-sm font-semibold transition-colors ${
               tab.key === status
-                ? "bg-brand-tint text-brand-hover"
+                ? "bg-brand-tint text-brand-text"
                 : "text-muted hover:bg-elevated hover:text-content"
             }`}
           >
@@ -84,7 +88,7 @@ export default async function InvoicesPage({
         <div className="mt-4 rounded-token-lg border border-dashed border-line bg-surface p-10 text-center">
           <p className="text-lg font-medium text-content">Trống</p>
           <p className="mt-1 text-sm text-muted">
-            Hoá đơn xuất tự động vào 02:00 ngày mùng 1 hằng tháng.
+            Hoá đơn tự xuất sau khi hết tháng, cho mọi cơ sở có doanh thu đã chốt.
           </p>
         </div>
       ) : (

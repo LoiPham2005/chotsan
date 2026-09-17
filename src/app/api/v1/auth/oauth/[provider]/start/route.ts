@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { redirectRelative } from "@/lib/api/redirect";
+import { apiErrors, handleApiError } from "@/lib/api/response";
 import { buildAuthorizationUrl } from "@/lib/oauth/client";
 import { PROVIDER_CONFIG, isProviderConfigured } from "@/lib/oauth/config";
 import { setOAuthFlowCookie } from "@/lib/oauth/flow-cookie";
@@ -16,7 +17,12 @@ export async function GET(request: Request, { params }: RouteContext) {
   const { provider } = await params;
 
   if (!isOAuthProviderId(provider)) {
-    return NextResponse.json({ error: "Provider không hỗ trợ" }, { status: 404 });
+    // Cùng envelope `{ error: { code, message } }` với mọi route `/api/v1` —
+    // client rẽ nhánh theo `code`, không phải đoán hình dạng.
+    return handleApiError(apiErrors.notFound("Nhà cung cấp đăng nhập không được hỗ trợ"), {
+      route: "GET /api/v1/auth/oauth/[provider]/start",
+      request,
+    });
   }
 
   if (!isProviderConfigured(provider)) {

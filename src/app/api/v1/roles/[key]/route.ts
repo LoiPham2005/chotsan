@@ -1,6 +1,8 @@
-import { requireApiPermission } from "@/lib/api/auth";
-import { apiErrors, apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
+import { clientIp, requireApiPermission } from "@/lib/api/auth";
+import { apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
+import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
 import { updateRoleSchema } from "@/schemas/role.schema";
+import { auditService } from "@/services/audit.service";
 import { roleService } from "@/services/role.service";
 
 export const dynamic = "force-dynamic";
@@ -12,10 +14,8 @@ export async function GET(request: Request, { params }: RouteContext) {
     const { key } = await params;
     await requireApiPermission(request, "role:read");
 
-    const role = await roleService.findByKey(key);
-    if (!role) throw apiErrors.notFound("Không tìm thấy vai trò");
-
-    return apiOk({ role });
+    // Không có thì service ném `RoleNotFoundError` → 404.
+    return apiOk({ role: await roleService.findByKey(key) });
   } catch (error) {
     return handleApiError(error, { route: "GET /api/v1/roles/[key]", request });
   }
@@ -29,15 +29,29 @@ export async function GET(request: Request, { params }: RouteContext) {
  *
  * ⚠️ Đây là endpoint nguy hiểm nhất của hệ thống: ai gọi được nó thì tự cấp
  * cho mình mọi quyền còn lại bằng vài request. Vì vậy nó đứng sau quyền
- * `role:update` riêng, không dùng chung với `user:update`.
+ * `role:update` riêng, và `actorId` truyền xuống để service áp chốt: không sửa
+ * vai trò ngang/trên bậc mình, không thêm quyền mình không có. Lỗi thật trước
+ * đây: route không truyền `actorId`, ADMIN tick được quyền của SUPER_ADMIN cho
+ * chính vai trò ADMIN.
  */
 export async function PATCH(request: Request, { params }: RouteContext) {
   try {
     const { key } = await params;
-    await requireApiPermission(request, "role:update");
+    const session = await requireApiPermission(request, "role:update");
 
     const body = await parseJsonBody(request, updateRoleSchema);
-    const role = await roleService.update(key, body);
+    const role = await roleService.update(key, body, { actorId: session.sub });
+
+    await auditService.record({
+      action: AUDIT_ACTIONS.ROLE_UPDATED,
+      entity: "role",
+      entityId: key,
+      actorId: session.sub,
+      actorEmail: session.email,
+      metadata: { ...body, surface: "api" },
+      ip: clientIp(request),
+      userAgent: request.headers.get("user-agent"),
+    });
 
     return apiOk({ role });
   } catch (error) {
@@ -48,11 +62,22 @@ export async function PATCH(request: Request, { params }: RouteContext) {
 export async function DELETE(request: Request, { params }: RouteContext) {
   try {
     const { key } = await params;
-    await requireApiPermission(request, "role:delete");
+    const session = await requireApiPermission(request, "role:delete");
 
-    // Luật "không xoá vai trò hệ thống" và "không xoá vai trò còn người dùng"
-    // do service giữ; handleApiError đổi chúng thành 409.
-    await roleService.remove(key);
+    // Luật "không xoá vai trò hệ thống", "không xoá vai trò còn người dùng" và
+    // chốt bậc vai trò do service giữ; handleApiError đổi chúng thành 409/403.
+    await roleService.remove(key, { actorId: session.sub });
+
+    await auditService.record({
+      action: AUDIT_ACTIONS.ROLE_DELETED,
+      entity: "role",
+      entityId: key,
+      actorId: session.sub,
+      actorEmail: session.email,
+      metadata: { surface: "api" },
+      ip: clientIp(request),
+      userAgent: request.headers.get("user-agent"),
+    });
 
     return apiOk({ key });
   } catch (error) {

@@ -21,8 +21,28 @@ import {
  * của khách hàng — và không ai hiểu vì sao phân quyền "tự nhiên quay về như cũ".
  *
  * Nên: quyền còn thiếu thì thêm vào, quyền đã bị gỡ bỏ có chủ đích thì để yên.
+ *
+ * ---
+ * "CÒN THIẾU" NGHĨA LÀ GÌ
+ *
+ * Bảng `role_permissions` không nhớ một dòng "chưa từng có" hay "đã bị gỡ".
+ * Bản trước thêm lại MỌI quyền mặc định còn thiếu, nên quản trị viên gỡ
+ * `user:delete` khỏi ADMIN thì lần deploy sau nó quay lại. Giờ chỉ gắn quyền
+ * mặc định khi chắc chắn không ai từng quyết định về nó:
+ *
+ *   (a) vai trò VỪA được tạo trong lần chạy này — chưa ai kịp chỉnh;
+ *   (b) khoá quyền CHƯA TỪNG có trong database trước lần chạy — quyền mới thêm
+ *       vào code, chưa ai kịp gỡ.
+ *
+ * Ngoại lệ: vai trò khai `"*"` (SUPER_ADMIN) luôn được bù đủ mọi quyền — "toàn
+ * quyền" mà thiếu một quyền là mâu thuẫn, không phải cấu hình.
  */
 export async function seedRbac(prisma: PrismaClient): Promise<void> {
+  // Chụp danh mục TRƯỚC khi đồng bộ: khoá nào không có ở đây là quyền mới.
+  const knownKeys = new Set(
+    (await prisma.permission.findMany({ select: { key: true } })).map(({ key }) => key),
+  );
+
   // 1. Danh mục quyền. Nguồn sự thật là hằng PERMISSIONS trong code, nên ở đây
   //    ghi đè phần mô tả là ĐÚNG — đó là dữ liệu của code, không phải của người
   //    dùng.
@@ -37,6 +57,9 @@ export async function seedRbac(prisma: PrismaClient): Promise<void> {
 
   // 2. Vai trò hệ thống.
   for (const seed of DEFAULT_ROLE_PERMISSIONS) {
+    const isNewRole =
+      (await prisma.role.findUnique({ where: { key: seed.key }, select: { id: true } })) === null;
+
     const role = await prisma.role.upsert({
       where: { key: seed.key },
       // KHÔNG đụng vào `name`/`description` nếu vai trò đã tồn tại: khách hàng
@@ -57,19 +80,17 @@ export async function seedRbac(prisma: PrismaClient): Promise<void> {
       select: { id: true },
     });
 
-    const wanted = resolveSeedPermissions(seed);
+    const wanted = resolveSeedPermissions(seed).filter(
+      (key) => seed.permissions === "*" || isNewRole || !knownKeys.has(key),
+    );
+    if (wanted.length === 0) continue;
+
     const permissions = await prisma.permission.findMany({
       where: { key: { in: [...wanted] } },
       select: { id: true },
     });
 
-    // `skipDuplicates` là thứ làm cho "chỉ thêm, không ghi đè" thành sự thật:
-    // dòng đã có thì bỏ qua, và dòng admin đã gỡ đi thì... vẫn được thêm lại.
-    //
-    // ⚠️ Đó là giới hạn đã biết: seed không phân biệt được "chưa từng có" với
-    // "đã bị gỡ có chủ đích". Nếu dự án của bạn cần giữ nguyên các lần gỡ đó,
-    // hãy chỉ chạy `seedRbac` một lần lúc cài đặt, đừng chạy trong mỗi lần
-    // deploy.
+    // `skipDuplicates`: dòng đã có thì bỏ qua — chạy lại bao nhiêu lần cũng vậy.
     await prisma.rolePermission.createMany({
       data: permissions.map((permission) => ({ roleId: role.id, permissionId: permission.id })),
       skipDuplicates: true,

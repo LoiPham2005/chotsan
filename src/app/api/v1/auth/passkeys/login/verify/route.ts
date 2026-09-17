@@ -1,8 +1,8 @@
 import { clientIp, enforceRateLimit } from "@/lib/api/auth";
 import { apiErrors, apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
 import { issueTokenPair } from "@/lib/api/tokens";
-import { RATE_LIMITS } from "@/lib/rate-limit";
-import { verifyTicket } from "@/lib/tickets";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS } from "@/lib/rate-limit";
+import { consumeTicket, verifyTicket } from "@/lib/tickets";
 import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
 import { loginPasskeySchema } from "@/schemas/auth.schema";
 import { auditService } from "@/services/audit.service";
@@ -20,12 +20,15 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(request: Request) {
   try {
-    await enforceRateLimit(request, "api:passkey", RATE_LIMITS.passkey);
+    await enforceRateLimit(request, RATE_LIMIT_BUCKETS.passkey, RATE_LIMITS.passkey);
 
     const body = await parseJsonBody(request, loginPasskeySchema);
     const ticket = await verifyTicket(body.challengeToken, "webauthn_auth");
 
-    if (!ticket) {
+    // Tiêu vé TRƯỚC khi xác minh: passkey đồng bộ giữ bộ đếm chữ ký bằng 0, nên
+    // thư viện không nhận ra một phản hồi bị nộp lại. Vé dùng một lần mới chặn
+    // được việc đăng nhập lại bằng đúng cặp vé + phản hồi cũ.
+    if (!ticket || !(await consumeTicket(ticket))) {
       throw apiErrors.unauthenticated("Phiên đăng nhập passkey đã hết hạn. Vui lòng thử lại.");
     }
 
@@ -47,7 +50,7 @@ export async function POST(request: Request) {
       entityId: user.id,
       actorId: user.id,
       actorEmail: user.email,
-      metadata: { method: "passkey" },
+      metadata: { method: "passkey", surface: "api" },
       ip,
       userAgent,
     });

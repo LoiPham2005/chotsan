@@ -16,8 +16,8 @@ import { enqueue } from "@/lib/queue";
 /**
  * Đường dẫn TRÊN WEB (không phải trên API) mà người dùng sẽ mở từ email.
  *
- * Đổi tên route ở `apps/web` thì sửa ở đây — nếu không, link trong email trỏ
- * vào trang 404, và lỗi đó chỉ lộ ra khi có người thật bấm vào.
+ * Đổi tên trang trong `src/app/(auth)/` thì sửa ở đây — nếu không, link trong
+ * email trỏ vào trang 404, và lỗi đó chỉ lộ ra khi có người thật bấm vào.
  */
 const WEB_ROUTES = {
   verifyEmail: "/verify-email",

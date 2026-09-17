@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import { resetPasswordAction, type AuthFormState } from "../actions";
-import { AuthFields, FORM_STYLE, type Field } from "../auth-form";
+import { AUTH_FORM_CLASS, AuthFields, type Field } from "../auth-form";
 
 const initialState: AuthFormState = {};
 
@@ -21,7 +21,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
   const [state, formAction, isPending] = useActionState(resetPasswordAction, initialState);
 
   return (
-    <form action={formAction} style={FORM_STYLE}>
+    <form action={formAction} className={AUTH_FORM_CLASS}>
       {/*
         Token đi kèm dưới dạng field ẩn thay vì đọc lại từ URL trong action:
         Server Action không thấy được URL của trang đã gọi nó. Đây cũng là lý

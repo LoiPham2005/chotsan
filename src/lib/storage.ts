@@ -88,13 +88,7 @@ const LOCAL_DIR = join(process.cwd(), "public", "uploads");
 
 const localDiskStorage: Storage = {
   async put(data, originalName, options) {
-    if (isProduction) {
-      throw new Error(
-        "Chưa cấu hình Storage. Bản mặc định ghi ra đĩa cục bộ, KHÔNG dùng được " +
-          "trên production: chạy nhiều instance thì file lạc, và deploy lại là mất sạch. " +
-          "Gọi setStorage() với một nhà cung cấp thật (S3/R2/Vietnix) lúc khởi động.",
-      );
-    }
+    if (isProduction) throw new StorageNotConfiguredError();
 
     const key = buildStorageKey(originalName, options.folder);
     const target = join(LOCAL_DIR, key);
@@ -125,15 +119,47 @@ const localDiskStorage: Storage = {
   },
 };
 
+/**
+ * Production chưa cắm kho lưu trữ thật.
+ *
+ * Lớp lỗi RIÊNG chứ không phải `Error` trần: đây là lỗi CẤU HÌNH, không phải lỗi
+ * của request. Để nó rơi vào nhánh "lỗi lạ" thì client nhận 500 "thử lại" và cứ
+ * thử lại mãi — trong khi thứ cần làm là sửa cấu hình máy chủ. Route bắt lớp này
+ * để trả 503 kèm lời giải thích.
+ */
+export class StorageNotConfiguredError extends Error {
+  constructor() {
+    super(
+      "Chưa cấu hình Storage. Bản mặc định ghi ra đĩa cục bộ, KHÔNG dùng được " +
+        "trên production: chạy nhiều instance thì file lạc, và deploy lại là mất sạch. " +
+        "Gọi setStorage() với một nhà cung cấp thật (S3/R2/Vietnix) lúc khởi động.",
+    );
+    this.name = "StorageNotConfiguredError";
+  }
+}
+
 let currentStorage: Storage = localDiskStorage;
+let hasCustomStorage = false;
 
 /** Cắm nhà cung cấp thật. Gọi một lần lúc khởi động ứng dụng. */
 export function setStorage(storage: Storage): void {
   currentStorage = storage;
+  hasCustomStorage = true;
 }
 
 export function getStorage(): Storage {
   return currentStorage;
+}
+
+/**
+ * `true` khi tải tệp lên thật sự lưu được: đã cắm nhà cung cấp, hoặc đang KHÔNG
+ * ở production (bản ghi đĩa cục bộ dùng được cho dev).
+ *
+ * Để route từ chối SỚM — trước khi đọc trọn tệp vào bộ nhớ — và để lúc khởi động
+ * báo được cấu hình còn thiếu (`src/instrumentation.ts`).
+ */
+export function isStorageConfigured(): boolean {
+  return hasCustomStorage || !isProduction;
 }
 
 // ---------------------------------------------------------------------------

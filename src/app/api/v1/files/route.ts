@@ -1,9 +1,19 @@
 import { enforceRateLimit, requireApiPermission } from "@/lib/api/auth";
-import { apiErrors, apiOk, handleApiError } from "@/lib/api/response";
+import { ApiError, apiErrors, apiOk, handleApiError } from "@/lib/api/response";
+import { logger } from "@/lib/logger";
 import { RATE_LIMITS } from "@/lib/rate-limit";
-import { IMAGE_UPLOAD, UploadRejectedError, assertUploadAllowed, getStorage } from "@/lib/storage";
+import {
+  IMAGE_UPLOAD,
+  StorageNotConfiguredError,
+  UploadRejectedError,
+  assertUploadAllowed,
+  getStorage,
+  isStorageConfigured,
+} from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
+
+const ROUTE = "POST /api/v1/files";
 
 /**
  * Tải tệp lên.
@@ -22,6 +32,10 @@ export async function POST(request: Request) {
   try {
     await requireApiPermission(request, "file:upload");
     await enforceRateLimit(request, "api:upload", RATE_LIMITS.upload);
+
+    // Từ chối TRƯỚC khi đọc body: không bắt máy chủ nhận trọn vài MB chỉ để trả
+    // lời "chưa có chỗ lưu". Sau bước xác thực, để người lạ không dò được cấu hình.
+    if (!isStorageConfigured()) throw storageUnavailable();
 
     const form = await request.formData().catch(() => null);
     const file = form?.get("file");
@@ -50,10 +64,30 @@ export async function POST(request: Request) {
     // `UploadRejectedError` là lỗi của DỮ LIỆU gửi lên, không phải lỗi máy chủ.
     if (error instanceof UploadRejectedError) {
       return handleApiError(apiErrors.validation({ file: [error.message] }), {
-        route: "POST /api/v1/files",
+        route: ROUTE,
         request,
       });
     }
-    return handleApiError(error, { route: "POST /api/v1/files", request });
+    if (error instanceof StorageNotConfiguredError) {
+      return handleApiError(storageUnavailable(), { route: ROUTE, request });
+    }
+    return handleApiError(error, { route: ROUTE, request });
   }
+}
+
+/**
+ * 503 thay vì 500 trần.
+ *
+ * 500 "Lỗi máy chủ. Vui lòng thử lại." khiến client thử lại mãi, còn người vận
+ * hành không thấy gì ngoài một stack trace. Đây là lỗi CẤU HÌNH: nói thẳng, và
+ * ghi log để người trực thấy ngay việc cần làm.
+ */
+function storageUnavailable(): ApiError {
+  logger.error(`${ROUTE}: chưa cấu hình kho lưu trữ tệp (setStorage) — trả 503`);
+
+  return new ApiError(
+    503,
+    "PROVIDER_ERROR",
+    "Máy chủ chưa cấu hình nơi lưu tệp, tạm thời chưa tải tệp lên được.",
+  );
 }

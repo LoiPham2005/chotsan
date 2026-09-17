@@ -41,7 +41,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <TopProgressBar />
         </Suspense>
         <Header />
-        <div className="flex-1">{children}</div>
+        {/*
+          `<main>` ĐÚNG MỘT LẦN cho mọi trang, đặt ở đây. Trình đọc màn hình nhảy
+          thẳng tới vùng "main" để bỏ qua thanh điều hướng — trước đây khu
+          khách/chủ sân không có vùng nào, còn khu quản trị có hai vùng lồng nhau.
+          Trang và layout con KHÔNG tự đặt `<main>` nữa.
+        */}
+        <main className="flex-1">{children}</main>
         <Footer />
       </body>
     </html>

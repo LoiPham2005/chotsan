@@ -27,7 +27,11 @@ import {
   setUserPermissionSchema,
 } from "@/schemas/user.schema";
 import { createRoleSchema, updateRoleSchema } from "@/schemas/role.schema";
-import { sendNotificationSchema, registerDeviceSchema } from "@/schemas/notification.schema";
+import {
+  sendNotificationSchema,
+  registerDeviceSchema,
+  deactivateDeviceSchema,
+} from "@/schemas/notification.schema";
 import { API_PREFIX } from "@/lib/api/version";
 
 /**
@@ -140,6 +144,18 @@ function errorResponses(...statuses: (401 | 403 | 404 | 409 | 422 | 423 | 429)[]
       status,
       {
         description: ERROR_LABELS[status],
+        // Client nên đợi đúng số giây này rồi mới thử lại, thay vì đoán hoặc
+        // thử dồn dập — xem `buildErrorResponse` trong src/lib/api/response.ts.
+        ...(status === 429
+          ? {
+              headers: {
+                "Retry-After": {
+                  description: "Số giây phải đợi trước khi gọi lại",
+                  schema: { type: "integer" },
+                },
+              },
+            }
+          : {}),
         content: { "application/json": { schema: ref(apiErrorSchema) } },
       },
     ]),
@@ -225,6 +241,7 @@ const setUserPermissionRequest = named(
 );
 const sendNotificationRequest = named("SendNotificationRequest", sendNotificationSchema, "input");
 const registerDeviceRequest = named("RegisterDeviceRequest", registerDeviceSchema, "input");
+const deactivateDeviceRequest = named("DeactivateDeviceRequest", deactivateDeviceSchema, "input");
 
 const createRoleRequest = named("CreateRoleRequest", createRoleSchema, "input");
 const updateRoleRequest = named("UpdateRoleRequest", updateRoleSchema, "input");
@@ -251,6 +268,19 @@ const tokenPairSchema = named(
   }),
 );
 const tokenResponse = envelope("TokenResponse", tokenPairSchema);
+/**
+ * Đổi mật khẩu vô hiệu MỌI token cũ — kể cả của thiết bị đang gọi — nên route
+ * trả luôn cặp token MỚI (cùng `sessionId`). Client phải thay token đang lưu,
+ * không thì request kế tiếp nhận 401.
+ */
+const changePasswordResponse = envelope(
+  "ChangePasswordResponse",
+  tokenPairSchema.extend({ message: z.string() }),
+);
+const emailChangeRequestedResponse = envelope(
+  "EmailChangeRequestedResponse",
+  z.object({ pendingEmail: z.string() }),
+);
 
 const sessionSchema = named(
   "Session",
@@ -371,14 +401,27 @@ const webAuthnOptionsResponse = envelope(
   z.object({ options: z.record(z.string(), z.unknown()), challengeToken: z.string() }),
 );
 
+/*
+ * Hình dạng THẬT của `NotificationService.listForUser` — hai id khác nhau.
+ *
+ * Bản trước khai `id` là "id bản ghi người nhận" trong khi response trả id của
+ * THÔNG BÁO: client theo đặc tả gọi `/notifications/{id}/read` với `id` đó và
+ * luôn nhận 404. Id truyền vào `/read` là `recipientId`.
+ */
 const notificationSchema = named(
   "Notification",
   z.object({
-    /** Id bản ghi NGƯỜI NHẬN, không phải id thông báo — dùng cho `/lấy`. */
-    id: z.string(),
+    recipientId: z.string().meta({
+      description: "Id bản ghi NGƯỜI NHẬN — truyền giá trị NÀY vào `/notifications/{id}/read`.",
+    }),
+    id: z.string().meta({
+      description: "Id của nội dung thông báo, dùng chung cho mọi người nhận (broadcast).",
+    }),
     title: z.string(),
     body: z.string(),
-    type: z.string(),
+    imageUrl: z.string().nullable(),
+    actionUrl: z.string().nullable(),
+    type: z.enum(["DIRECT", "TOPIC", "BROADCAST"]),
     data: z.record(z.string(), z.unknown()).nullable(),
     isRead: z.boolean(),
     readAt: z.iso.datetime().nullable(),
@@ -414,6 +457,23 @@ const devicesListResponse = envelope(
   "DevicesListResponse",
   z.object({ devices: z.array(deviceSchema) }),
 );
+const deviceResponse = envelope("DeviceResponse", z.object({ device: deviceSchema }));
+const deviceDeactivatedResponse = envelope(
+  "DeviceDeactivatedResponse",
+  z.object({ deactivated: z.boolean() }),
+);
+const notificationSentResponse = envelope(
+  "NotificationSentResponse",
+  z.object({ id: z.string(), recipientCount: z.number().int(), createdAt: z.iso.datetime() }),
+);
+const unreadCountResponse = envelope(
+  "UnreadCountResponse",
+  z.object({ unreadCount: z.number().int() }),
+);
+const notificationsMarkedResponse = envelope(
+  "NotificationsMarkedResponse",
+  z.object({ marked: z.number().int() }),
+);
 
 const auditLogSchema = named(
   "AuditLog",
@@ -435,14 +495,23 @@ const auditLogsListResponse = envelope(
   z.object({ items: z.array(auditLogSchema), meta: paginationMetaSchema }),
 );
 
-/** Một quyền, kèm NGUỒN của nó — vai trò nào cấp, hay ngoại lệ riêng. */
+/**
+ * Một quyền, kèm NGUỒN của nó — vai trò nào cấp, hay ngoại lệ riêng.
+ *
+ * Khớp `PermissionExplanation` của `permissionService.explainFor`. Bản trước
+ * khai `granted`/`fromRoles`/`override` — những trường server không hề trả.
+ */
 const permissionExplanationSchema = named(
   "PermissionExplanation",
   z.object({
     key: z.string(),
-    granted: z.boolean(),
-    fromRoles: z.array(z.string()),
-    override: z.enum(["granted", "denied"]).nullable(),
+    /** `denied` = bị TƯỚC riêng: quyền KHÔNG có hiệu lực dù vai trò có cho. */
+    source: z.enum(["role", "grant", "denied"]),
+    roles: z.array(z.string()),
+    grantedBy: z.string().nullable().optional(),
+    expiresAt: z.iso.datetime().nullable().optional(),
+    /** Từng có ngoại lệ nhưng đã hết hạn — quyền đã về theo vai trò. */
+    expiredOverride: z.boolean().optional(),
   }),
 );
 const userPermissionsResponse = envelope(
@@ -494,7 +563,15 @@ const rolesListResponse = envelope(
   "RolesListResponse",
   z.object({
     roles: z.array(roleSchema),
-    permissions: z.array(z.object({ key: z.string(), description: z.string() })),
+    // Cùng hình dạng với `GET /permissions`: một màn phân quyền dùng chung được.
+    permissions: z.array(
+      z.object({
+        key: z.string(),
+        name: z.string(),
+        category: z.string(),
+        description: z.string(),
+      }),
+    ),
   }),
 );
 
@@ -576,10 +653,12 @@ const paths = {
     post: {
       tags: ["Auth"],
       security: SECURED,
-      summary: "Đổi mật khẩu khi đang đăng nhập — thu hồi mọi phiên khác",
+      summary:
+        "Đổi mật khẩu khi đang đăng nhập — thu hồi mọi phiên, rồi trả cặp token MỚI " +
+        "(cùng sessionId) cho thiết bị đang gọi. Client phải thay token đang lưu.",
       requestBody: jsonBody(changePasswordRequest),
       responses: {
-        ...okResponse(emptyResponse, "Đổi thành công"),
+        ...okResponse(changePasswordResponse, "Đổi thành công"),
         ...errorResponses(401, 422, 429),
       },
     },
@@ -669,7 +748,10 @@ const paths = {
   "/auth/2fa/verify": {
     post: {
       tags: ["2FA"],
-      summary: "Đổi vé 2FA + mã lấy token thật (KHÔNG cần access token)",
+      summary:
+        "Đổi vé 2FA + mã lấy token thật (KHÔNG cần access token). Vé dùng MỘT lần " +
+        "(nhập sai mã thì vé vẫn dùng tiếp được); quá 5 lần/15 phút trên MỘT tài " +
+        "khoản thì 429, kể cả mã đúng.",
       requestBody: jsonBody(verifyTwoFactorRequest),
       responses: { ...okResponse(tokenResponse), ...errorResponses(401, 422, 429) },
     },
@@ -751,7 +833,7 @@ const paths = {
         "khi link được bấm; đổi ngay thì gõ nhầm một ký tự là mất đường đăng nhập.",
       requestBody: jsonBody(requestEmailChangeRequest),
       responses: {
-        ...okResponse(emptyResponse, "Đã gửi link xác nhận"),
+        ...okResponse(emailChangeRequestedResponse, "Đã gửi link xác nhận"),
         ...errorResponses(401, 409, 422, 429),
       },
     },
@@ -821,7 +903,11 @@ const paths = {
       tags: ["OAuth"],
       summary:
         "Nhà cung cấp gọi lại sau khi người dùng đồng ý. Trả 302 về ứng dụng — " +
-        "KHÔNG trả JSON, vì đích đến là thanh địa chỉ của trình duyệt.",
+        "KHÔNG trả JSON, vì đích đến là thanh địa chỉ của trình duyệt. Lỗi: " +
+        "`/login?oauthError=` state_mismatch | email_required | email_unverified | " +
+        "not_configured | exchange_failed | banned | account_unavailable | unknown. " +
+        "Tài khoản đã bật 2FA: KHÔNG tạo phiên, về `/login?twoFactor=1` — vé nằm " +
+        "trong cookie httpOnly, không bao giờ trên URL.",
       parameters: [
         pathParam("provider"),
         queryParam("code", { type: "string" }),
@@ -884,7 +970,7 @@ const paths = {
       responses: {
         201: {
           description: "Đã gửi",
-          content: { "application/json": { schema: ref(emptyResponse) } },
+          content: { "application/json": { schema: ref(notificationSentResponse) } },
         },
         ...errorResponses(401, 403, 422),
       },
@@ -895,23 +981,27 @@ const paths = {
       tags: ["Notifications"],
       security: SECURED,
       summary: "Số thông báo chưa đọc — cho chấm đỏ trên chuông",
-      responses: { ...okResponse(emptyResponse), ...errorResponses(401) },
+      responses: { ...okResponse(unreadCountResponse), ...errorResponses(401) },
     },
   },
   "/notifications/read-all": {
     post: {
       tags: ["Notifications"],
       security: SECURED,
-      summary: "Đánh dấu đã đọc tất cả",
-      responses: { ...okResponse(emptyResponse), ...errorResponses(401) },
+      summary: "Đánh dấu đã đọc tất cả — `marked` là số thông báo vừa chuyển sang đã đọc",
+      responses: { ...okResponse(notificationsMarkedResponse), ...errorResponses(401) },
     },
   },
   "/notifications/{id}/read": {
     post: {
       tags: ["Notifications"],
       security: SECURED,
-      summary: "Đánh dấu đã đọc MỘT thông báo (id là bản ghi người nhận)",
-      parameters: [pathParam("id")],
+      summary:
+        "Đánh dấu đã đọc MỘT thông báo. Idempotent: gọi lại khi đã đọc vẫn 200. " +
+        "404 khi không tồn tại HOẶC không phải của mình.",
+      parameters: [
+        pathParam("id", "`recipientId` lấy từ GET /notifications — KHÔNG phải `id` của thông báo"),
+      ],
       responses: { ...okResponse(idResponse), ...errorResponses(401, 404) },
     },
   },
@@ -931,8 +1021,8 @@ const paths = {
       requestBody: jsonBody(registerDeviceRequest),
       responses: {
         201: {
-          description: "Đã đăng ký",
-          content: { "application/json": { schema: ref(emptyResponse) } },
+          description: "Đã đăng ký (hoặc chuyển chủ token về tài khoản này)",
+          content: { "application/json": { schema: ref(deviceResponse) } },
         },
         ...errorResponses(401, 422),
       },
@@ -941,7 +1031,8 @@ const paths = {
       tags: ["Devices"],
       security: SECURED,
       summary: "Gỡ thiết bị khỏi danh sách nhận push — gọi lúc đăng xuất trên máy đó",
-      responses: { ...okResponse(emptyResponse), ...errorResponses(401, 422) },
+      requestBody: jsonBody(deactivateDeviceRequest),
+      responses: { ...okResponse(deviceDeactivatedResponse), ...errorResponses(401, 422) },
     },
   },
   "/audit-logs": {
@@ -1000,6 +1091,11 @@ const paths = {
           content: { "application/json": { schema: ref(storedFileResponse) } },
         },
         ...errorResponses(401, 403, 422, 429),
+        503: {
+          description:
+            "Máy chủ chưa cấu hình kho lưu trữ tệp (`PROVIDER_ERROR`) — lỗi cấu hình, đừng thử lại",
+          content: { "application/json": { schema: ref(apiErrorSchema) } },
+        },
       },
     },
   },
@@ -1026,7 +1122,8 @@ const paths = {
       security: SECURED,
       summary:
         "Ngoại lệ quyền cho TỪNG người, đè lên vai trò. Thứ tự: hợp vai trò → " +
-        "cộng phần cấp thêm → TRỪ phần bị tước. Cấm luôn thắng.",
+        "cộng phần cấp thêm → TRỪ phần bị tước. Cấm luôn thắng. CẤP thì người " +
+        "cấp phải đang có đúng quyền đó (403).",
       parameters: [pathParam("id")],
       requestBody: jsonBody(setUserPermissionRequest),
       responses: { ...okResponse(userPermissionsResponse), ...errorResponses(401, 403, 404, 422) },
@@ -1036,7 +1133,9 @@ const paths = {
     delete: {
       tags: ["Users"],
       security: SECURED,
-      summary: "Gỡ ngoại lệ, trả người dùng về đúng quyền của vai trò họ đang mang",
+      summary:
+        "Gỡ ngoại lệ, trả người dùng về đúng quyền của vai trò họ đang mang. " +
+        "Không đụng được người cùng hoặc cao bậc hơn mình (403).",
       parameters: [pathParam("id"), pathParam("permissionKey")],
       responses: { ...okResponse(userPermissionsResponse), ...errorResponses(401, 403, 404) },
     },
@@ -1109,8 +1208,10 @@ const paths = {
       tags: ["Users"],
       security: SECURED,
       summary:
-        "Sửa hồ sơ — chính mình cần profile:update:own, sửa người khác cần user:update. " +
-        "Riêng roleKeys LUÔN đòi user:update, kể cả khi đang sửa chính mình.",
+        "Sửa hồ sơ. CHÍNH MÌNH: profile:update:own, chỉ trường hồ sơ — gửi email, " +
+        "phone, status, roleKeys hoặc password là 422 kèm đường đúng (đổi email: " +
+        "/auth/change-email). NGƯỜI KHÁC: user:update, và không đụng được người " +
+        "cùng hoặc cao bậc hơn mình (403).",
       parameters: [pathParam("id")],
       requestBody: jsonBody(updateUserRequest),
       responses: { ...okResponse(userResponse), ...errorResponses(401, 403, 404, 409, 422) },
@@ -1137,7 +1238,9 @@ const paths = {
     post: {
       tags: ["Users"],
       security: SECURED,
-      summary: "Mở khoá sớm — xoá lockedUntil do sai mật khẩu liên tiếp, thay vì đợi hết hạn",
+      summary:
+        "Mở khoá sớm — xoá lockedUntil do sai mật khẩu liên tiếp, thay vì đợi hết hạn. " +
+        "Không đụng được người cùng hoặc cao bậc hơn mình (403).",
       parameters: [pathParam("id")],
       responses: { ...okResponse(userResponse), ...errorResponses(401, 403, 404) },
     },
@@ -1154,7 +1257,9 @@ const paths = {
     post: {
       tags: ["Roles"],
       security: SECURED,
-      summary: "Tạo vai trò mới — key không đổi được sau khi tạo",
+      summary:
+        "Tạo vai trò mới — key không đổi được sau khi tạo. Level phải THẤP hơn bậc " +
+        "của người tạo, và chỉ gán được quyền mà chính người tạo đang có (403).",
       requestBody: jsonBody(createRoleRequest),
       responses: {
         ...okResponse(roleResponse, "Tạo thành công"),
@@ -1175,7 +1280,8 @@ const paths = {
       security: SECURED,
       summary:
         "Đổi tên/mô tả và/hoặc thay TOÀN BỘ danh sách quyền. " +
-        "`permissions` là thay thế, không phải thêm vào — gửi thiếu là gỡ mất.",
+        "`permissions` là thay thế, không phải thêm vào — gửi thiếu là gỡ mất. " +
+        "Quyền THÊM MỚI phải là quyền người sửa đang có (403).",
       parameters: [pathParam("key")],
       requestBody: jsonBody(updateRoleRequest),
       responses: { ...okResponse(roleResponse), ...errorResponses(401, 403, 404, 422) },
@@ -1241,7 +1347,7 @@ export function getOpenApiDocument() {
   return {
     openapi: "3.1.0",
     info: {
-      title: "nextjs_prisma_base API",
+      title: "ChốtSân API",
       version: "1.0.0",
       description:
         "REST API cho client mobile — dùng Bearer token, khác cookie session của web. " +

@@ -11,6 +11,20 @@ import { formatVndShort } from "@/lib/slots";
  * bộ dữ liệu đã có sẵn ở máy chủ, và biến một Server Component thành Client.
  *
  * ---
+ * CHIỀU CAO PHẦN TRĂM CẦN MỘT CHA CÓ CHIỀU CAO XÁC ĐỊNH
+ *
+ * Lỗi thật trước đây: khung ngoài `flex h-40 items-end`, mỗi cột là một `div`
+ * `flex-1` KHÔNG có chiều cao, thanh bên trong mang `height: X%`. Với
+ * `items-end` (không phải `stretch`), cột con cao theo nội dung — tức là "tự
+ * động", không xác định — và CSS quy định phần trăm của một chiều cao không xác
+ * định thì tính như `auto`: thanh rỗng cao 0px. Biểu đồ có khung, có trục, không
+ * có cột nào.
+ *
+ * Giờ mỗi cột là `h-full` (100% của khung `h-40` = 160px, xác định) và tự dồn
+ * thanh xuống đáy bằng `flex-col justify-end`; phần trăm của thanh tính trên
+ * 160px đó. Không còn phụ thuộc vào luật "kéo giãn" của flexbox.
+ *
+ * ---
  * SỐ LIỆU CÓ CẢ Ở DẠNG BẢNG
  *
  * Biểu đồ cột không đọc được bằng trình đọc màn hình. `<table>` ẩn bên dưới
@@ -32,13 +46,17 @@ export function RevenueChart({
   const max = Math.max(...rows.map((row) => row.revenue), 1);
 
   return (
-    <figure className="rounded-token-lg border border-line bg-surface p-4 shadow-nang-1">
-      <div className="flex h-40 items-end gap-1" aria-hidden>
+    <figure className="rounded-token-lg border border-line bg-surface p-4">
+      <div className="flex h-40 min-w-0 items-end gap-1" aria-hidden>
         {rows.map((row) => (
-          <div key={row.date} className="group relative flex-1" title={`${row.date}`}>
+          <div
+            key={row.date}
+            className="group flex h-full min-w-0 flex-1 flex-col justify-end"
+            title={`${row.date.slice(8)}/${row.date.slice(5, 7)} · ${formatVndShort(row.revenue)}`}
+          >
             <div
-              className="w-full rounded-t-[3px] bg-gradient-to-t from-brand to-emerald-400 transition-opacity group-hover:opacity-80"
-              style={{ height: `${Math.max(2, (row.revenue / max) * 100)}%` }}
+              className="w-full rounded-t-[3px] bg-brand transition-opacity group-hover:opacity-80"
+              style={{ height: `${columnHeightPercent(row.revenue, max)}%` }}
             />
           </div>
         ))}
@@ -75,4 +93,13 @@ export function RevenueChart({
       </table>
     </figure>
   );
+}
+
+/**
+ * Chiều cao cột theo phần trăm của khung. Ngày có doanh thu nhưng nhỏ vẫn cao
+ * tối thiểu 2% để thấy được là "có", không lẫn với ngày trống.
+ */
+export function columnHeightPercent(revenue: number, max: number): number {
+  if (revenue <= 0 || max <= 0) return 0;
+  return Math.max(2, Math.min(100, (revenue / max) * 100));
 }

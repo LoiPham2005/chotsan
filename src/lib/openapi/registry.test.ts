@@ -116,3 +116,76 @@ describe("đặc tả OpenAPI", () => {
     }
   });
 });
+
+/**
+ * Hình dạng response của notifications/devices/files — phần so khớp path+method
+ * ở trên KHÔNG kiểm được. Lỗi thật trước đây: `Notification.id` khai là "id bản
+ * ghi người nhận" trong khi response trả id THÔNG BÁO, nên client theo đặc tả gọi
+ * `/notifications/{id}/read` luôn 404; và bốn endpoint trả dữ liệu thật lại khai
+ * `EmptyResponse` — client sinh tự động vứt hết dữ liệu.
+ */
+describe("đặc tả khớp response thật — notifications, devices, files", () => {
+  const document = getOpenApiDocument();
+  const schemas = document.components.schemas as Record<
+    string,
+    { properties?: Record<string, { description?: string }>; required?: string[] }
+  >;
+  const paths = document.paths as unknown as Record<
+    string,
+    Record<
+      string,
+      {
+        parameters?: { name: string; description?: string }[];
+        requestBody?: unknown;
+        responses: Record<
+          string,
+          { content?: { "application/json": { schema: { $ref: string } } } }
+        >;
+      }
+    >
+  >;
+
+  function responseRef(path: string, method: string, status: string): string | undefined {
+    return paths[path]![method]!.responses[status]?.content?.["application/json"].schema.$ref;
+  }
+
+  it("Notification có CẢ recipientId lẫn id, và nói rõ id nào dùng cho /read", () => {
+    const notification = schemas.Notification!;
+
+    expect(notification.required).toEqual(expect.arrayContaining(["recipientId", "id"]));
+    expect(notification.properties!.recipientId!.description).toMatch(/\/read/);
+    expect(paths["/notifications/{id}/read"]!.post!.parameters![0]!.description).toMatch(
+      /recipientId/,
+    );
+  });
+
+  it("không endpoint nào trả dữ liệu mà lại khai EmptyResponse", () => {
+    const expected: [string, string, string, string][] = [
+      ["/notifications", "post", "201", "NotificationSentResponse"],
+      ["/notifications/unread-count", "get", "200", "UnreadCountResponse"],
+      ["/notifications/read-all", "post", "200", "NotificationsMarkedResponse"],
+      ["/notifications/{id}/read", "post", "200", "IdResponse"],
+      ["/devices", "post", "201", "DeviceResponse"],
+      ["/devices", "delete", "200", "DeviceDeactivatedResponse"],
+    ];
+
+    for (const [path, method, status, name] of expected) {
+      expect(responseRef(path, method, status), `${method.toUpperCase()} ${path}`).toBe(
+        `#/components/schemas/${name}`,
+      );
+    }
+  });
+
+  it("DELETE /devices khai body `fcmToken` — route đọc body, đặc tả phải nói ra", () => {
+    expect(paths["/devices"]!.delete!.requestBody).toBeDefined();
+    expect(schemas.DeactivateDeviceRequest!.required).toEqual(["fcmToken"]);
+  });
+
+  it("POST /files khai 503 khi máy chủ chưa cấu hình kho lưu trữ", () => {
+    expect(paths["/files"]!.post!.responses["503"]).toBeDefined();
+  });
+
+  it("tên API là ChốtSân, không phải tên bộ khung", () => {
+    expect(document.info.title).toBe("ChốtSân API");
+  });
+});

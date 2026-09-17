@@ -1,91 +1,125 @@
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient, UserStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { env } from "@/lib/env";
 import { cacheDel, cacheGet, cacheSet } from "@/lib/cache";
 
 /**
- * Thu hồi TỨC THÌ mọi access token cũ khi mật khẩu đổi.
+ * Thu hồi phiên THẬT SỰ: token hợp lệ về chữ ký vẫn bị từ chối khi tài khoản
+ * đã đổi trạng thái kể từ lúc cấp token.
  *
  * ---
  * BÀI TOÁN
  *
- * JWT đã ký thì không thu hồi được — đó là bản chất của nó, và là lý do access
- * token chỉ sống 15 phút. Nhưng 15 phút vẫn là 15 phút mà kẻ đã chiếm tài
- * khoản còn thao tác được **sau khi** chủ thật đã đổi mật khẩu. Đúng lúc mà
- * việc chặn phải có hiệu lực ngay.
+ * JWT đã ký thì không thu hồi được — đó là bản chất của nó. Cookie web sống
+ * `SESSION_MAX_AGE_DAYS` (mặc định 7 ngày), access token mobile 15 phút. Trong
+ * quãng đó ba chuyện có thể đã xảy ra mà chữ ký không hề biết:
+ *
+ *   1. Mật khẩu vừa đổi/đặt lại — thường vì nghi bị chiếm tài khoản.
+ *   2. Tài khoản bị khoá (BANNED) hoặc tạm ngưng (INACTIVE).
+ *   3. Tài khoản bị xoá mềm.
  *
  * Refresh token thì thu hồi được (nằm trong database) — nhưng nó chỉ chặn việc
- * GIA HẠN, không chặn access token đang cầm.
+ * GIA HẠN, không chặn token đang cầm. Trước lớp này, admin khoá một người thì
+ * người đó vẫn dùng mọi trang bằng cookie cũ thêm một tuần.
  *
  * ---
  * CÁCH LÀM
  *
- * Mỗi lần đổi mật khẩu, ghi mốc thời gian vào `User.passwordChangedAt`. Guard
- * so `iat` của token với mốc đó: token cấp TRƯỚC mốc là token của "thời trước
- * khi đổi" → từ chối.
+ * Mọi nơi đọc phiên (`getSession` web, `getApiSession` REST, handshake
+ * realtime) hỏi `isTokenStillValid(sub, iat)`. Hàm đó đọc một ẢNH NHỎ của tài
+ * khoản — mốc đổi mật khẩu, trạng thái, đã xoá chưa — và so với token.
  *
  * ---
  * VÌ SAO KHÔNG BIẾN NÓ THÀNH MỘT TRUY VẤN MỖI REQUEST
  *
- * Vì đó là một lượt đi database trên đường đi nóng, chỉ để đọc một giá trị gần
+ * Vì đó là một lượt đi database trên đường đi nóng, chỉ để đọc ba giá trị gần
  * như không bao giờ đổi. Nên: cache, và **xoá cache ngay trong chính thao tác
- * đổi mật khẩu**. Nhờ vậy hiệu lực là tức thì chứ không phải "sau khi TTL hết".
+ * làm đổi chúng** (`invalidate`). Nhờ vậy hiệu lực là tức thì chứ không phải
+ * "sau khi TTL hết".
  *
- * TTL 5 phút chỉ là lưới an toàn cho trường hợp một tiến trình khác đổi mật
- * khẩu mà không đi qua đây (script chạy tay, sửa thẳng SQL).
+ * TTL 60 giây là lưới an toàn cho đường ghi không đi qua service (script chạy
+ * tay, sửa thẳng SQL) và cho cache RAM của tiến trình KHÁC khi chưa có Redis —
+ * `invalidate` chỉ xoá được bản của tiến trình đang chạy nó.
  */
 
-const CACHE_PREFIX = "secstamp:v1:";
-const CACHE_TTL_SECONDS = 300;
+const CACHE_PREFIX = "secstamp:v2:";
+const CACHE_TTL_SECONDS = 60;
 
-/** Không có mốc nào (chưa từng đổi mật khẩu) — mọi token đều hợp lệ. */
-const NO_STAMP = 0;
+/** Những gì về tài khoản quyết định một token còn dùng được hay không. */
+export type SecuritySnapshot = {
+  /** Mốc đổi mật khẩu gần nhất, GIÂY epoch — cùng đơn vị với `iat`. `null` = chưa từng đổi. */
+  passwordChangedAt: number | null;
+  status: UserStatus;
+  /** Đã xoá mềm — hoặc không còn bản ghi nào. */
+  deleted: boolean;
+};
+
+/** Ảnh của một id không có trong database: không dùng được, và vẫn cache được. */
+const MISSING: SecuritySnapshot = { passwordChangedAt: null, status: "INACTIVE", deleted: true };
 
 export class SecurityStampService {
   constructor(private readonly db: PrismaClient = prisma) {}
 
-  /** `true` khi cơ chế này đang bật (`SESSION_STRICT_REVOCATION`). */
+  /**
+   * `true` khi phép so mốc ĐỔI MẬT KHẨU đang bật (`SESSION_STRICT_REVOCATION`).
+   *
+   * Không ảnh hưởng phép kiểm trạng thái: khoá/xoá luôn cắt phiên.
+   */
   isEnabled(): boolean {
     return env.SESSION_STRICT_REVOCATION;
   }
 
-  /** Mốc đổi mật khẩu, tính bằng GIÂY epoch — cùng đơn vị với `iat` của JWT. */
-  async stampFor(userId: string): Promise<number> {
+  async snapshotFor(userId: string): Promise<SecuritySnapshot> {
     const key = `${CACHE_PREFIX}${userId}`;
 
-    const cached = await cacheGet<number>(key);
+    const cached = await cacheGet<SecuritySnapshot>(key);
     if (cached !== null) return cached;
 
     const user = await this.db.user.findUnique({
       where: { id: userId },
-      select: { passwordChangedAt: true },
+      select: { passwordChangedAt: true, status: true, deletedAt: true },
     });
 
-    const stamp = user?.passwordChangedAt
-      ? Math.floor(user.passwordChangedAt.getTime() / 1000)
-      : NO_STAMP;
+    const snapshot: SecuritySnapshot = user
+      ? {
+          passwordChangedAt: user.passwordChangedAt
+            ? Math.floor(user.passwordChangedAt.getTime() / 1000)
+            : null,
+          status: user.status,
+          deleted: user.deletedAt !== null,
+        }
+      : MISSING;
 
-    await cacheSet(key, stamp, CACHE_TTL_SECONDS);
-    return stamp;
+    await cacheSet(key, snapshot, CACHE_TTL_SECONDS);
+    return snapshot;
   }
 
   /**
-   * Token này còn hiệu lực không.
+   * Token của `userId`, cấp lúc `issuedAt`, còn được nhận không.
    *
    * @param issuedAt `iat` của JWT (giây epoch).
    *
-   * So sánh dùng `<` chứ không phải `<=`, và đó là chủ đích: `iat` chỉ có độ
-   * phân giải GIÂY. Token cấp ở mili-giây 100 và mật khẩu đổi ở mili-giây 900
-   * của cùng một giây sẽ có `iat === stamp`. Dùng `<=` thì token vừa cấp trong
-   * chính luồng đổi mật khẩu (để giữ phiên hiện tại) cũng bị đá ra.
+   * Phép so mốc dùng `>=` chứ không phải `>`, và đó là chủ đích: `iat` chỉ có
+   * độ phân giải GIÂY. Mật khẩu đổi ở mili-giây 900 rồi cookie mới được cấp ở
+   * mili-giây 950 của CÙNG giây đó thì `iat === mốc` — dùng `>` là phiên vừa
+   * cấp để giữ người đang thao tác cũng bị cắt oan ngay request kế tiếp.
    */
-  async isTokenStillValid(userId: string, issuedAt: number): Promise<boolean> {
-    if (!this.isEnabled()) return true;
+  async isTokenStillValid(userId: string, issuedAt: number | undefined): Promise<boolean> {
+    const snapshot = await this.snapshotFor(userId);
 
-    return issuedAt >= (await this.stampFor(userId));
+    if (snapshot.deleted || snapshot.status !== "ACTIVE") return false;
+    if (!this.isEnabled() || snapshot.passwordChangedAt === null) return true;
+
+    // Token không mang `iat` thì không chứng minh được nó cấp SAU lần đổi mật
+    // khẩu. `signSession` luôn ghi `iat`, nên thiếu nó là token lạ.
+    return issuedAt !== undefined && issuedAt >= snapshot.passwordChangedAt;
   }
 
-  /** Gọi NGAY sau khi ghi `passwordChangedAt`. Quên là hiệu lực trễ tới 5 phút. */
+  /**
+   * Gọi NGAY sau mọi lần ghi làm đổi ảnh: đổi/đặt lại mật khẩu, đổi trạng thái
+   * (`setStatus`, `update` có `status`), xoá mềm. Quên là hiệu lực trễ tới 60
+   * giây.
+   */
   async invalidate(userId: string): Promise<void> {
     await cacheDel(`${CACHE_PREFIX}${userId}`);
   }

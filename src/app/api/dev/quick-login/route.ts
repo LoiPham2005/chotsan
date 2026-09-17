@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { redirectRelative } from "@/lib/api/redirect";
 import { createSession } from "@/lib/auth";
+import { DomainError, TwoFactorRequiredError } from "@/lib/errors";
 import { landingPathFor } from "@/lib/landing";
+import { logger } from "@/lib/logger";
 import { safeRedirectPath } from "@/lib/safe-redirect";
 import { authService } from "@/services/auth.service";
 
@@ -43,7 +45,25 @@ export async function POST(request: Request): Promise<Response> {
     return new NextResponse(null, { status: 404 });
   }
 
-  const user = await authService.validateCredentials({ identifier, password });
+  let user;
+  try {
+    user = await authService.validateCredentials({ identifier, password });
+  } catch (error) {
+    /*
+     * Bản cũ không bắt gì: tài khoản mẫu bật 2FA, bị khoá, sai mật khẩu (hoặc
+     * database chưa seed) đều ra trang 500 trắng. Đưa về trang đăng nhập kèm
+     * lý do. Đăng nhập nhanh KHÔNG hỗ trợ bước 2FA — cấp vé ở đây là mở thêm
+     * một đường vào bước 2 không có rate limit.
+     */
+    if (error instanceof TwoFactorRequiredError) {
+      return redirectRelative("/login?quickLogin=2fa", 303);
+    }
+    if (error instanceof DomainError) {
+      return redirectRelative("/login?quickLogin=failed", 303);
+    }
+    logger.error("Đăng nhập nhanh thất bại", error, { identifier });
+    return redirectRelative("/login?quickLogin=failed", 303);
+  }
 
   await createSession({
     typ: "access" as const,
@@ -55,8 +75,8 @@ export async function POST(request: Request): Promise<Response> {
   // Cùng luật với đăng nhập thường: `?next=` thắng, không có thì về đúng chỗ
   // làm việc của vai. Bấm nút "Quản trị" phải vào thẳng khu quản trị.
   const next = form.get("next");
-  const dich = typeof next === "string" && next ? next : await landingPathFor(user.id);
+  const destination = typeof next === "string" && next ? next : await landingPathFor(user.id);
   // 303: sau một POST phải chuyển sang GET, nếu không bấm F5 là gửi lại form.
   // Tương đối, không dựng từ `request.url` — xem `src/lib/api/redirect.ts`.
-  return redirectRelative(safeRedirectPath(dich, "/"), 303);
+  return redirectRelative(safeRedirectPath(destination, "/"), 303);
 }

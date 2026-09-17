@@ -82,12 +82,40 @@ describe("PermissionService", () => {
     expect(await service.can("khong-co", "user:read")).toBe(false);
   });
 
-  it("canAll cần đủ mọi quyền, canAny chỉ cần một", async () => {
-    const db = createDb({ userRoles: [roleWith("user:read")], userPermissions: [] });
+  it("tài khoản KHÔNG ACTIVE không có quyền nào — lớp chặn thứ hai sau việc cắt phiên", async () => {
+    /*
+     * Mock LỌC THẬT theo `where`: chỉ trả bản ghi khi điều kiện truy vấn khớp
+     * trạng thái của nó. Mock trả bừa thì bài này xanh cả khi truy vấn quên
+     * lọc `status` — đúng lỗi nó sinh ra để bắt.
+     *
+     * Lỗi thật trước đây: `load` chỉ lọc `deletedAt`, nên admin bị khoá vẫn
+     * dùng mọi Server Action `defineAction` bằng cookie cũ.
+     */
+    const rows = [
+      { id: "banned", status: "BANNED", deletedAt: null },
+      { id: "inactive", status: "INACTIVE", deletedAt: null },
+      { id: "active", status: "ACTIVE", deletedAt: null },
+    ];
+    const db = {
+      user: {
+        findFirst: vi.fn(({ where }: { where: Record<string, unknown> }) => {
+          const row = rows.find(
+            (item) =>
+              item.id === where.id &&
+              (where.status === undefined || item.status === where.status) &&
+              (where.deletedAt === undefined || item.deletedAt === where.deletedAt),
+          );
+          return Promise.resolve(
+            row ? { userRoles: [roleWith("user:read")], userPermissions: [] } : null,
+          );
+        }),
+      },
+    } as unknown as PrismaClient;
     const service = new PermissionService(db);
 
-    expect(await service.canAny("u1", ["user:read", "user:delete"])).toBe(true);
-    expect(await service.canAll("u1", ["user:read", "user:delete"])).toBe(false);
+    expect(await service.can("banned", "user:read")).toBe(false);
+    expect(await service.can("inactive", "user:read")).toBe(false);
+    expect(await service.can("active", "user:read")).toBe(true);
   });
 
   it("cache: lần gọi thứ hai không chạm database nữa", async () => {

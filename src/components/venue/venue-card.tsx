@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { SportIcon, sportStyle } from "@/components/venue/sport-icon";
 import { VenuePhoto } from "@/components/venue/venue-photo";
-import { formatVndShort } from "@/lib/slots";
+import { formatVndShort, SLOT_MINUTES } from "@/lib/slots";
 
 /**
  * Thẻ một cơ sở trong danh sách.
@@ -12,9 +12,15 @@ import { formatVndShort } from "@/lib/slots";
  * Ảnh chỉ để nhận diện, không được chiếm chỗ của giá — sân nào cũng chụp giống
  * nhau, còn giá là thứ quyết định bấm hay không.
  *
- * Chưa có ảnh thì KHÔNG để ô xám trống: nền chuyển sắc theo môn kèm biểu tượng
+ * Chưa có ảnh thì KHÔNG để ô xám trống: nền nhạt theo màu môn kèm biểu tượng
  * của môn đó. Ô trống trông như trang hỏng; một khối màu có chủ đích thì không,
  * và nó còn giúp phân biệt môn khi lướt nhanh.
+ *
+ * ---
+ * VIỀN, KHÔNG ĐỔ BÓNG
+ *
+ * Thẻ thường không đổ bóng (SKILL.md §4, §7) — rê chuột thì viền chuyển xanh
+ * nhạt là đủ báo "bấm được", không nhấc thẻ lên thành "app nhiều lớp".
  *
  * ---
  * ĐIỆN THOẠI: THẺ NẰM NGANG
@@ -22,65 +28,67 @@ import { formatVndShort } from "@/lib/slots";
  * Ảnh nhỏ bên trái để một màn hình thấy được 4–5 sân. Xếp dọc như desktop thì
  * mỗi lần cuộn chỉ thấy một sân rưỡi.
  */
+export type VenueCardData = {
+  slug: string;
+  name: string;
+  address: string;
+  ward: string;
+  province: string;
+  ratingAvg: number;
+  ratingCount: number;
+  imageUrl: string | null;
+  fromPricePerSlot: number | null;
+  sport: { key?: string; name: string };
+};
+
 export function VenueCard({
-  court,
+  venue,
+  eager = false,
 }: {
-  court: {
-    slug: string;
-    name: string;
-    address: string;
-    ward: string;
-    province: string;
-    ratingAvg: number;
-    ratingCount: number;
-    imageUrl: string | null;
-    fromPricePerSlot: number | null;
-    sport: { key?: string; name: string };
-  };
+  venue: VenueCardData;
+  /**
+   * Tải ảnh NGAY thay vì đợi cuộn tới — CHỈ cho thẻ đầu tiên của danh sách: nó
+   * nằm trên màn hình đầu và Next đo được nó là phần tử LCP của trang tìm sân.
+   */
+  eager?: boolean;
 }) {
-  const mon = sportStyle(court.sport.key ?? "");
+  const style = sportStyle(venue.sport.key ?? "");
 
   return (
     <Link
-      href={`/venues/${court.slug}`}
-      className="group relative flex overflow-hidden rounded-token-lg border border-line bg-surface shadow-nang-1 transition-all duration-200 hover:-translate-y-0.5 hover:border-brand-line hover:shadow-nang-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand sm:flex-col"
+      href={`/venues/${venue.slug}`}
+      className="group relative flex overflow-hidden rounded-token-lg border border-line bg-surface transition-colors duration-200 hover:border-brand-line focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand sm:flex-col"
     >
-      <div
-        className={`relative w-28 shrink-0 overflow-hidden bg-gradient-to-br ${mon.nen} sm:h-44 sm:w-full`}
-      >
-        {court.imageUrl ? (
-          <>
-            {/* `alt` rỗng: tên sân đứng ngay dưới, đọc lại lần nữa chỉ làm phiền trình đọc màn hình. */}
-            <VenuePhoto
-              src={court.imageUrl}
-              alt=""
-              sizes="(min-width: 1024px) 370px, (min-width: 640px) 50vw, 112px"
-              className="transition-transform duration-300 group-hover:scale-[1.04]"
-            />
-            {/* Tối nhẹ mép trên để nhãn môn thể thao luôn đọc được trên ảnh sáng. */}
-            <span
-              aria-hidden
-              className="absolute inset-x-0 top-0 h-14 bg-gradient-to-b from-black/25 to-transparent"
-            />
-          </>
+      <div className={`relative w-28 shrink-0 overflow-hidden ${style.tint} sm:h-44 sm:w-full`}>
+        {venue.imageUrl ? (
+          /* `alt` rỗng: tên sân đứng ngay dưới, đọc lại lần nữa chỉ làm phiền trình đọc màn hình. */
+          <VenuePhoto
+            src={venue.imageUrl}
+            alt=""
+            eager={eager}
+            sizes="(min-width: 1024px) 370px, (min-width: 640px) 50vw, 112px"
+            className="transition-transform duration-300 group-hover:scale-[1.04]"
+          />
         ) : (
-          <div className={`flex h-full w-full items-center justify-center ${mon.mau}`}>
+          <div className={`flex h-full w-full items-center justify-center ${style.text}`}>
             <SportIcon
-              sportKey={court.sport.key ?? ""}
+              sportKey={venue.sport.key ?? ""}
               className="h-9 w-9 opacity-45 transition-transform duration-300 group-hover:scale-110 sm:h-14 sm:w-14"
             />
           </div>
         )}
 
-        <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-surface/90 py-1 pl-1.5 pr-2.5 text-xs font-semibold text-content shadow-nang-1 backdrop-blur-sm">
-          <SportIcon sportKey={court.sport.key ?? ""} className={`h-3.5 w-3.5 ${mon.mau}`} />
-          {court.sport.name}
+        {/* Nền trắng gần đặc: nhãn đọc được trên mọi ảnh mà không cần phủ lớp tối
+            chuyển sắc lên ảnh. */}
+        <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full bg-surface/95 py-1 pl-1.5 pr-2.5 text-xs font-semibold text-content ring-1 ring-line">
+          <SportIcon sportKey={venue.sport.key ?? ""} className={`h-3.5 w-3.5 ${style.text}`} />
+          {venue.sport.name}
         </span>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col gap-1 p-3 sm:p-4">
-        <h3 className="truncate font-semibold leading-snug text-content transition-colors group-hover:text-brand">
-          {court.name}
+        <h3 className="truncate font-semibold leading-snug text-content transition-colors group-hover:text-brand-text">
+          {venue.name}
         </h3>
 
         <p className="flex items-start gap-1 text-sm text-muted">
@@ -96,32 +104,32 @@ export function VenueCard({
             <circle cx="12" cy="10" r="2.4" />
           </svg>
           <span className="truncate">
-            {court.address}, {court.ward}, {court.province}
+            {venue.address}, {venue.ward}, {venue.province}
           </span>
         </p>
 
         <div className="mt-auto flex items-end justify-between gap-2 border-t border-line/70 pt-2.5">
           <p className="text-sm leading-none">
-            {court.fromPricePerSlot === null ? (
+            {venue.fromPricePerSlot === null ? (
               <span className="text-subtle">Chưa có giá</span>
             ) : (
               <>
                 <span className="text-muted">từ </span>
                 <span className="text-base font-bold text-content">
-                  {formatVndShort(court.fromPricePerSlot)}
+                  {formatVndShort(venue.fromPricePerSlot)}
                 </span>
-                <span className="text-xs text-muted"> /30 phút</span>
+                <span className="text-xs text-muted"> /{SLOT_MINUTES} phút</span>
               </>
             )}
           </p>
 
-          {court.ratingCount > 0 && (
+          {venue.ratingCount > 0 && (
             <p className="flex shrink-0 items-center gap-1 text-sm leading-none">
-              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-amber-400" aria-hidden>
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-rating" aria-hidden>
                 <path d="m12 2.6 2.9 5.9 6.5.9-4.7 4.6 1.1 6.4-5.8-3-5.8 3 1.1-6.4L2.6 9.4l6.5-.9L12 2.6Z" />
               </svg>
-              <span className="font-semibold text-content">{court.ratingAvg.toFixed(1)}</span>
-              <span className="text-xs text-subtle">({court.ratingCount})</span>
+              <span className="font-semibold text-content">{venue.ratingAvg.toFixed(1)}</span>
+              <span className="text-xs text-subtle">({venue.ratingCount})</span>
             </p>
           )}
         </div>

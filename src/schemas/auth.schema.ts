@@ -4,7 +4,6 @@ import {
   fullNameSchema,
   passwordSchema,
   phoneSchema,
-  publicUserSchema,
   usernameSchema,
 } from "@/schemas/user.schema";
 import { emptyToUndefined } from "@/schemas/common.schema";
@@ -69,54 +68,19 @@ export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
 export const resendVerificationSchema = z.object({ email: emailSchema });
 export type ResendVerificationInput = z.infer<typeof resendVerificationSchema>;
 
-/**
- * Cặp token trả về sau login/register/refresh.
+/*
+ * HÌNH DẠNG RESPONSE token/phiên KHÔNG khai ở đây.
  *
- * Gom vào một hình dạng duy nhất để client (web, Flutter, 3rd-party) chỉ phải
- * viết MỘT model — ba endpoint trả ba hình dạng khác nhau là lỗi thiết kế API
- * phổ biến nhất mà cũng tốn công nhất để sửa về sau.
+ * Nguồn sự thật của response là `TokenPair` (`src/lib/api/tokens.ts`, dùng
+ * chung cho login/register/2FA/passkey/refresh — `sessionId` là `familyId`, ổn
+ * định qua mọi lần refresh) và đặc tả `TokenPair`/`Session` trong
+ * `src/lib/openapi/registry.ts`. Bản sao Zod cũ ở file này đã lệch cả hai (token
+ * lồng trong `tokens`, `ip`/`current` mà API không trả) mà không ai dùng — giữ
+ * lại chỉ để có ngày ai đó tin vào nó.
+ *
+ * Danh sách provider OAuth cũng không khai ở đây: nguồn duy nhất là
+ * `OAUTH_PROVIDERS` trong `src/lib/oauth/types.ts`.
  */
-export const tokenPairSchema = z.object({
-  accessToken: z.string(),
-  /** Số giây còn lại của access token — client chủ động refresh trước hạn. */
-  expiresIn: z.number(),
-  tokenType: z.literal("Bearer"),
-  refreshToken: z.string(),
-  refreshExpiresAt: z.string(),
-  /**
-   * Id của phiên vừa cấp. KHÔNG phải bí mật (token thật đã băm SHA-256 trước
-   * khi lưu) — client giữ lại để đánh dấu "thiết bị này" trên màn quản lý
-   * phiên. Đổi sau MỖI lần refresh vì refresh token xoay vòng.
-   */
-  /** `familyId` — ổn định qua mọi lần refresh, khớp với `GET /auth/sessions`. */
-  sessionId: z.string(),
-});
-export type TokenPair = z.infer<typeof tokenPairSchema>;
-
-export const authResponseSchema = z.object({
-  user: publicUserSchema,
-  tokens: tokenPairSchema,
-});
-export type AuthResponse = z.infer<typeof authResponseSchema>;
-
-/** Một phiên còn hiệu lực, cho màn "thiết bị đang đăng nhập". */
-export const activeSessionSchema = z.object({
-  id: z.string(),
-  userAgent: z.string().nullable(),
-  ip: z.string().nullable(),
-  createdAt: z.coerce.date(),
-  expiresAt: z.coerce.date(),
-  /** `true` nếu đây chính là phiên đang gọi request này. */
-  current: z.boolean(),
-});
-export type ActiveSession = z.infer<typeof activeSessionSchema>;
-
-export const OAUTH_PROVIDERS = ["google", "github", "facebook", "apple"] as const;
-export type OAuthProviderId = (typeof OAUTH_PROVIDERS)[number];
-
-export function isOAuthProviderId(value: string): value is OAuthProviderId {
-  return (OAUTH_PROVIDERS as readonly string[]).includes(value);
-}
 
 // ---------------------------------------------------------------------------
 // Xác thực hai lớp (2FA)
@@ -262,10 +226,14 @@ export const requestPhoneOtpSchema = z.object({ phone: phoneSchema });
 export type RequestPhoneOtpInput = z.infer<typeof requestPhoneOtpSchema>;
 
 export const verifyPhoneOtpSchema = z.object({
-  /** 6 chữ số. Chấp nhận khoảng trắng người dùng dán kèm. */
-  code: z
-    .string()
-    .trim()
-    .regex(/^\d{6}$/, "Mã xác thực gồm 6 chữ số"),
+  /**
+   * 6 chữ số. Bỏ MỌI khoảng trắng trước khi kiểm — kể cả ở giữa: tin nhắn và
+   * bàn phím số hay chèn khoảng trắng thành `123 456`. Bản cũ chỉ `trim()` hai
+   * đầu, nên đúng kiểu dán phổ biến nhất lại bị báo "gồm 6 chữ số".
+   */
+  code: z.preprocess(
+    (value) => (typeof value === "string" ? value.replace(/\s/g, "") : value),
+    z.string().regex(/^\d{6}$/, "Mã xác thực gồm 6 chữ số"),
+  ),
 });
 export type VerifyPhoneOtpInput = z.infer<typeof verifyPhoneOtpSchema>;

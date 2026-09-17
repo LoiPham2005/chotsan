@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { dangNhap, TAI_KHOAN } from "./tro-giup";
+import { login, ACCOUNTS } from "./helpers";
 
 /**
  * Đặt nhiều sân một lần → MỘT màn thanh toán → chủ sân duyệt MỘT lần.
@@ -18,27 +18,27 @@ test("hai sân khác nhau: một màn thanh toán, chủ sân duyệt một lầ
   test.setTimeout(120_000);
 
   // Ngày mai: chạy bộ test lúc tối muộn thì hôm nay có thể đã hết giờ mở cửa.
-  const ngayMai = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(
+  const tomorrow = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(
     new Date(Date.now() + 24 * 60 * 60 * 1000),
   );
 
-  await dangNhap(page, TAI_KHOAN.khach);
-  await page.goto(`/venues/cau-long-thanh-cong?date=${ngayMai}`);
+  await login(page, ACCOUNTS.customer);
+  await page.goto(`/venues/cau-long-thanh-cong?date=${tomorrow}`);
 
   // Ô trống ĐẦU TIÊN của hai hàng khác nhau = hai sân khác nhau.
-  const hang = page.locator("table tbody tr");
-  const oTrong = (index: number) =>
-    hang.nth(index).locator('button[data-minute][aria-pressed="false"]:not([disabled])').first();
+  const rows = page.locator("table tbody tr");
+  const freeSlot = (index: number) =>
+    rows.nth(index).locator('button[data-minute][aria-pressed="false"]:not([disabled])').first();
 
-  await expect(oTrong(0)).toBeVisible({ timeout: 20_000 });
-  await oTrong(0).click();
-  await oTrong(1).click();
+  await expect(freeSlot(0)).toBeVisible({ timeout: 20_000 });
+  await freeSlot(0).click();
+  await freeSlot(1).click();
 
   await expect(page.locator('button[data-minute][aria-pressed="true"]')).toHaveCount(2);
   await expect(page.getByText(/2 khung · 2 lượt đặt/)).toBeVisible();
 
-  const oSoDienThoai = page.locator('input[name="customerPhone"]');
-  if ((await oSoDienThoai.count()) > 0) await oSoDienThoai.fill("0912345678");
+  const phoneInput = page.locator('input[name="customerPhone"]');
+  if ((await phoneInput.count()) > 0) await phoneInput.fill("0912345678");
 
   await page.getByRole("button", { name: "Đặt sân và thanh toán" }).click();
 
@@ -56,33 +56,33 @@ test("hai sân khác nhau: một màn thanh toán, chủ sân duyệt một lầ
   await expect(page.getByRole("status").filter({ hasText: "Đã gửi cho sân" })).toBeVisible();
 
   // ---- Chủ sân: một khoản cho cả lần chuyển ----
-  const chuSan = await browser.newContext();
-  const trangChuSan = await chuSan.newPage();
+  const ownerContext = await browser.newContext();
+  const ownerPage = await ownerContext.newPage();
 
   try {
-    await dangNhap(trangChuSan, TAI_KHOAN.chuSan);
-    await trangChuSan.goto("/manage");
+    await login(ownerPage, ACCOUNTS.owner);
+    await ownerPage.goto("/manage");
 
-    const linkSan = trangChuSan
+    const venueLink = ownerPage
       .locator('a[href^="/manage/"]')
       .filter({ hasText: "Thành Công" })
       .first();
-    const venueId = (await linkSan.getAttribute("href"))?.split("/")[2];
+    const venueId = (await venueLink.getAttribute("href"))?.split("/")[2];
     expect(venueId, "không thấy sân Thành Công trong khu quản lý").toBeTruthy();
 
-    await trangChuSan.goto(`/manage/${venueId}/payments`);
+    await ownerPage.goto(`/manage/${venueId}/payments`);
 
-    const theKhoan = trangChuSan.locator("li").filter({ hasText: `CS ${code}` });
-    await expect(theKhoan).toHaveCount(1);
+    const paymentCard = ownerPage.locator("li").filter({ hasText: `CS ${code}` });
+    await expect(paymentCard).toHaveCount(1);
     // Hai sân + giờ nằm TRONG cùng một thẻ, không phải hai thẻ hai số tiền.
-    await expect(theKhoan.locator("ul li")).toHaveCount(2);
+    await expect(paymentCard.locator("ul li")).toHaveCount(2);
 
-    await theKhoan.getByRole("button", { name: "Đã nhận đủ tiền" }).click();
-    await expect(trangChuSan.locator("li").filter({ hasText: `CS ${code}` })).toHaveCount(0, {
+    await paymentCard.getByRole("button", { name: "Đã nhận đủ tiền" }).click();
+    await expect(ownerPage.locator("li").filter({ hasText: `CS ${code}` })).toHaveCount(0, {
       timeout: 30_000,
     });
   } finally {
-    await chuSan.close();
+    await ownerContext.close();
   }
 
   // ---- Khách: cả hai lượt đã xác nhận ----

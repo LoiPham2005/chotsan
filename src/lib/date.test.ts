@@ -33,8 +33,8 @@ describe("parseDateKey", () => {
   });
 
   it("URL sửa bằng tay không được ra trang lỗi", () => {
-    for (const rac of [undefined, "", "hom-nay", "2026-13-45", "31/02/2026", "2026-02-31"]) {
-      expect(dateKey(parseDateKey(rac, now))).toBe("2026-09-04");
+    for (const junk of [undefined, "", "hom-nay", "2026-13-45", "31/02/2026", "2026-02-31"]) {
+      expect(dateKey(parseDateKey(junk, now))).toBe("2026-09-04");
     }
   });
 });
@@ -56,14 +56,14 @@ describe("addDays", () => {
     // Dải chọn ngày dựng bằng đúng vòng lặp này; lệch một ngày là khách đặt
     // nhầm sang hôm sau.
     let d = parseDateKey("2026-09-04");
-    const ra: string[] = [];
+    const keys: string[] = [];
     for (let i = 0; i < 14; i += 1) {
-      ra.push(dateKey(d));
+      keys.push(dateKey(d));
       d = addDays(d, 1);
     }
-    expect(ra[0]).toBe("2026-09-04");
-    expect(ra[13]).toBe("2026-09-17");
-    expect(new Set(ra).size).toBe(14); // không trùng ngày nào
+    expect(keys[0]).toBe("2026-09-04");
+    expect(keys[13]).toBe("2026-09-17");
+    expect(new Set(keys).size).toBe(14); // không trùng ngày nào
   });
 });
 

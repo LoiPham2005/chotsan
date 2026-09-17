@@ -1,8 +1,14 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { type ListAuditLogsInput } from "@/schemas/audit.schema";
+import { AUDIT_ACTIONS, type ListAuditLogsInput } from "@/schemas/audit.schema";
 import { buildPaginationMeta, toPrismaPage } from "@/schemas/common.schema";
 import { logger } from "@/lib/logger";
+import {
+  AccountBannedError,
+  AccountInactiveError,
+  AccountLockedError,
+  InvalidCredentialsError,
+} from "@/lib/errors";
 
 export type AuditEntry = {
   action: string;
@@ -69,6 +75,44 @@ export class AuditService {
     }
   }
 
+  /**
+   * Ghi `LOGIN_FAILED` — CHỈ khi lỗi đăng nhập gắn với một tài khoản CÓ THẬT.
+   *
+   * Sai mật khẩu, đang khoá tạm, bị khoá, tạm ngưng: nhật ký cần trả lời được
+   * "tài khoản X bị dò lúc nào, từ đâu". Email không tồn tại thì KHÔNG ghi: mỗi
+   * lượt dò mù thành một dòng rác, và bảng này chỉ tăng.
+   *
+   * Nhận thẳng lỗi service ném ra để web và API không mỗi nơi tự phân loại
+   * một kiểu. Không bao giờ ném lỗi, như `record`.
+   */
+  async recordLoginFailure(
+    error: unknown,
+    context: { method: string; ip?: string | null; userAgent?: string | null },
+  ): Promise<void> {
+    const failure =
+      error instanceof InvalidCredentialsError
+        ? { userId: error.userId, reason: "invalid_password" }
+        : error instanceof AccountLockedError
+          ? { userId: error.userId, reason: "locked" }
+          : error instanceof AccountBannedError
+            ? { userId: error.userId, reason: "banned" }
+            : error instanceof AccountInactiveError
+              ? { userId: error.userId, reason: "inactive" }
+              : null;
+
+    if (!failure?.userId) return;
+
+    await this.record({
+      action: AUDIT_ACTIONS.LOGIN_FAILED,
+      entity: "user",
+      entityId: failure.userId,
+      actorId: failure.userId,
+      metadata: { method: context.method, reason: failure.reason },
+      ip: context.ip,
+      userAgent: context.userAgent,
+    });
+  }
+
   async list(input: ListAuditLogsInput) {
     const where: Prisma.AuditLogWhereInput = {
       ...(input.actorId ? { actorId: input.actorId } : {}),
@@ -98,7 +142,7 @@ export class AuditService {
   }
 
   /**
-   * Xoá nhật ký cũ hơn `ngay` ngày.
+   * Xoá nhật ký cũ hơn `days` ngày.
    *
    * Bảng này chỉ tăng. Giữ bao lâu là quyết định của từng dự án — mặc định 365
    * ngày là mức thường gặp trong các yêu cầu kiểm toán, nhưng hãy đối chiếu với

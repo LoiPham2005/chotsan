@@ -62,7 +62,9 @@ export function TopProgressBar() {
        * rồi đứng im ở một chỗ, người dùng sẽ tưởng trang treo.
        */
       timerRef.current = setInterval(() => {
-        setPercent((truoc) => (truoc >= 90 ? truoc : truoc + Math.max(0.6, (90 - truoc) * 0.08)));
+        setPercent((previous) =>
+          previous >= 90 ? previous : previous + Math.max(0.6, (90 - previous) * 0.08),
+        );
       }, 180);
     }
 
@@ -161,8 +163,9 @@ export function TopProgressBar() {
       aria-hidden
       className="pointer-events-none fixed inset-x-0 top-0 z-[60] h-0.5"
     >
+      {/* Một màu phẳng, không chuyển sắc, không quầng sáng (SKILL.md §7). */}
       <div
-        className="h-full bg-gradient-to-r from-brand via-emerald-400 to-brand shadow-[0_0_10px_rgba(16,185,129,0.7)] transition-[width,opacity] duration-200 ease-out"
+        className="h-full bg-brand transition-[width,opacity] duration-200 ease-out"
         style={{
           width: `${percent}%`,
           opacity: running ? 1 : 0,

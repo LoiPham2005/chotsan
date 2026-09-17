@@ -1,8 +1,7 @@
 import { requireApiUser } from "@/lib/api/auth";
 import { apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
-import { registerDeviceSchema } from "@/schemas/notification.schema";
+import { deactivateDeviceSchema, registerDeviceSchema } from "@/schemas/notification.schema";
 import { deviceService } from "@/services/device.service";
-import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +37,7 @@ export async function GET(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const session = await requireApiUser(request);
-    const body = await parseJsonBody(request, z.object({ fcmToken: z.string().min(1) }));
+    const body = await parseJsonBody(request, deactivateDeviceSchema);
 
     await deviceService.deactivate(session.sub, body.fcmToken);
 

@@ -9,9 +9,13 @@ type RouteContext = { params: Promise<{ id: string }> };
 /**
  * Đánh dấu ĐÃ ĐỌC một thông báo.
  *
- * `id` là id bản ghi NGƯỜI NHẬN, không phải id thông báo: một thông báo
- * broadcast có nhiều người nhận, và mỗi người đọc riêng. Ràng buộc quyền sở
- * hữu nằm trong câu truy vấn của service.
+ * `id` là id bản ghi NGƯỜI NHẬN — trường `recipientId` trong
+ * `GET /notifications` — không phải `id` của thông báo: một thông báo broadcast
+ * có nhiều người nhận, và mỗi người đọc riêng. Ràng buộc quyền sở hữu nằm trong
+ * câu truy vấn của service.
+ *
+ * Gọi lại lần hai vẫn 200 (idempotent): app gửi lại khi mạng chập chờn không
+ * được nhận 404 cho thông báo vừa đọc xong.
  */
 export async function POST(request: Request, { params }: RouteContext) {
   try {

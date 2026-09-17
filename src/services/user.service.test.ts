@@ -2,12 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
 import { UserService } from "./user.service";
 import type { PermissionService } from "./permission.service";
+import type { SecurityStampService } from "./security-stamp.service";
 import {
   AccountBannedError,
   AccountInactiveError,
   assertLoginAllowed,
   DuplicateFieldError,
   InsufficientRoleLevelError,
+  PermissionNotHeldError,
   SelfActionForbiddenError,
   UnknownRoleKeyError,
 } from "@/lib/errors";
@@ -32,6 +34,7 @@ const USER_ROW = {
 function createDb(
   overrides: { user?: Record<string, unknown>; role?: Record<string, unknown> } = {},
   levels: Record<string, number> = {},
+  tx: ReturnType<typeof createTx> = createTx(),
 ) {
   return {
     user: {
@@ -65,9 +68,7 @@ function createDb(
     // Chạy callback ngay tại chỗ thay vì mở transaction thật: test này kiểm
     // logic nghiệp vụ, không kiểm Postgres.
     $transaction: vi.fn((arg: unknown) =>
-      Promise.resolve(
-        typeof arg === "function" ? (arg as (tx: unknown) => unknown)(createTx()) : [],
-      ),
+      Promise.resolve(typeof arg === "function" ? (arg as (tx: unknown) => unknown)(tx) : []),
     ),
   } as unknown as PrismaClient;
 }
@@ -82,14 +83,54 @@ function createTx() {
   };
 }
 
-/** `PermissionService` giả — chỉ cần đếm xem cache có bị xoá hay không. */
-function createPermissions() {
+/**
+ * `PermissionService` giả — đếm xem cache có bị xoá không, và trả lời "người
+ * thao tác có quyền X không" theo đúng bảng truyền vào.
+ */
+function createPermissions(held: Record<string, string[]> = {}) {
   return {
     invalidateUser: vi.fn().mockResolvedValue(undefined),
     invalidateAll: vi.fn().mockResolvedValue(undefined),
+    can: vi.fn((userId: string, key: string) =>
+      Promise.resolve((held[userId] ?? []).includes(key)),
+    ),
   } as unknown as PermissionService & {
     invalidateUser: ReturnType<typeof vi.fn>;
   };
+}
+
+/** `SecurityStampService` giả — chỉ cần biết ảnh phiên có bị xoá khỏi cache không. */
+function createStamps() {
+  return { invalidate: vi.fn().mockResolvedValue(undefined) } as unknown as SecurityStampService & {
+    invalidate: ReturnType<typeof vi.fn>;
+  };
+}
+
+const SYSTEM = { actorId: null };
+
+/** Lỗi trùng email CHÉP NGUYÊN hình dạng Prisma 7 + adapter-pg — xem prisma-errors.test.ts. */
+function duplicateEmailError() {
+  return Object.assign(
+    new Error(
+      "\nInvalid `tx.user.create()` invocation:\n\nUnique constraint failed on the fields: (`email`)",
+    ),
+    {
+      code: "P2002",
+      meta: {
+        modelName: "User",
+        driverAdapterError: {
+          name: "DriverAdapterError",
+          cause: {
+            originalCode: "23505",
+            originalMessage:
+              'duplicate key value violates unique constraint "users_email_active_key"',
+            kind: "UniqueConstraintViolation",
+            constraint: { fields: ["email"] },
+          },
+        },
+      },
+    },
+  );
 }
 
 const baseInput = { email: "a@b.com", status: "ACTIVE" as const };
@@ -99,7 +140,7 @@ describe("UserService", () => {
     it("băm mật khẩu, KHÔNG bao giờ lưu chuỗi gốc", async () => {
       const db = createDb();
 
-      await new UserService(db).create({ ...baseInput, password: "matkhau123" });
+      await new UserService(db).create({ ...baseInput, password: "matkhau123" }, SYSTEM);
 
       const data = vi.mocked(db.user.create).mock.calls[0]![0].data as { password: string };
       expect(data.password).not.toBe("matkhau123");
@@ -111,7 +152,7 @@ describe("UserService", () => {
       // đúng rằng tài khoản này chưa đặt mật khẩu.
       const db = createDb();
 
-      await new UserService(db).create(baseInput);
+      await new UserService(db).create(baseInput, SYSTEM);
 
       const data = vi.mocked(db.user.create).mock.calls[0]![0].data as { password: null };
       expect(data.password).toBeNull();
@@ -120,7 +161,7 @@ describe("UserService", () => {
     it("mặc định gán vai trò USER khi không chỉ định", async () => {
       const db = createDb();
 
-      await new UserService(db).create(baseInput);
+      await new UserService(db).create(baseInput, SYSTEM);
 
       expect(db.role.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ where: { key: { in: ["USER"] } } }),
@@ -133,7 +174,7 @@ describe("UserService", () => {
       const db = createDb({ role: { findMany: vi.fn().mockResolvedValue([]) } });
 
       await expect(
-        new UserService(db).create({ ...baseInput, roleKeys: ["KE_TOAN"] }),
+        new UserService(db).create({ ...baseInput, roleKeys: ["KE_TOAN"] }, SYSTEM),
       ).rejects.toBeInstanceOf(UnknownRoleKeyError);
     });
 
@@ -144,7 +185,7 @@ describe("UserService", () => {
         },
       });
 
-      await expect(new UserService(db).create(baseInput)).rejects.toBeInstanceOf(
+      await expect(new UserService(db).create(baseInput, SYSTEM)).rejects.toBeInstanceOf(
         DuplicateFieldError,
       );
     });
@@ -152,7 +193,7 @@ describe("UserService", () => {
     it("không select cột password, nên nó không thể rò ra khỏi service", async () => {
       const db = createDb();
 
-      const user = await new UserService(db).create(baseInput);
+      const user = await new UserService(db).create(baseInput, SYSTEM);
 
       const select = vi.mocked(db.user.create).mock.calls[0]![0].select as Record<string, unknown>;
       expect(select.password).toBeUndefined();
@@ -164,7 +205,25 @@ describe("UserService", () => {
         user: { create: vi.fn().mockRejectedValue(new Error("connection lost")) },
       });
 
-      await expect(new UserService(db).create(baseInput)).rejects.toThrow("connection lost");
+      await expect(new UserService(db).create(baseInput, SYSTEM)).rejects.toThrow(
+        "connection lost",
+      );
+    });
+
+    it("thua cuộc đua trùng email → DuplicateFieldError, không phải 500", async () => {
+      /*
+       * Hai request cùng qua `assertUnique`, database chặn request thứ hai.
+       *
+       * Lỗi thật trước đây: `catchDuplicate` đọc `meta.target` — Prisma 7 không
+       * còn trường đó, nhánh không bao giờ khớp và người dùng nhận 500. Lỗi
+       * giả ở đây mang ĐÚNG hình dạng lỗi thật, không phải hình dạng tưởng tượng.
+       */
+      const db = createDb({ user: { create: vi.fn().mockRejectedValue(duplicateEmailError()) } });
+
+      const error = await new UserService(db).create(baseInput, SYSTEM).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(DuplicateFieldError);
+      expect((error as DuplicateFieldError).fields).toHaveProperty("email");
     });
   });
 
@@ -212,7 +271,10 @@ describe("UserService", () => {
       );
 
       await expect(
-        new UserService(db).create({ ...baseInput, roleKeys: ["SUPER_ADMIN"], actorId: "admin" }),
+        new UserService(db).create(
+          { ...baseInput, roleKeys: ["SUPER_ADMIN"] },
+          { actorId: "admin" },
+        ),
       ).rejects.toBeInstanceOf(InsufficientRoleLevelError);
     });
 
@@ -228,7 +290,7 @@ describe("UserService", () => {
       );
 
       await expect(
-        new UserService(db).create({ ...baseInput, roleKeys: ["ADMIN"], actorId: "admin" }),
+        new UserService(db).create({ ...baseInput, roleKeys: ["ADMIN"] }, { actorId: "admin" }),
       ).rejects.toBeInstanceOf(InsufficientRoleLevelError);
     });
 
@@ -252,14 +314,54 @@ describe("UserService", () => {
       );
     });
 
-    it("ADMIN không cấp/tước được quyền lẻ cho SUPER_ADMIN", async () => {
+    it("ADMIN không cấp/tước/gỡ được quyền lẻ của SUPER_ADMIN", async () => {
       // Cấp quyền lẻ là một dạng đổi thẩm quyền — nếu không chịu cùng chốt
-      // chặn thì nó trở thành đường vòng quanh luật vai trò.
+      // chặn thì nó trở thành đường vòng quanh luật vai trò. Gỡ một lệnh TƯỚC
+      // quyền cũng là trả lại quyền đó, nên chịu cùng chốt.
       const db = createDb({}, { admin: 50, sa: 100 });
+      const service = new UserService(db, createPermissions({ admin: ["user:delete"] }));
 
       await expect(
-        new UserService(db).setUserPermission("sa", "user:delete", false, { actorId: "admin" }),
+        service.setUserPermission("sa", "user:delete", false, { actorId: "admin" }),
       ).rejects.toBeInstanceOf(InsufficientRoleLevelError);
+      await expect(
+        service.clearUserPermission("sa", "user:delete", { actorId: "admin" }),
+      ).rejects.toBeInstanceOf(InsufficientRoleLevelError);
+      expect(db.userPermission.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it("không CẤP được quyền mà chính mình không có — dù người nhận ở bậc thấp hơn", async () => {
+      /*
+       * ADMIN (bậc 50) không có `payout:approve`. Không có chốt này thì ADMIN
+       * tick quyền đó cho một tài khoản phụ bậc 0 rồi dùng nó để duyệt chi tiền
+       * — chốt bậc vai trò không thấy gì bất thường.
+       */
+      const db = createDb({}, { admin: 50, u1: 0 });
+      const service = new UserService(db, createPermissions({ admin: ["user:read"] }));
+
+      await expect(
+        service.setUserPermission("u1", "payout:approve", true, { actorId: "admin" }),
+      ).rejects.toBeInstanceOf(PermissionNotHeldError);
+      expect(db.userPermission.upsert).not.toHaveBeenCalled();
+
+      // Quyền mình ĐANG có thì cấp được; TƯỚC thì không cần tự có.
+      await expect(
+        service.setUserPermission("u1", "user:read", true, { actorId: "admin" }),
+      ).resolves.toBeUndefined();
+      await expect(
+        service.setUserPermission("u1", "payout:approve", false, { actorId: "admin" }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("ADMIN không mở khoá tạm được cho SUPER_ADMIN", async () => {
+      const db = createDb(
+        { user: { findFirst: vi.fn().mockResolvedValue({ id: "sa" }) } },
+        { admin: 50, sa: 100 },
+      );
+
+      await expect(new UserService(db).unlock("sa", { actorId: "admin" })).rejects.toBeInstanceOf(
+        InsufficientRoleLevelError,
+      );
     });
 
     it("SUPER_ADMIN thao tác được lên ADMIN", async () => {
@@ -278,7 +380,7 @@ describe("UserService", () => {
       const db = createDb({}, {});
 
       await expect(
-        new UserService(db).create({ ...baseInput, roleKeys: ["USER"] }),
+        new UserService(db).create({ ...baseInput, roleKeys: ["USER"] }, SYSTEM),
       ).resolves.toBeDefined();
     });
   });
@@ -334,7 +436,7 @@ describe("xoá cache quyền sau mỗi lần ghi thẩm quyền", () => {
   it("create: người mới có vai trò ngay từ request đầu tiên", async () => {
     const permissions = createPermissions();
 
-    await new UserService(createDb(), permissions).create(baseInput);
+    await new UserService(createDb(), permissions).create(baseInput, SYSTEM);
 
     expect(permissions.invalidateUser).toHaveBeenCalledWith("u1");
   });
@@ -346,7 +448,7 @@ describe("xoá cache quyền sau mỗi lần ghi thẩm quyền", () => {
       role: { findMany: vi.fn().mockResolvedValue([{ id: "r-admin", key: "ADMIN", level: 50 }]) },
     });
 
-    await new UserService(db, permissions).update("u1", { roleKeys: ["ADMIN"] });
+    await new UserService(db, permissions).update("u1", { roleKeys: ["ADMIN"] }, SYSTEM);
 
     expect(permissions.invalidateUser).toHaveBeenCalledWith("u1");
   });
@@ -354,7 +456,12 @@ describe("xoá cache quyền sau mỗi lần ghi thẩm quyền", () => {
   it("setUserPermission: cấp quyền lẻ có hiệu lực ngay", async () => {
     const permissions = createPermissions();
 
-    await new UserService(createDb(), permissions).setUserPermission("u1", "user:read", true);
+    await new UserService(createDb(), permissions).setUserPermission(
+      "u1",
+      "user:read",
+      true,
+      SYSTEM,
+    );
 
     expect(permissions.invalidateUser).toHaveBeenCalledWith("u1");
   });
@@ -362,7 +469,7 @@ describe("xoá cache quyền sau mỗi lần ghi thẩm quyền", () => {
   it("clearUserPermission: gỡ ngoại lệ có hiệu lực ngay", async () => {
     const permissions = createPermissions();
 
-    await new UserService(createDb(), permissions).clearUserPermission("u1", "user:read");
+    await new UserService(createDb(), permissions).clearUserPermission("u1", "user:read", SYSTEM);
 
     expect(permissions.invalidateUser).toHaveBeenCalledWith("u1");
   });
@@ -373,8 +480,136 @@ describe("xoá cache quyền sau mỗi lần ghi thẩm quyền", () => {
       user: { findFirst: vi.fn().mockResolvedValue({ id: "u1", email: "a@b.com" }) },
     });
 
-    await new UserService(db, permissions).softDelete("u1");
+    await new UserService(db, permissions).softDelete("u1", SYSTEM);
 
     expect(permissions.invalidateUser).toHaveBeenCalledWith("u1");
+  });
+});
+
+/**
+ * Khoá, tạm ngưng, xoá mềm phải cắt phiên NGAY — kể cả cookie web và access
+ * token đang cầm, thứ refresh token không chạm tới được. `securityStamps` là
+ * ảnh cache mà mọi lần đọc phiên đối chiếu; không xoá nó thì hiệu lực trễ 60
+ * giây.
+ */
+describe("hệ quả của việc đổi trạng thái tài khoản", () => {
+  it("setStatus BANNED: thu hồi refresh token, xoá ảnh phiên, trả trạng thái cũ cho nhật ký", async () => {
+    const tx = createTx();
+    const stamps = createStamps();
+    const db = createDb(
+      { user: { findFirst: vi.fn().mockResolvedValue({ id: "u1", status: "ACTIVE" }) } },
+      {},
+      tx,
+    );
+
+    const result = await new UserService(db, createPermissions(), stamps).setStatus(
+      "u1",
+      "BANNED",
+      SYSTEM,
+    );
+
+    expect(result.previousStatus).toBe("ACTIVE");
+    expect(tx.refreshToken.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: "u1", revokedAt: null } }),
+    );
+    expect(stamps.invalidate).toHaveBeenCalledWith("u1");
+  });
+
+  it("update có `status` cũng phải thu hồi phiên như setStatus", async () => {
+    // Lỗi thật trước đây: PATCH users/[id] với `status: BANNED` đổi cột trạng
+    // thái nhưng để refresh token sống tiếp tới 30 ngày.
+    const tx = createTx();
+    const stamps = createStamps();
+    const db = createDb(
+      { user: { findFirst: vi.fn().mockResolvedValue({ id: "u1", email: "a@b.com" }) } },
+      {},
+      tx,
+    );
+
+    await new UserService(db, createPermissions(), stamps).update(
+      "u1",
+      { status: "INACTIVE" },
+      SYSTEM,
+    );
+
+    expect(tx.refreshToken.updateMany).toHaveBeenCalled();
+    expect(stamps.invalidate).toHaveBeenCalledWith("u1");
+  });
+
+  it("update không đụng trạng thái thì KHÔNG thu hồi phiên", async () => {
+    const tx = createTx();
+    const stamps = createStamps();
+    const db = createDb(
+      { user: { findFirst: vi.fn().mockResolvedValue({ id: "u1", email: "a@b.com" }) } },
+      {},
+      tx,
+    );
+
+    await new UserService(db, createPermissions(), stamps).update(
+      "u1",
+      { fullName: "Tên mới" },
+      SYSTEM,
+    );
+
+    expect(tx.refreshToken.updateMany).not.toHaveBeenCalled();
+    expect(stamps.invalidate).not.toHaveBeenCalled();
+  });
+
+  it("softDelete xoá ảnh phiên — tài khoản vừa xoá không dùng tiếp cookie cũ", async () => {
+    const stamps = createStamps();
+    const db = createDb({
+      user: { findFirst: vi.fn().mockResolvedValue({ id: "u1", email: "a@b.com" }) },
+    });
+
+    await new UserService(db, createPermissions(), stamps).softDelete("u1", SYSTEM);
+
+    expect(stamps.invalidate).toHaveBeenCalledWith("u1");
+  });
+});
+
+describe("update — admin đổi email", () => {
+  it("địa chỉ MỚI mất dấu đã xác thực của địa chỉ cũ", async () => {
+    /*
+     * Email do quản trị viên gõ chưa ai chứng minh là của người dùng. Giữ dấu
+     * "đã xác thực" là để OAuth tự liên kết theo một địa chỉ chưa kiểm chứng.
+     */
+    const tx = createTx();
+    const db = createDb(
+      { user: { findFirst: vi.fn().mockResolvedValue({ id: "u1", email: "cu@b.com" }) } },
+      {},
+      tx,
+    );
+
+    await new UserService(db, createPermissions(), createStamps()).update(
+      "u1",
+      { email: "moi@b.com" },
+      SYSTEM,
+    );
+
+    const [{ data }] = vi.mocked(tx.user.update).mock.calls[0] as [
+      { data: Record<string, unknown> },
+    ];
+    expect(data).toMatchObject({ email: "moi@b.com", emailVerifiedAt: null });
+  });
+
+  it("gửi lại đúng email cũ thì giữ nguyên trạng thái xác thực", async () => {
+    const tx = createTx();
+    // Lọc theo `where`: phép kiểm trùng (`NOT: { id }`) không được thấy chính
+    // bản ghi đang sửa — nếu không, gửi lại email của mình cũng thành "trùng".
+    const findFirst = vi.fn(({ where }: { where: { NOT?: unknown } }) =>
+      Promise.resolve(where.NOT ? null : { id: "u1", email: "cu@b.com" }),
+    );
+    const db = createDb({ user: { findFirst } }, {}, tx);
+
+    await new UserService(db, createPermissions(), createStamps()).update(
+      "u1",
+      { email: "cu@b.com" },
+      SYSTEM,
+    );
+
+    const [{ data }] = vi.mocked(tx.user.update).mock.calls[0] as [
+      { data: Record<string, unknown> },
+    ];
+    expect(data).not.toHaveProperty("emailVerifiedAt");
   });
 });

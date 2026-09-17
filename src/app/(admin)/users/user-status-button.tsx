@@ -1,10 +1,18 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { setUserStatusAction, unlockUserAction } from "./actions";
 import type { UserStatus } from "@/schemas/user.schema";
 import { Button } from "@/components/ui/button";
+import { ConfirmButton } from "@/components/ui/confirm-button";
 
+/**
+ * Khoá / mở khoá một tài khoản, và mở khoá TẠM (do sai mật khẩu liên tiếp).
+ *
+ * Hỏi lại ngay tại dòng (`ConfirmButton`) thay cho `window.confirm`, lỗi hiện
+ * ngay dưới nút thay cho `window.alert` — trình duyệt nhúng có lúc tắt hộp thoại,
+ * và hộp thoại chặn cả trang thì không nói được hậu quả bằng tiếng Việt.
+ */
 export function UserStatusButton({
   id,
   email,
@@ -18,53 +26,59 @@ export function UserStatusButton({
   lockedUntil: string | null;
 }) {
   const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
   const isLockedNow = lockedUntil !== null && new Date(lockedUntil) > new Date();
-
-  const toggleStatus = () => {
-    const next: UserStatus = status === "BANNED" ? "ACTIVE" : "BANNED";
-    const confirmMessage =
-      next === "BANNED"
-        ? `Khoá tài khoản ${email}? Người này sẽ không đăng nhập được nữa.`
-        : `Mở khoá tài khoản ${email}?`;
-
-    if (typeof window !== "undefined" && window.confirm(confirmMessage)) {
-      startTransition(async () => {
-        const res = await setUserStatusAction(id, { status: next });
-        if (res.error) window.alert(`Lỗi: ${res.error}`);
-      });
-    }
-  };
+  const banned = status === "BANNED";
 
   const unlock = () => {
+    setError(null);
     startTransition(async () => {
       const res = await unlockUserAction(id);
-      if (res.error) window.alert(`Lỗi: ${res.error}`);
+      if (res.error) setError(res.error);
     });
   };
 
   return (
-    <div style={{ display: "flex", gap: 8 }}>
+    <div className="flex min-w-0 flex-wrap items-start gap-2">
       {isLockedNow && (
         <Button
           type="button"
           onClick={unlock}
           disabled={isPending}
-          variant="secondary"
+          variant="outline"
           size="sm"
           title="Đăng nhập sai quá nhiều lần — mở khoá sớm thay vì đợi tự hết hạn"
         >
-          Mở khoá tạm
+          {isPending ? "Đang mở…" : "Mở khoá tạm"}
         </Button>
       )}
-      <Button
-        type="button"
-        onClick={toggleStatus}
-        disabled={isPending}
-        variant={status === "BANNED" ? "secondary" : "destructive"}
-        size="sm"
+
+      <form
+        className="max-w-full"
+        action={async () => {
+          setError(null);
+          const res = await setUserStatusAction(id, { status: banned ? "ACTIVE" : "BANNED" });
+          if (res.error) setError(res.error);
+        }}
       >
-        {isPending ? "Đang xử lý..." : status === "BANNED" ? "Mở khoá" : "Khoá"}
-      </Button>
+        <ConfirmButton
+          label={banned ? "Mở khoá" : "Khoá"}
+          prompt={
+            banned
+              ? `Mở khoá tài khoản ${email}? Người này đăng nhập lại được ngay.`
+              : `Khoá tài khoản ${email}? Người này bị đăng xuất khỏi mọi thiết bị và không đăng nhập được nữa.`
+          }
+          confirmLabel={banned ? "Xác nhận mở khoá" : "Xác nhận khoá"}
+          pendingLabel={banned ? "Đang mở khoá…" : "Đang khoá…"}
+          variant={banned ? "outline" : "destructive"}
+        />
+      </form>
+
+      {error && (
+        <p role="alert" className="w-full text-sm text-danger-text">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

@@ -3,7 +3,7 @@
 # Deploy lên VPS chạy bằng Docker.
 #
 #   ssh deploy@server
-#   cd /srv/nextjs-base && ./scripts/deploy-docker.sh
+#   cd /var/www/chotsan && ./scripts/deploy-docker.sh
 #
 # Ghi đè mặc định bằng biến môi trường:
 #   HEALTH_URL=http://127.0.0.1:8080/api/health ./scripts/deploy-docker.sh

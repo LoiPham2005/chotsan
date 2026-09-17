@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SignJWT } from "jose";
 import { signSession, verifySession, type SessionPayload } from "./session";
 
 const payload: SessionPayload = {
@@ -51,5 +52,33 @@ describe("session", () => {
     const body = btoa(JSON.stringify({ sub: "x" })).replaceAll("=", "");
 
     await expect(verifySession(`${header}.${body}.${signature}`)).resolves.toBeNull();
+  });
+
+  it("từ chối JWT đúng chữ ký nhưng THIẾU `typ`", async () => {
+    // Lỗi thật trước đây: schema để `typ` mặc định "access", nên một JWT ký
+    // cùng khoá mà quên khai loại (vé, state…) được nhận như phiên hoàn chỉnh.
+    const secret = new TextEncoder().encode(process.env.SESSION_SECRET);
+    const now = Math.floor(Date.now() / 1000);
+    const token = await new SignJWT({ email: "a@b.com", roles: ["USER"] })
+      .setProtectedHeader({ alg: "HS256" })
+      .setSubject("user-1")
+      .setIssuedAt(now)
+      .setExpirationTime(now + 60)
+      .sign(secret);
+
+    await expect(verifySession(token)).resolves.toBeNull();
+  });
+
+  it("từ chối JWT mang `typ` khác access — ví dụ vé 2FA", async () => {
+    const secret = new TextEncoder().encode(process.env.SESSION_SECRET);
+    const now = Math.floor(Date.now() / 1000);
+    const token = await new SignJWT({ typ: "2fa", email: null, roles: [] })
+      .setProtectedHeader({ alg: "HS256" })
+      .setSubject("user-1")
+      .setIssuedAt(now)
+      .setExpirationTime(now + 60)
+      .sign(secret);
+
+    await expect(verifySession(token)).resolves.toBeNull();
   });
 });

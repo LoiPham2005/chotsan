@@ -1,9 +1,15 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { SESSION_COOKIE_NAME, verifySession, type SessionPayload } from "@/lib/session";
-import { rateLimit } from "@/lib/rate-limit";
+import {
+  clientIpFromHeaders,
+  ipRateLimitKey,
+  rateLimit,
+  type RateLimitBucket,
+} from "@/lib/rate-limit";
 import type { Permission } from "@/lib/permissions";
 import { permissionService } from "@/services/permission.service";
+import { securityStampService } from "@/services/security-stamp.service";
 import { apiErrors } from "./response";
 
 /**
@@ -16,7 +22,7 @@ import { apiErrors } from "./response";
  *
  * NHẮC LẠI: Proxy cố tình không chạy trên /api (xem `src/proxy.ts`), nên đây
  * là lớp kiểm quyền DUY NHẤT cho REST API. Mọi route handler phải gọi
- * `requireApiUser` hoặc `requireApiAdmin`.
+ * `requireApiUser`, `requireApiPermission` hoặc `requireVenuePermission`.
  */
 
 function bearerToken(request: Request): string | undefined {
@@ -29,32 +35,27 @@ function bearerToken(request: Request): string | undefined {
   return token;
 }
 
+/**
+ * Phiên của request: token đúng chữ ký VÀ chưa bị thu hồi.
+ *
+ * Access token mobile chỉ sống 15 phút, nhưng 15 phút đó là đúng lúc cần chặn:
+ * tài khoản vừa bị khoá, vừa bị xoá, hoặc chủ thật vừa đổi mật khẩu vì nghi bị
+ * chiếm. Cùng phép kiểm với `getSession()` của web — xem `securityStampService`.
+ */
 export async function getApiSession(request: Request): Promise<SessionPayload | null> {
-  const fromHeader = await verifySession(bearerToken(request));
-  if (fromHeader) return fromHeader;
+  const session =
+    (await verifySession(bearerToken(request))) ??
+    (await verifySession((await cookies()).get(SESSION_COOKIE_NAME)?.value));
 
-  const cookieStore = await cookies();
-  return verifySession(cookieStore.get(SESSION_COOKIE_NAME)?.value);
+  if (!session) return null;
+
+  return (await securityStampService.isTokenStillValid(session.sub, session.iat)) ? session : null;
 }
 
 /** Ném ApiError 401 nếu chưa đăng nhập. */
 export async function requireApiUser(request: Request): Promise<SessionPayload> {
   const session = await getApiSession(request);
   if (!session) throw apiErrors.unauthenticated();
-  return session;
-}
-
-/**
- * Ném ApiError 401 nếu chưa đăng nhập, 403 nếu không mang vai trò ADMIN.
- *
- * ⚠️ Kiểm theo VAI TRÒ, và vai trò đọc từ TOKEN. Chỉ dùng cho những chỗ mà độ
- * trễ vài chục phút là chấp nhận được (ẩn/hiện menu). Khi câu hỏi là "được làm
- * hành động gì", dùng `requireApiPermission` — nó tra database và không phải
- * sửa lại khi khách hàng thêm vai trò mới.
- */
-export async function requireApiAdmin(request: Request): Promise<SessionPayload> {
-  const session = await requireApiUser(request);
-  if (!session.roles.includes("ADMIN")) throw apiErrors.forbidden();
   return session;
 }
 
@@ -101,22 +102,29 @@ export async function requireVenuePermission(
   return session;
 }
 
-/** IP của client, đọc qua các header proxy thường gặp. */
+/**
+ * IP của client — CÙNG một hàm với Server Action (`clientIpFromHeaders`), nên
+ * web và API luôn đếm một người vào cùng một xô. Xem `TRUSTED_PROXY_HOPS`.
+ */
 export function clientIp(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for");
-  return forwarded?.split(",")[0]?.trim() ?? request.headers.get("x-real-ip") ?? "unknown";
+  return clientIpFromHeaders(request.headers);
 }
 
 /**
- * Giới hạn tần suất theo IP; ném ApiError 429 khi vượt ngưỡng.
- * Dùng cho các endpoint không cần đăng nhập (login, register, refresh).
+ * Giới hạn tần suất theo IP; ném ApiError 429 (kèm `Retry-After`) khi vượt ngưỡng.
+ *
+ * @param bucket Tên xô đếm. Luồng nào có cả bản web lẫn bản API thì truyền
+ * đúng hằng trong `RATE_LIMIT_BUCKETS` — hai cửa chung một xô, ngưỡng không bị
+ * nhân đôi. Chuỗi tự do chỉ dành cho luồng CHỈ có ở API (ví dụ `api:upload`).
+ *
+ * @returns Khoá vừa đếm — để `resetRateLimit` sau khi đăng nhập thành công.
  */
 export async function enforceRateLimit(
   request: Request,
-  scope: string,
+  bucket: RateLimitBucket | (string & {}),
   options: { limit: number; windowSeconds: number },
 ): Promise<string> {
-  const key = `${scope}:${clientIp(request)}`;
+  const key = ipRateLimitKey(bucket as RateLimitBucket, clientIp(request));
   const result = await rateLimit(key, options);
 
   if (!result.success) throw apiErrors.rateLimited(result.retryAfterSeconds);

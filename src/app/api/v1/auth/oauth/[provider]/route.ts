@@ -1,6 +1,6 @@
 import { requireApiUser } from "@/lib/api/auth";
 import { apiErrors, apiOk, handleApiError } from "@/lib/api/response";
-import { isOAuthProviderId } from "@/schemas/auth.schema";
+import { isOAuthProviderId } from "@/lib/oauth/types";
 import { oauthService } from "@/services/oauth.service";
 
 export const dynamic = "force-dynamic";

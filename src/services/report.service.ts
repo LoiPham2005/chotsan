@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { atMinuteVN, MINUTES_PER_DAY } from "@/lib/slots";
+import { occupyingBookingWhere } from "@/services/availability.service";
 
 /**
  * Báo cáo doanh thu của một cơ sở.
@@ -34,10 +35,19 @@ export class ReportService {
    * `from`/`to` là ngày theo giờ Việt Nam, tính CẢ hai đầu. Quy đổi sang mốc
    * tuyệt đối ngay tại đây bằng `atMinuteVN` — để giao diện tự tính là mỗi màn
    * lại lệch nửa ngày một kiểu.
+   *
+   * `holdingCount` chỉ đếm chỗ giữ CÒN SỐNG (còn hạn, hoặc đã báo chuyển khoản):
+   * chỗ giữ quá hạn không còn là "lượt đang chờ thanh toán" dù cron chưa kịp nhả
+   * — đếm vào là báo chủ sân một khoản tiền sắp về không bao giờ về.
    */
-  async venueSummary(venueId: string, range: { from: Date; to: Date }) {
+  async venueSummary(
+    venueId: string,
+    range: { from: Date; to: Date },
+    options: { now?: Date } = {},
+  ) {
     const start = atMinuteVN(range.from, 0);
     const end = atMinuteVN(range.to, MINUTES_PER_DAY);
+    const now = options.now ?? new Date();
 
     const window = { venueId, startAt: { gte: start, lt: end } };
 
@@ -48,7 +58,11 @@ export class ReportService {
         _count: { _all: true },
       }),
       this.db.booking.count({ where: { ...window, status: { in: ["CANCELLED", "NO_SHOW"] } } }),
-      this.db.booking.count({ where: { ...window, status: "HOLDING" } }),
+      // HOLDING *và* đang chiếm chỗ theo đúng định nghĩa của lịch — một nguồn sự
+      // thật cho "chỗ giữ còn sống", không tự viết lại điều kiện hạn ở đây.
+      this.db.booking.count({
+        where: { ...window, status: "HOLDING", ...occupyingBookingWhere(now) },
+      }),
       this.db.booking.groupBy({
         by: ["courtId"],
         where: { ...window, status: { in: [...SOLD] } },

@@ -1,4 +1,4 @@
-import { requireApiPermission } from "@/lib/api/auth";
+import { clientIp, requireApiPermission } from "@/lib/api/auth";
 import { apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
 import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
 import { assignRolesSchema } from "@/schemas/user.schema";
@@ -35,6 +35,7 @@ export async function PUT(request: Request, { params }: RouteContext) {
       actorId: session.sub,
       actorEmail: session.email,
       metadata: { roleKeys: body.roleKeys },
+      ip: clientIp(request),
       userAgent: request.headers.get("user-agent"),
     });
 

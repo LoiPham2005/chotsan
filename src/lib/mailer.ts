@@ -19,8 +19,10 @@ import { logger } from "@/lib/logger";
  * ---
  * DÙNG NHÀ CUNG CẤP KHÁC (Resend / SES / Postmark)
  *
- * Viết một object thoả `Mailer` rồi gọi `setMailer()` lúc khởi động ứng dụng
- * (`apps/api/src/main.ts`). Không cần sửa file này.
+ * Viết một object thoả `Mailer` rồi gọi `setMailer()` lúc khởi động — ở CẢ HAI
+ * tiến trình: `register()` trong `src/instrumentation.ts` (web: `QUEUE_ENABLED=0`
+ * gửi ngay trong request) và `worker/main.ts` (job `email:send`). Cắm một bên
+ * thì bên kia vẫn ném lỗi. Không cần sửa file này.
  */
 
 export type MailMessage = {

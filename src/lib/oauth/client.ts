@@ -2,14 +2,15 @@ import "server-only";
 import { decodeJwt } from "jose";
 import { getAppleClientSecret } from "./apple-client-secret";
 import { callbackUrl, isProviderConfigured, PROVIDER_CONFIG } from "./config";
-import { OAuthExchangeError, OAuthProviderNotConfiguredError, type OAuthProviderId } from "./types";
+import type { OAuthProviderId } from "./types";
 import { env } from "@/lib/env";
+import { ProviderExchangeError, ProviderNotConfiguredError } from "@/lib/errors";
 
 export function buildAuthorizationUrl(
   provider: OAuthProviderId,
   params: { state: string; codeChallenge?: string },
 ): URL {
-  if (!isProviderConfigured(provider)) throw new OAuthProviderNotConfiguredError(provider);
+  if (!isProviderConfigured(provider)) throw new ProviderNotConfiguredError(provider);
 
   const config = PROVIDER_CONFIG[provider];
   const url = new URL(config.authorizationEndpoint);
@@ -39,7 +40,7 @@ async function resolveClientSecret(provider: OAuthProviderId): Promise<string> {
     facebook: env.FACEBOOK_CLIENT_SECRET,
   }[provider];
 
-  if (!secret) throw new OAuthProviderNotConfiguredError(provider);
+  if (!secret) throw new ProviderNotConfiguredError(provider);
   return secret;
 }
 
@@ -52,7 +53,7 @@ export type ExchangedTokens = {
 /**
  * Đổi authorization code lấy token.
  *
- * Không throw nguyên lỗi mạng/HTTP ra ngoài — bọc thành `OAuthExchangeError`
+ * Không throw nguyên lỗi mạng/HTTP ra ngoài — bọc thành `ProviderExchangeError`
  * để route callback chỉ cần một nhánh xử lý, không phải phân biệt "provider
  * từ chối code" với "provider sập" với "JSON hỏng".
  */
@@ -61,7 +62,7 @@ export async function exchangeCodeForToken(
   code: string,
   codeVerifier?: string,
 ): Promise<ExchangedTokens> {
-  if (!isProviderConfigured(provider)) throw new OAuthProviderNotConfiguredError(provider);
+  if (!isProviderConfigured(provider)) throw new ProviderNotConfiguredError(provider);
 
   const config = PROVIDER_CONFIG[provider];
   const clientId = config.clientId!;
@@ -96,7 +97,7 @@ export async function exchangeCodeForToken(
 
     return { accessToken: json.access_token, idToken: json.id_token };
   } catch (error) {
-    throw new OAuthExchangeError(provider, error);
+    throw new ProviderExchangeError(provider, error);
   }
 }
 

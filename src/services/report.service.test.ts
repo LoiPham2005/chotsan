@@ -10,6 +10,36 @@ import { ReportService } from "./report.service";
 const FROM = new Date("2026-09-01T05:00:00Z");
 const TO = new Date("2026-09-30T05:00:00Z");
 
+type Row = Record<string, unknown>;
+
+/**
+ * Mock `where` của Prisma cho các dạng tầng này dùng (bằng nhau, `in`,
+ * `gte`/`lt`/`gt`, `null`, `OR`) — đếm phải LỌC THẬT, không trả một con số bừa.
+ */
+function matches(row: Row, where: Row): boolean {
+  return Object.entries(where).every(([key, condition]) => {
+    if (key === "OR") return (condition as Row[]).some((clause) => matches(row, clause));
+
+    const value = row[key];
+    if (condition === null) return value === null;
+    if (typeof condition === "object") {
+      const {
+        in: list,
+        gte,
+        lt,
+        gt,
+      } = condition as { in?: unknown[]; gte?: Date; lt?: Date; gt?: Date };
+      const at = value instanceof Date ? value.getTime() : Number.NaN;
+      if (list && !list.includes(value)) return false;
+      if (gte && !(at >= gte.getTime())) return false;
+      if (lt && !(at < lt.getTime())) return false;
+      if (gt && !(at > gt.getTime())) return false;
+      return true;
+    }
+    return value === condition;
+  });
+}
+
 function createDb(over: Record<string, unknown> = {}) {
   const db = {
     booking: {
@@ -90,6 +120,32 @@ describe("venueSummary", () => {
       bookingCount: 0,
       commissionOwed: 0,
     });
+  });
+
+  /**
+   * Lỗi thật trước đây: đếm mọi HOLDING. Chỗ giữ quá hạn mà cron chưa nhả (máy
+   * dev không chạy worker) vẫn hiện "N lượt đang chờ thanh toán" mãi mãi.
+   */
+  it("chỉ đếm chỗ giữ CÒN SỐNG — chỗ giữ quá hạn không tính dù cron chưa nhả", async () => {
+    const now = new Date("2026-09-10T03:00:00Z");
+    const inWindow = new Date("2026-09-10T12:00:00Z");
+    const bookings = [
+      { status: "HOLDING", holdExpiresAt: new Date(now.getTime() + 5 * 60_000) }, // còn hạn
+      { status: "HOLDING", holdExpiresAt: null }, // đã báo chuyển khoản
+      { status: "HOLDING", holdExpiresAt: new Date(now.getTime() - 60_000) }, // quá hạn
+      { status: "CONFIRMED", holdExpiresAt: null },
+      { status: "CANCELLED", holdExpiresAt: null },
+    ].map((booking) => ({ ...booking, venueId: "v1", startAt: inWindow }));
+
+    const { db, mock } = createDb();
+    mock.booking.count.mockImplementation(({ where }: { where: Row }) =>
+      Promise.resolve(bookings.filter((booking) => matches(booking, where)).length),
+    );
+
+    const result = await new ReportService(db).venueSummary("v1", { from: FROM, to: TO }, { now });
+
+    expect(result.holdingCount).toBe(2);
+    expect(result.cancelledCount).toBe(1);
   });
 
   it("tách được doanh thu theo từng sân con", async () => {

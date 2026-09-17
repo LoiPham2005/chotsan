@@ -1,7 +1,9 @@
 import { z } from "zod";
-import { requireApiPermission } from "@/lib/api/auth";
+import { clientIp, requireApiPermission } from "@/lib/api/auth";
 import { apiErrors, apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
+import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
 import { createUserSchema, listUsersSchema } from "@/schemas/user.schema";
+import { auditService } from "@/services/audit.service";
 import { userService } from "@/services/user.service";
 
 export const dynamic = "force-dynamic";
@@ -33,18 +35,36 @@ export async function GET(request: Request) {
   }
 }
 
+/**
+ * Tạo tài khoản thay người dùng.
+ *
+ * `roleKeys` ĐƯỢC nhận ở đây (khác form web, nơi mọi field vai trò bị bỏ qua) —
+ * nhưng chỉ những vai trò có bậc THẤP HƠN bậc của người gọi: `actorId` truyền
+ * xuống để `userService` áp chốt `Role.level`. Lỗi thật trước đây: route quên
+ * truyền `actorId`, chốt đó không chạy, và ADMIN tạo được tài khoản SUPER_ADMIN.
+ *
+ * Vai trò không tồn tại → `UnknownRoleKeyError` (422), không phải lỗi khoá
+ * ngoại thô của database.
+ */
 export async function POST(request: Request) {
   try {
-    await requireApiPermission(request, "user:create");
+    const session = await requireApiPermission(request, "user:create");
 
-    // createUserSchema có nhận `roleKey`, và ở đây thì hợp lệ: người gọi đã
-    // được xác thực là ADMIN. Khác với form trên web, nơi vai trò bị bỏ qua
-    // hoàn toàn vì bất kỳ ai cũng gửi được field ẩn.
-    //
-    // Vai trò không tồn tại sẽ thành RoleNotFoundError từ userService, chứ
-    // không phải lỗi khoá ngoại thô của database.
     const body = await parseJsonBody(request, createUserSchema);
-    const user = await userService.create(body);
+    const user = await userService.create(body, { actorId: session.sub });
+
+    await auditService.record({
+      action: AUDIT_ACTIONS.USER_CREATED,
+      entity: "user",
+      entityId: user.id,
+      actorId: session.sub,
+      actorEmail: session.email,
+      // Email và vai trò của tài khoản MỚI để tra được sau này — không bao giờ
+      // ghi mật khẩu.
+      metadata: { email: user.email, roles: user.roles, surface: "api" },
+      ip: clientIp(request),
+      userAgent: request.headers.get("user-agent"),
+    });
 
     return apiOk({ user }, 201);
   } catch (error) {

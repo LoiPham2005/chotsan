@@ -35,7 +35,8 @@ import type { JobName, JobPayloads } from "@/jobs/types";
  * Không phải dự án nào cũng đáng dựng thêm Redis và một tiến trình thứ ba.
  * `QUEUE_ENABLED=0` thì `enqueue()` chạy handler ngay trong request — kể cả
  * trên production, và đó là hành vi ĐÚNG chứ không phải sự cố: cấu hình nói rõ
- * là không dùng hàng đợi.
+ * là không dùng hàng đợi. Job THEO LỊCH khi đó do chính tiến trình web chạy
+ * (`src/jobs/schedules.ts`, khởi động ở `src/instrumentation.ts`).
  *
  * Khác biệt so với nhánh "thiếu Redis" ở trên là AI QUYẾT ĐỊNH. Thiếu
  * `REDIS_URL` là quên; `QUEUE_ENABLED=0` là chọn. Bộ khung chỉ ném lỗi với vế
@@ -51,6 +52,11 @@ let queuePromise: Promise<BullQueue> | null = null;
 async function getQueue(url: string): Promise<BullQueue> {
   queuePromise ??= (async () => {
     // Import động: máy không cấu hình Redis thì BullMQ không bao giờ được nạp.
+    //
+    // ⚠️ `connection: { url }` → BullMQ tự `require("ioredis")` lười bên trong.
+    // Thiếu gói `ioredis` thì mọi `enqueue()` ném "could not load the optional
+    // 'ioredis' package" lúc CHẠY — typecheck và build vẫn xanh. Đừng gỡ nó khỏi
+    // package.json dù không dòng import nào trỏ tới.
     const { Queue } = await import("bullmq");
 
     const queue = new Queue(QUEUE_NAME, {
@@ -123,7 +129,7 @@ export async function enqueue<TName extends JobName>(
         `Không đẩy được job "${name}": QUEUE_ENABLED đang bật nhưng thiếu REDIS_URL. ` +
           `Trên production, job bị bỏ qua trong im lặng là hành vi nguy hiểm nên phải ` +
           `chọn một trong hai đường:\n` +
-          `  • Đặt REDIS_URL rồi chạy apps/worker — có thử lại tự động.\n` +
+          `  • Đặt REDIS_URL rồi chạy worker (pnpm worker:start) — có thử lại tự động.\n` +
           `  • Hoặc đặt QUEUE_ENABLED=0 để job chạy thẳng trong request — không cần ` +
           `Redis, nhưng người dùng phải chờ và không có thử lại.`,
       );

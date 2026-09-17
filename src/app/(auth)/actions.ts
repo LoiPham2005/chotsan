@@ -1,9 +1,6 @@
 "use server";
 import {
   DomainError,
-  AccountBannedError,
-  AccountLockedError,
-  InvalidCredentialsError,
   InvalidTwoFactorCodeError,
   InvalidVerificationTokenError,
   DuplicateFieldError,
@@ -14,10 +11,14 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 import { createSession, destroySession } from "@/lib/auth";
+import { actionClientIp, rateLimitAction } from "@/lib/define-action";
+import { formErrorMap } from "@/lib/form-errors";
 import { logger } from "@/lib/logger";
-import { RATE_LIMITS, rateLimit, resetRateLimit } from "@/lib/rate-limit";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS, resetRateLimit } from "@/lib/rate-limit";
 import { landingPathFor } from "@/lib/landing";
+import { clearPendingTwoFactor, readPendingTwoFactor } from "@/lib/oauth/two-factor-cookie";
 import { safeRedirectPath } from "@/lib/safe-redirect";
+import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
 import {
   forgotPasswordSchema,
   loginSchema,
@@ -26,9 +27,10 @@ import {
   verifyEmailSchema,
   confirmEmailChangeSchema,
 } from "@/schemas/auth.schema";
+import { auditService } from "@/services/audit.service";
 import { authService } from "@/services/auth.service";
 import { twoFactorService } from "@/services/two-factor.service";
-import { issueTwoFactorTicket, verifyTicket } from "@/lib/tickets";
+import { consumeTicket, issueTwoFactorTicket, verifyTicket } from "@/lib/tickets";
 
 /**
  * Tên các ô trong form xác thực.
@@ -47,7 +49,10 @@ export type AuthFormState = {
    *
    * Có mặt là form phải đổi sang ô nhập mã. Vé mang `typ: "2fa"` nên tự nó
    * KHÔNG đăng nhập được vào đâu (xem `src/lib/tickets.ts`); nó chỉ chứng minh
-   * "vừa nhập đúng mật khẩu", và hết hạn sau vài phút.
+   * "vừa nhập đúng mật khẩu", hết hạn sau vài phút, và chết sau lần dùng đầu.
+   *
+   * Chỉ luồng MẬT KHẨU trả vé ở đây. Luồng OAuth giữ vé trong cookie httpOnly
+   * (`two-factor-cookie.ts`) — không có form nào để trả nó về.
    */
   twoFactorToken?: string;
   /**
@@ -59,36 +64,64 @@ export type AuthFormState = {
    */
   success?: string;
   fieldErrors?: Partial<Record<AuthFieldName, string[]>>;
+  /**
+   * Chữ vừa gửi, trả lại KÈM LỖI để form dựng lại đúng như lúc bấm — React 19
+   * tự xoá trắng form sau mỗi lần action chạy xong, kể cả khi báo lỗi.
+   *
+   * ⚠️ KHÔNG BAO GIỜ có `password`: mật khẩu không được đi ngược từ máy chủ về
+   * HTML (nằm trong payload của trang, trong bộ nhớ đệm của trình duyệt…).
+   */
+  values?: Partial<Record<Exclude<AuthFieldName, "password">, string>>;
 };
 
-async function getClientKey(scope: string): Promise<string> {
-  const headerList = await headers();
-  const forwarded = headerList.get("x-forwarded-for");
-  const ip = forwarded?.split(",")[0]?.trim() ?? headerList.get("x-real-ip") ?? "unknown";
-  return `${scope}:${ip}`;
+/** Tên ô người dùng NHÌN THẤY — để câu lỗi nói đúng ô nào sai (`formErrorMap`). */
+const AUTH_FIELD_LABELS = {
+  identifier: "Email hoặc tên đăng nhập",
+  email: "Email",
+  username: "Tên đăng nhập",
+  fullName: "Tên hiển thị",
+  password: "Mật khẩu",
+  token: "Liên kết",
+} as const;
+
+/** Giá trị chữ của một ô form ("" khi thiếu) — để trả lại trong `values`. */
+function text(formData: FormData, name: string): string {
+  const value = formData.get(name);
+  return typeof value === "string" ? value : "";
+}
+
+/*
+ * RATE LIMIT: mọi action dưới đây đếm theo IP vào CÙNG xô với route API của
+ * cùng luồng (`RATE_LIMIT_BUCKETS`). Bản cũ đếm web `login:<ip>` và API
+ * `api:login:<ip>` riêng — luân phiên hai cửa là gấp đôi số lần thử.
+ */
+
+async function userAgent(): Promise<string | null> {
+  return (await headers()).get("user-agent");
 }
 
 export async function loginAction(
   _prevState: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  const rateLimitKey = await getClientKey("login");
-  const limit = await rateLimit(rateLimitKey, RATE_LIMITS.login);
+  const limit = await rateLimitAction(RATE_LIMIT_BUCKETS.login, RATE_LIMITS.login);
+  const values = { identifier: text(formData, "identifier") };
 
   if (!limit.success) {
-    logger.warn("Login rate limit exceeded", { key: rateLimitKey });
+    logger.warn("Login rate limit exceeded", { key: limit.key });
     return {
       error: `Bạn đã thử quá nhiều lần. Vui lòng đợi ${limit.retryAfterSeconds} giây.`,
+      values,
     };
   }
 
-  const parsed = loginSchema.safeParse({
-    identifier: formData.get("identifier"),
-    password: formData.get("password"),
-  });
+  const parsed = loginSchema.safeParse(
+    { identifier: formData.get("identifier"), password: formData.get("password") },
+    { error: formErrorMap(AUTH_FIELD_LABELS) },
+  );
 
   if (!parsed.success) {
-    return { fieldErrors: z.flattenError(parsed.error).fieldErrors };
+    return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
   }
 
   let user;
@@ -107,47 +140,56 @@ export async function loginAction(
       return { twoFactorToken: ticket.challengeToken };
     }
 
-    if (
-      error instanceof InvalidCredentialsError ||
-      error instanceof AccountBannedError ||
-      error instanceof AccountLockedError
-    ) {
-      return { error: error.message };
+    /*
+     * MỌI lỗi nghiệp vụ đều có câu hiển thị được: sai thông tin, bị khoá, TẠM
+     * NGƯNG, khoá tạm. Bản cũ liệt kê tay ba lớp và quên `AccountInactiveError`
+     * — tài khoản tạm ngưng nhận "Không thể đăng nhập lúc này" và bị ghi log
+     * như sự cố.
+     */
+    if (error instanceof DomainError) {
+      await auditService.recordLoginFailure(error, {
+        method: "password",
+        ip: await actionClientIp(),
+        userAgent: await userAgent(),
+      });
+      return { error: error.message, values };
     }
     logger.error("Login failed unexpectedly", error, { identifier: parsed.data.identifier });
-    return { error: "Không thể đăng nhập lúc này. Vui lòng thử lại." };
+    return { error: "Không thể đăng nhập lúc này. Vui lòng thử lại.", values };
   }
 
-  await resetRateLimit(rateLimitKey);
+  await resetRateLimit(limit.key);
   await createSession({
     typ: "access" as const,
     sub: user.id,
     email: user.email,
     roles: user.roles,
   });
-  logger.info("User logged in", { userId: user.id });
 
-  /*
-   * Đích mặc định phải là trang MỌI người đăng nhập đều mở được.
-   *
-   * Bộ khung để lại `/users` — màn quản trị, cần quyền `user:read`. Với ChốtSân
-   * thì gần như không ai có quyền đó, nên đăng nhập thành công xong bị ném vào
-   * 404. Tệ hơn: điều hướng của Server Action hỏng giữa chừng thì trình duyệt
-   * KHÔNG giữ lại cookie phiên vừa được đặt trong cùng response — nghĩa là
-   * không ai đăng nhập nổi, mà nhật ký máy chủ vẫn ghi "User logged in".
-   */
+  await auditService.record({
+    action: AUDIT_ACTIONS.LOGIN_SUCCEEDED,
+    entity: "user",
+    entityId: user.id,
+    actorId: user.id,
+    actorEmail: user.email,
+    metadata: { method: "password", surface: "web" },
+    ip: await actionClientIp(),
+    userAgent: await userAgent(),
+  });
+
   /*
    * `?next=` LUÔN THẮNG.
    *
    * Người dùng bấm vào một link cụ thể rồi bị chặn ở cửa — đưa họ về đúng chỗ
    * đó, không phải về màn mặc định của vai. Chỉ khi không có `next` mới hỏi
-   * "vai này làm việc ở đâu".
+   * "vai này làm việc ở đâu" — không bao giờ mặc định `/users` (màn quản trị,
+   * 404 với gần như mọi người).
    */
   const next = formData.get("next");
-  const dich = typeof next === "string" && next ? next : await landingPathFor(user.id);
+  const destination = typeof next === "string" && next ? next : await landingPathFor(user.id);
 
   // redirect() hoạt động bằng cách ném exception — phải nằm ngoài mọi try/catch.
-  redirect(safeRedirectPath(dich, "/"));
+  redirect(safeRedirectPath(destination, "/"));
 }
 
 /**
@@ -155,21 +197,29 @@ export async function loginAction(
  *
  * Tách khỏi `loginAction` chứ không nhét thêm một nhánh `if`: hai bước nhận
  * dữ liệu khác nhau, kiểm tra khác nhau, và rate limit khác nhau.
+ *
+ * Vé đến từ MỘT trong hai nguồn:
+ *   • field ẩn `twoFactorToken` — luồng mật khẩu (`loginAction` vừa trả về);
+ *   • cookie httpOnly `oauth_2fa` — luồng OAuth, vé không bao giờ ra tới HTML
+ *     hay URL. Xoá cookie khi xong.
+ *
+ * Chống dò: rate limit IP (chung xô với API), bộ đếm theo TÀI KHOẢN trong
+ * `verifyCode`, và vé dùng MỘT lần (gõ sai mã thì vé còn nguyên).
  */
 export async function verifyTwoFactorAction(
   _prevState: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  const rateLimitKey = await getClientKey("2fa");
-  const limit = await rateLimit(rateLimitKey, RATE_LIMITS.twoFactor);
+  const limit = await rateLimitAction(RATE_LIMIT_BUCKETS.twoFactor, RATE_LIMITS.twoFactor);
 
   if (!limit.success) {
     return { error: `Bạn đã thử quá nhiều lần. Vui lòng đợi ${limit.retryAfterSeconds} giây.` };
   }
 
-  const token = formData.get("twoFactorToken");
+  const formToken = formData.get("twoFactorToken");
+  const pending = typeof formToken === "string" && formToken ? null : await readPendingTwoFactor();
+  const challengeToken = typeof formToken === "string" && formToken ? formToken : pending?.ticket;
   const code = formData.get("code");
-  const challengeToken = typeof token === "string" ? token : undefined;
 
   const ticket = await verifyTicket(challengeToken, "2fa");
 
@@ -177,30 +227,46 @@ export async function verifyTwoFactorAction(
     return { error: "Phiên xác thực đã hết hạn. Vui lòng đăng nhập lại." };
   }
 
+  // Vé của luồng mật khẩu thì trả lại để người dùng nhập tiếp; vé trong cookie
+  // thì vẫn nằm yên trong cookie.
+  const retry = pending ? {} : { twoFactorToken: challengeToken };
+
   let user;
   try {
     if (!(await twoFactorService.verifyCode(ticket.sub, code))) {
+      await auditService.record({
+        action: AUDIT_ACTIONS.TWO_FACTOR_FAILED,
+        entity: "user",
+        entityId: ticket.sub,
+        actorId: ticket.sub,
+        metadata: { surface: "web" },
+        ip: await actionClientIp(),
+        userAgent: await userAgent(),
+      });
       throw new InvalidTwoFactorCodeError();
+    }
+
+    // Mã đúng → tiêu vé trước khi cấp phiên: hai request cùng nộp một vé thì
+    // chỉ một bên được đăng nhập.
+    if (!(await consumeTicket(ticket))) {
+      return { error: "Phiên xác thực đã được dùng. Vui lòng đăng nhập lại." };
     }
 
     // Kiểm lại trạng thái tài khoản: nó có thể vừa bị khoá trong vài giây giữa
     // bước nhập mật khẩu và bước nhập mã.
     user = await authService.completeTwoFactorLogin(ticket.sub);
   } catch (error) {
-    if (
-      error instanceof InvalidTwoFactorCodeError ||
-      error instanceof InvalidCredentialsError ||
-      error instanceof AccountBannedError ||
-      error instanceof AccountLockedError
-    ) {
-      // Giữ lại vé để người dùng nhập lại mã, không bắt đăng nhập từ đầu.
-      return { error: error.message, twoFactorToken: challengeToken };
+    // Mọi lỗi nghiệp vụ (mã sai, quá số lần thử, tài khoản vừa bị khoá hoặc
+    // tạm ngưng) đều có câu hiển thị được.
+    if (error instanceof DomainError) {
+      return { error: error.message, ...retry };
     }
     logger.error("Xác minh 2FA thất bại", error, { userId: ticket.sub });
     return { error: "Không thể xác minh lúc này. Vui lòng thử lại." };
   }
 
-  await resetRateLimit(rateLimitKey);
+  await resetRateLimit(limit.key);
+  await clearPendingTwoFactor();
   await createSession({
     typ: "access" as const,
     sub: user.id,
@@ -208,43 +274,53 @@ export async function verifyTwoFactorAction(
     roles: user.roles,
     mfa: new Date().toISOString(),
   });
-  logger.info("User logged in with 2FA", { userId: user.id });
 
-  /*
-   * `?next=` LUÔN THẮNG.
-   *
-   * Người dùng bấm vào một link cụ thể rồi bị chặn ở cửa — đưa họ về đúng chỗ
-   * đó, không phải về màn mặc định của vai. Chỉ khi không có `next` mới hỏi
-   * "vai này làm việc ở đâu".
-   */
+  await auditService.record({
+    action: AUDIT_ACTIONS.LOGIN_SUCCEEDED,
+    entity: "user",
+    entityId: user.id,
+    actorId: user.id,
+    actorEmail: user.email,
+    metadata: { method: "2fa", firstFactor: pending ? "oauth" : "password", surface: "web" },
+    ip: await actionClientIp(),
+    userAgent: await userAgent(),
+  });
+
+  // `?next=` LUÔN THẮNG — xem `loginAction`. Luồng OAuth mang `next` trong
+  // cookie cùng với vé (đã qua `safeRedirectPath` ở bước `start`).
   const next = formData.get("next");
-  const dich = typeof next === "string" && next ? next : await landingPathFor(user.id);
+  const requested = typeof next === "string" && next ? next : (pending?.next ?? "");
+  const destination = requested || (await landingPathFor(user.id));
 
   // redirect() hoạt động bằng cách ném exception — phải nằm ngoài mọi try/catch.
-  redirect(safeRedirectPath(dich, "/"));
+  redirect(safeRedirectPath(destination, "/"));
 }
 
 export async function registerAction(
   _prevState: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  const rateLimitKey = await getClientKey("register");
-  const limit = await rateLimit(rateLimitKey, RATE_LIMITS.register);
+  const limit = await rateLimitAction(RATE_LIMIT_BUCKETS.register, RATE_LIMITS.register);
+  const values = { email: text(formData, "email"), fullName: text(formData, "fullName") };
 
   if (!limit.success) {
     return {
       error: `Bạn đã tạo quá nhiều tài khoản. Vui lòng đợi ${limit.retryAfterSeconds} giây.`,
+      values,
     };
   }
 
-  const parsed = registerSchema.safeParse({
-    email: formData.get("email"),
-    password: formData.get("password"),
-    fullName: formData.get("fullName") || undefined,
-  });
+  const parsed = registerSchema.safeParse(
+    {
+      email: formData.get("email"),
+      password: formData.get("password"),
+      fullName: formData.get("fullName") || undefined,
+    },
+    { error: formErrorMap(AUTH_FIELD_LABELS) },
+  );
 
   if (!parsed.success) {
-    return { fieldErrors: z.flattenError(parsed.error).fieldErrors };
+    return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
   }
 
   let user;
@@ -252,10 +328,10 @@ export async function registerAction(
     user = await authService.register(parsed.data);
   } catch (error) {
     if (error instanceof DuplicateFieldError) {
-      return { error: error.message };
+      return { error: error.message, values };
     }
     logger.error("Registration failed", error, { email: parsed.data.email });
-    return { error: "Không thể tạo tài khoản lúc này. Vui lòng thử lại." };
+    return { error: "Không thể tạo tài khoản lúc này. Vui lòng thử lại.", values };
   }
 
   await createSession({
@@ -273,14 +349,9 @@ export async function registerAction(
    * thì về màn của vai — với tài khoản mới là trang chủ.
    */
   const next = formData.get("next");
-  const dich = typeof next === "string" && next ? next : await landingPathFor(user.id);
+  const destination = typeof next === "string" && next ? next : await landingPathFor(user.id);
 
-  redirect(safeRedirectPath(dich, "/"));
-}
-
-export async function logoutAction(): Promise<void> {
-  await destroySession();
-  redirect("/login");
+  redirect(safeRedirectPath(destination, "/"));
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +360,8 @@ export async function logoutAction(): Promise<void> {
 // Ba action dưới đây là cửa vào phía WEB cho những luồng mà trước đó chỉ có
 // REST API. Link trong email trỏ tới `/verify-email` và `/reset-password`;
 // thiếu chúng thì người dùng bấm link trong thư và nhận 404.
+//
+// Đăng xuất của web KHÔNG nằm ở đây mà ở `src/app/logout-action.ts`.
 // ---------------------------------------------------------------------------
 
 /**
@@ -305,19 +378,26 @@ export async function forgotPasswordAction(
   _prevState: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  const rateLimitKey = await getClientKey("forgot-password");
-  const limit = await rateLimit(rateLimitKey, RATE_LIMITS.passwordResetRequest);
+  const limit = await rateLimitAction(
+    RATE_LIMIT_BUCKETS.passwordResetRequest,
+    RATE_LIMITS.passwordResetRequest,
+  );
+  const values = { email: text(formData, "email") };
 
   if (!limit.success) {
     return {
       error: `Bạn đã yêu cầu quá nhiều lần. Vui lòng đợi ${limit.retryAfterSeconds} giây.`,
+      values,
     };
   }
 
-  const parsed = forgotPasswordSchema.safeParse({ email: formData.get("email") });
+  const parsed = forgotPasswordSchema.safeParse(
+    { email: formData.get("email") },
+    { error: formErrorMap(AUTH_FIELD_LABELS) },
+  );
 
   if (!parsed.success) {
-    return { fieldErrors: z.flattenError(parsed.error).fieldErrors };
+    return { fieldErrors: z.flattenError(parsed.error).fieldErrors, values };
   }
 
   try {
@@ -334,18 +414,16 @@ export async function forgotPasswordAction(
 /**
  * Đặt mật khẩu mới bằng token trong email.
  *
- * Xoá luôn cookie phiên hiện tại. Service đã thu hồi mọi refresh token, nhưng
- * cookie web là JWT đã ký nên không thu hồi được từ phía máy chủ — chỉ có thể
- * xoá nó khỏi trình duyệt đang thao tác. Luồng này thường xuất phát từ nghi
- * ngờ bị chiếm tài khoản, nên để phiên cũ sống tiếp là tự vô hiệu hoá chính
- * việc đổi mật khẩu.
+ * Service vô hiệu MỌI phiên cấp trước lúc đổi — refresh token lẫn cookie web
+ * ở mọi trình duyệt (`securityStampService`). Xoá thêm cookie của trình duyệt
+ * ĐANG thao tác để người dùng thấy rõ phải đăng nhập lại bằng mật khẩu mới,
+ * thay vì một cookie đã chết vẫn nằm đó.
  */
 export async function resetPasswordAction(
   _prevState: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  const rateLimitKey = await getClientKey("reset-password");
-  const limit = await rateLimit(rateLimitKey, RATE_LIMITS.passwordChange);
+  const limit = await rateLimitAction(RATE_LIMIT_BUCKETS.passwordReset, RATE_LIMITS.passwordChange);
 
   if (!limit.success) {
     return {
@@ -353,10 +431,10 @@ export async function resetPasswordAction(
     };
   }
 
-  const parsed = resetPasswordSchema.safeParse({
-    token: formData.get("token"),
-    password: formData.get("password"),
-  });
+  const parsed = resetPasswordSchema.safeParse(
+    { token: formData.get("token"), password: formData.get("password") },
+    { error: formErrorMap(AUTH_FIELD_LABELS) },
+  );
 
   if (!parsed.success) {
     const fieldErrors = z.flattenError(parsed.error).fieldErrors;
@@ -369,8 +447,9 @@ export async function resetPasswordAction(
     return { fieldErrors };
   }
 
+  let userId;
   try {
-    await authService.resetPassword(parsed.data.token, parsed.data.password);
+    userId = await authService.resetPassword(parsed.data.token, parsed.data.password);
   } catch (error) {
     if (error instanceof InvalidVerificationTokenError) {
       return { error: error.message };
@@ -379,8 +458,18 @@ export async function resetPasswordAction(
     return { error: "Không thể đặt lại mật khẩu lúc này. Vui lòng thử lại." };
   }
 
+  await auditService.record({
+    action: AUDIT_ACTIONS.PASSWORD_RESET,
+    entity: "user",
+    entityId: userId,
+    actorId: userId,
+    metadata: { surface: "web" },
+    ip: await actionClientIp(),
+    userAgent: await userAgent(),
+  });
+
   await destroySession();
-  logger.info("Web reset password thành công");
+  logger.info("Web reset password thành công", { userId });
 
   redirect("/login?reset=1");
 }
@@ -401,8 +490,7 @@ export async function verifyEmailAction(
   _prevState: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  const rateLimitKey = await getClientKey("verify-email");
-  const limit = await rateLimit(rateLimitKey, RATE_LIMITS.passwordChange);
+  const limit = await rateLimitAction(RATE_LIMIT_BUCKETS.emailVerify, RATE_LIMITS.passwordChange);
 
   if (!limit.success) {
     return {
@@ -443,8 +531,10 @@ export async function confirmEmailChangeAction(
   _prevState: AuthFormState,
   formData: FormData,
 ): Promise<AuthFormState> {
-  const rateLimitKey = await getClientKey("confirm-email-change");
-  const limit = await rateLimit(rateLimitKey, RATE_LIMITS.emailVerificationRequest);
+  const limit = await rateLimitAction(
+    RATE_LIMIT_BUCKETS.emailChangeConfirm,
+    RATE_LIMITS.emailVerificationRequest,
+  );
 
   if (!limit.success) {
     return { error: `Bạn đã thử quá nhiều lần. Vui lòng đợi ${limit.retryAfterSeconds} giây.` };
@@ -459,7 +549,16 @@ export async function confirmEmailChangeAction(
   try {
     const user = await authService.confirmEmailChange(parsed.data.token);
 
-    logger.info("Đã đổi email", { userId: user.id });
+    await auditService.record({
+      action: AUDIT_ACTIONS.EMAIL_CHANGED,
+      entity: "user",
+      entityId: user.id,
+      actorId: user.id,
+      actorEmail: user.email,
+      metadata: { surface: "web" },
+      ip: await actionClientIp(),
+      userAgent: await userAgent(),
+    });
 
     return {
       success: `Email đã đổi thành ${user.email ?? ""}. Lần đăng nhập sau hãy dùng địa chỉ mới.`,

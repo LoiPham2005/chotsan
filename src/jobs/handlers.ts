@@ -15,9 +15,10 @@ import type { JobHandlers } from "@/jobs/types";
 /**
  * Nơi job thật sự được xử lý.
  *
- * Cùng một object được dùng ở HAI chỗ: `apps/worker` (đường đi thật) và
- * `infra/queue.ts` khi hàng đợi bị tắt (chạy thẳng trong request). Một bản cài
- * đặt duy nhất nghĩa là hai chế độ không thể lệch hành vi.
+ * Cùng một object được dùng ở BA chỗ: `worker/` (đường đi thật), `src/lib/queue.ts`
+ * khi hàng đợi bị tắt (chạy thẳng trong request), và bộ chạy lịch trong tiến
+ * trình web (`src/jobs/schedules.ts`). Một bản cài đặt duy nhất nghĩa là các chế
+ * độ không thể lệch hành vi.
  *
  * ---
  * HANDLER PHẢI CHẠY LẠI ĐƯỢC MÀ KHÔNG GÂY HẠI (idempotent)
@@ -76,7 +77,7 @@ export const jobHandlers: JobHandlers = {
   },
 
   /**
-   * Dọn MỌI bảng chỉ-tăng, chạy hằng ngày (xem `PURGE_CRON`).
+   * Dọn MỌI bảng chỉ-tăng, chạy hằng ngày (xem `CRON_PURGE_EXPIRED`).
    *
    * Bốn bảng dưới đây không bao giờ tự nhỏ đi: mỗi lần đăng nhập, mỗi lần bấm
    * "quên mật khẩu", mỗi hành động nhạy cảm, mỗi lần mở app đều thêm một dòng.
@@ -119,12 +120,34 @@ export const jobHandlers: JobHandlers = {
     if (count > 0) logger.info("Đã huỷ giao dịch quá hạn", { count });
   },
 
+  /**
+   * Xuất hoá đơn cho MỌI tháng đã kết thúc còn thiếu (tối đa 3 tháng gần nhất).
+   *
+   * Tự bù và chạy lại an toàn — xem `InvoiceService.generateMissing`. Bản trước
+   * chỉ chốt "tháng trước" đúng một lần: lần chạy mùng 1 hỏng là mất hẳn tháng đó.
+   *
+   * NÉM LỖI khi còn cơ sở/tháng xuất hỏng (sau khi đã xử lý hết phần còn lại):
+   * để BullMQ ghi job thất bại và thử lại — thử lại không xuất trùng, chỉ bù đúng
+   * phần còn thiếu. Nuốt lỗi ở đây là hoá đơn thiếu mà không ai biết.
+   */
   async "invoice:generate-monthly"() {
-    // Chạy ngày mùng 1 → chốt THÁNG TRƯỚC. Lùi lại 5 ngày để chắc chắn rơi vào
-    // tháng cũ dù lệch múi giờ hay job chạy trễ vài tiếng.
-    const truoc = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
-    const result = await new InvoiceService(prisma).generateForMonth(truoc);
-    logger.info("Đã xuất hoá đơn hoa hồng", result);
+    const result = await new InvoiceService(prisma).generateMissing();
+
+    logger.info("Đã xuất hoá đơn hoa hồng", {
+      periods: result.periods,
+      created: result.created,
+      skipped: result.skipped,
+      failed: result.failed.length,
+    });
+
+    if (result.failed.length > 0) {
+      const detail = result.failed
+        .map(
+          (failure) => `${failure.period} ${failure.venueId ?? "(cả tháng)"}: ${failure.message}`,
+        )
+        .join("; ");
+      throw new Error(`Xuất hoá đơn hoa hồng hỏng ${result.failed.length} chỗ — ${detail}`);
+    }
   },
 
   async "invoice:mark-overdue"() {

@@ -1,1 +1,3 @@
-# pnpm exec lint-staged
+# Chỉ lint + format những tệp ĐANG commit (cấu hình `lint-staged` trong package.json).
+# Gate đầy đủ là `pnpm check`; bỏ qua hook khi thật cần: `git commit --no-verify`.
+pnpm exec lint-staged

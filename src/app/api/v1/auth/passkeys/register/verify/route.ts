@@ -1,7 +1,7 @@
 import { clientIp, enforceRateLimit, requireApiUser } from "@/lib/api/auth";
 import { apiErrors, apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
-import { RATE_LIMITS } from "@/lib/rate-limit";
-import { verifyTicket } from "@/lib/tickets";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS } from "@/lib/rate-limit";
+import { consumeTicket, verifyTicket } from "@/lib/tickets";
 import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
 import { registerPasskeySchema } from "@/schemas/auth.schema";
 import { auditService } from "@/services/audit.service";
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const session = await requireApiUser(request);
-    await enforceRateLimit(request, "api:passkey", RATE_LIMITS.passkey);
+    await enforceRateLimit(request, RATE_LIMIT_BUCKETS.passkey, RATE_LIMITS.passkey);
 
     const body = await parseJsonBody(request, registerPasskeySchema);
     const ticket = await verifyTicket(body.challengeToken, "webauthn_reg");
@@ -26,6 +26,12 @@ export async function POST(request: Request) {
     // cho B dùng, và passkey của B được gắn vào tài khoản A.
     if (ticket.sub !== session.sub) {
       throw apiErrors.unauthenticated("Vé đăng ký passkey không thuộc về tài khoản này");
+    }
+
+    // Vé dùng một lần: nộp lại cùng phản hồi đăng ký thì dừng ở đây, thay vì
+    // chạy tới lúc ghi database rồi vấp ràng buộc trùng `credentialId` (500).
+    if (!(await consumeTicket(ticket))) {
+      throw apiErrors.unauthenticated("Phiên đăng ký passkey đã hết hạn. Vui lòng thử lại.");
     }
 
     const passkey = await webauthnService.verifyRegistration(

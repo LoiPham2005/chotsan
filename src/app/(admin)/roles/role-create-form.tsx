@@ -1,69 +1,102 @@
 "use client";
 
-import { useActionState, useEffect, useRef } from "react";
+import { useActionState } from "react";
+import { useFormStatus } from "react-dom";
 import { createRoleAction, type RoleFormState } from "./actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Notice } from "@/components/ui/notice";
 
 const initialState: RoleFormState = {};
 
+/**
+ * Form tạo vai trò.
+ *
+ * Báo lỗi (mã sai dạng, mã đã có) thì các ô dựng lại bằng chữ vừa gõ
+ * (`state.values`) — React 19 xoá trắng form sau khi action chạy xong. Tạo xong
+ * thì không có `values`: form trống để tạo tiếp.
+ */
 export function RoleCreateForm() {
-  const [state, formAction, isPending] = useActionState(createRoleAction, initialState);
-  const formRef = useRef<HTMLFormElement>(null);
-
-  useEffect(() => {
-    if (state.success) formRef.current?.reset();
-  }, [state]);
+  const [state, formAction] = useActionState(createRoleAction, initialState);
+  const values = state.values;
 
   return (
-    <form
-      ref={formRef}
-      action={formAction}
-      style={{ display: "flex", flexDirection: "column", gap: 12 }}
-    >
-      <div className="form-grid">
-        <Input
-          id="new-role-key"
-          name="key"
-          placeholder="KHOA_VAI_TRO (ví dụ: KE_TOAN)"
-          required
-          error={state.fieldErrors?.key?.[0]}
-          hint="Không đổi được sau khi tạo — khoá này nằm trong các phiên đăng nhập đang chạy."
-        />
+    <form action={formAction} className="grid gap-3">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="min-w-0">
+          <label htmlFor="new-role-key" className="mb-1.5 block text-sm font-semibold text-content">
+            Mã vai trò
+          </label>
+          <Input
+            id="new-role-key"
+            name="key"
+            placeholder="KE_TOAN"
+            required
+            defaultValue={values?.key}
+            error={state.fieldErrors?.key?.[0]}
+            hint="CHỮ HOA, số, gạch dưới. Không đổi được sau khi tạo."
+            className="font-mono uppercase"
+          />
+        </div>
 
-        <Input
-          id="new-role-name"
-          name="name"
-          placeholder="Tên hiển thị (ví dụ: Kế toán)"
-          required
-          error={state.fieldErrors?.name?.[0]}
-        />
+        <div className="min-w-0">
+          <label
+            htmlFor="new-role-name"
+            className="mb-1.5 block text-sm font-semibold text-content"
+          >
+            Tên hiển thị
+          </label>
+          <Input
+            id="new-role-name"
+            name="name"
+            placeholder="Kế toán"
+            required
+            defaultValue={values?.name}
+            error={state.fieldErrors?.name?.[0]}
+          />
+        </div>
 
-        <Input
-          id="new-role-description"
-          name="description"
-          placeholder="Mô tả (không bắt buộc)"
-          error={state.fieldErrors?.description?.[0]}
-        />
-      </div>
-
-      <div className="form-actions">
-        <Button type="submit" disabled={isPending}>
-          {isPending ? "Đang tạo…" : "+ Tạo vai trò"}
-        </Button>
+        <div className="min-w-0">
+          <label
+            htmlFor="new-role-description"
+            className="mb-1.5 block text-sm font-semibold text-content"
+          >
+            Mô tả <span className="font-normal text-muted">(không bắt buộc)</span>
+          </label>
+          <Input
+            id="new-role-description"
+            name="description"
+            placeholder="Đối soát hoá đơn hằng tháng"
+            defaultValue={values?.description}
+            error={state.fieldErrors?.description?.[0]}
+          />
+        </div>
       </div>
 
       {state.error && (
-        <div className="alert alert-danger" role="alert">
+        <Notice tone="danger" role="alert">
           {state.error}
-        </div>
+        </Notice>
       )}
 
       {state.success && (
-        <div className="alert alert-success" role="status">
+        <Notice tone="success" role="status">
           {state.success}
-        </div>
+        </Notice>
       )}
+
+      <div>
+        <SubmitButton />
+      </div>
     </form>
+  );
+}
+
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" disabled={pending}>
+      {pending ? "Đang tạo…" : "Tạo vai trò"}
+    </Button>
   );
 }

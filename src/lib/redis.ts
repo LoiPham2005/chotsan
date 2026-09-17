@@ -9,8 +9,9 @@ import { logger } from "@/lib/logger";
  * nối tới cùng một máy chủ, ba lần bắt tay, và ba nơi phải nhớ đăng ký handler
  * `error`. Redis giới hạn số kết nối, và cái giá đó nhân lên theo số instance.
  *
- * BullMQ là ngoại lệ có lý do: nó cần kết nối riêng ở chế độ blocking (BRPOP),
- * không dùng chung được với client thường — xem `infra/queue.ts`.
+ * BullMQ là ngoại lệ có lý do: nó cần kết nối riêng ở chế độ blocking (BZPOPMIN),
+ * không dùng chung được với client thường — và nó tự dựng kết nối bằng gói
+ * `ioredis` — xem `src/lib/queue.ts`.
  */
 
 type RedisClient = ReturnType<typeof createClient>;

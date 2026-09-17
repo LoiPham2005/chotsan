@@ -1,0 +1,73 @@
+# Máy chủ WebSocket — TIẾN TRÌNH RIÊNG với web.
+#
+# Vì sao cần unit riêng: `next start` là mô hình request/response, không giữ
+# được kết nối lâu dài. Nhét socket vào Next bằng custom server sẽ phá
+# `output: standalone`, và mỗi lần deploy web là rớt sạch kết nối đang mở.
+# Tách ra thì deploy web không đụng tới người đang online.
+#
+# ⚠️ File này từng THIẾU. Ai deploy theo hướng systemd sẽ có web chạy bình
+# thường nhưng KHÔNG có máy chủ WebSocket nào — không lỗi, không cảnh báo, chỉ
+# là realtime im lặng không hoạt động. Đường Docker và PM2 đều có, chỉ systemd
+# bỏ sót.
+#
+# ⚠️ DỰ ÁN KHÔNG DÙNG WEBSOCKET (`REALTIME_ENABLED=0`): phải tắt Ở TẦNG UNIT.
+# Tiến trình có tự thoát kèm lời giải thích, nhưng `Restart=always` bật lại nó
+# ngay. `scripts/deploy-vps.sh` đọc cờ trong /etc/chotsan/env và tự
+# `systemctl disable --now chotsan-realtime`; tắt tay thì dùng đúng lệnh đó.
+# Nhớ xoá luôn khối `/socket.io/*` trong Caddyfile.
+#
+# Cài đặt:
+#   sudo cp deploy/chotsan-realtime.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now chotsan-realtime
+#
+# Xem log:  journalctl -u chotsan-realtime -f
+
+[Unit]
+Description=ChốtSân realtime (Socket.IO)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+# Dừng hẳn nếu crash liên tục, thay vì quay vòng vô tận che mất lỗi thật.
+# Hai khoá này phải ở [Unit], KHÔNG phải [Service] — systemd đã chuyển chúng
+# sang đây từ bản 229; đặt nhầm chỗ thì nó chỉ ghi "Unknown key name" rồi bỏ qua.
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/var/www/chotsan
+
+# Dùng chung file env với web. SESSION_SECRET BẮT BUỘC phải giống hệt: token do
+# web/mobile cấp được verify ở đây, lệch một ký tự là mọi kết nối bị từ chối.
+EnvironmentFile=/etc/chotsan/env
+Environment=NODE_ENV=production
+Environment=REALTIME_PORT=3002
+
+# Bản build do esbuild gói (`pnpm realtime:build`) CHỈ gồm mã của dự án — gói npm
+# (socket.io, redis…) vẫn `require` từ node_modules của thư mục dự án, do
+# `pnpm install` trong scripts/deploy-vps.sh cài. Mặc định nghe 127.0.0.1 (biến `HOST`).
+ExecStart=/usr/bin/node realtime/dist/server.cjs
+
+Restart=always
+RestartSec=5
+
+# Siết quyền giống unit web: một lỗ RCE không kéo theo quyền trên cả máy.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# Chỉ cần ghi vào thư mục build; phần còn lại của hệ thống để chỉ-đọc.
+ReadWritePaths=/var/www/chotsan/realtime/dist
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=chotsan-realtime
+
+[Install]
+WantedBy=multi-user.target

@@ -6,19 +6,29 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * không dựa vào test của từng action.
  */
 
+const headerStore = new Headers();
+vi.mock("next/headers", () => ({ headers: () => Promise.resolve(headerStore) }));
 vi.mock("@/lib/auth", () => ({ getSession: vi.fn() }));
 vi.mock("@/services/permission.service", () => ({
-  permissionService: { can: vi.fn() },
+  permissionService: { can: vi.fn(), canOnVenue: vi.fn() },
 }));
 
 import { getSession } from "@/lib/auth";
+import { __clearRateLimits } from "@/lib/rate-limit";
 import { permissionService } from "@/services/permission.service";
-import { defineAction, defineAuthedAction } from "./define-action";
+import {
+  defineAction,
+  defineAuthedAction,
+  definePublicAction,
+  defineVenueAction,
+} from "./define-action";
 
 const session = { sub: "u-1", email: "a@b.com", typ: "access" as const, roles: ["KE_TOAN"] };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  headerStore.delete("x-forwarded-for");
+  await __clearRateLimits();
 });
 
 describe("defineAction", () => {
@@ -101,5 +111,101 @@ describe("defineAuthedAction", () => {
 
     expect(result.error).toContain("đăng nhập");
     expect(body).not.toHaveBeenCalled();
+  });
+});
+
+describe("defineVenueAction", () => {
+  it("chạy phần thân khi có quyền TRÊN ĐÚNG SÂN, và đưa venueId vào ngữ cảnh", async () => {
+    vi.mocked(getSession).mockResolvedValue(session);
+    vi.mocked(permissionService.canOnVenue).mockResolvedValue(true);
+
+    const body = vi.fn().mockResolvedValue({});
+    await defineVenueAction("booking:cancel", body)("v1", "tham-so");
+
+    expect(permissionService.canOnVenue).toHaveBeenCalledWith("u-1", "booking:cancel", "v1");
+    expect(body).toHaveBeenCalledWith({ session, actorId: "u-1", venueId: "v1" }, "tham-so");
+  });
+
+  it("thiếu quyền trên sân này → chặn, KHÔNG chạy phần thân", async () => {
+    // Có quyền ở sân khác không mở được sân này — đúng lỗ hổng của bản cũ:
+    // nhân viên sân A thao tác được sân B nếu tìm đúng endpoint.
+    vi.mocked(getSession).mockResolvedValue(session);
+    vi.mocked(permissionService.canOnVenue).mockImplementation((_user, _permission, venueId) =>
+      Promise.resolve(venueId === "v1"),
+    );
+
+    const body = vi.fn();
+    const result = await defineVenueAction("booking:cancel", body)("v2");
+
+    expect(result.error).toContain("trên sân này");
+    expect(body).not.toHaveBeenCalled();
+  });
+
+  it("chưa đăng nhập (hoặc phiên đã bị thu hồi) → chặn trước khi hỏi quyền", async () => {
+    vi.mocked(getSession).mockResolvedValue(null);
+
+    const body = vi.fn();
+    const result = await defineVenueAction("booking:cancel", body)("v1");
+
+    expect(result.error).toContain("đăng nhập");
+    expect(permissionService.canOnVenue).not.toHaveBeenCalled();
+    expect(body).not.toHaveBeenCalled();
+  });
+});
+
+describe("definePublicAction", () => {
+  const options = { key: "khai-chuyen-khoan", limit: 2, windowSeconds: 60 };
+
+  it("khách vãng lai: đếm theo IP do proxy tin cậy thêm vào, không theo phần tử client tự gửi", async () => {
+    vi.mocked(getSession).mockResolvedValue(null);
+    // `6.6.6.6` do client tự gửi; `203.0.113.7` do proxy nối vào cuối.
+    headerStore.set("x-forwarded-for", "6.6.6.6, 203.0.113.7");
+
+    const body = vi.fn().mockResolvedValue({ ok: true });
+    await definePublicAction("khách không có tài khoản", options, body)();
+
+    expect(body).toHaveBeenCalledWith({ session: null, actorId: null, ip: "203.0.113.7" });
+  });
+
+  it("vượt trần → chặn, KHÔNG chạy phần thân", async () => {
+    vi.mocked(getSession).mockResolvedValue(null);
+    headerStore.set("x-forwarded-for", "203.0.113.8");
+
+    const body = vi.fn().mockResolvedValue({});
+    const action = definePublicAction("khách không có tài khoản", options, body);
+
+    await action();
+    await action();
+    const blocked = await action();
+
+    expect(blocked.error).toContain("hơi nhanh");
+    expect(body).toHaveBeenCalledTimes(2);
+  });
+
+  it("đổi phần tử ĐẦU của X-Forwarded-For không lách được trần", async () => {
+    vi.mocked(getSession).mockResolvedValue(null);
+    const body = vi.fn().mockResolvedValue({});
+    const action = definePublicAction("khách không có tài khoản", options, body);
+
+    for (const fake of ["1.1.1.1", "2.2.2.2", "3.3.3.3"]) {
+      headerStore.set("x-forwarded-for", `${fake}, 203.0.113.9`);
+      await action();
+    }
+
+    expect(body).toHaveBeenCalledTimes(2);
+  });
+
+  it("đã đăng nhập: đếm theo NGƯỜI DÙNG — đổi mạng không lách được", async () => {
+    vi.mocked(getSession).mockResolvedValue(session);
+    const body = vi.fn().mockResolvedValue({});
+    const action = definePublicAction("khách không có tài khoản", options, body);
+
+    for (const ip of ["198.51.100.1", "198.51.100.2", "198.51.100.3"]) {
+      headerStore.set("x-forwarded-for", ip);
+      await action();
+    }
+
+    expect(body).toHaveBeenCalledTimes(2);
+    expect(body.mock.calls[0]![0]).toMatchObject({ session, actorId: "u-1" });
   });
 });

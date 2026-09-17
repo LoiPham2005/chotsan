@@ -5,6 +5,7 @@ import { useFormStatus } from "react-dom";
 import { decideVenueAction, type ApprovalState } from "@/app/(admin)/venue-approvals/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Notice } from "@/components/ui/notice";
 import { SportIcon, sportStyle } from "@/components/venue/sport-icon";
 import { fullDateLabel } from "@/lib/date";
 
@@ -20,6 +21,7 @@ export type PendingVenue = {
   courtCount: number;
   priceRuleCount: number;
   openDayCount: number;
+  hasBankAccount: boolean;
   ownerName: string | null;
   ownerEmail: string | null;
 };
@@ -28,24 +30,34 @@ export type PendingVenue = {
  * Một hồ sơ chờ duyệt.
  *
  * ---
- * BA CON SỐ QUYẾT ĐỊNH ĐƯỢC DUYỆT HAY KHÔNG
+ * BỐN THỨ QUYẾT ĐỊNH ĐƯỢC DUYỆT HAY KHÔNG
  *
- * Sân con đang bật, luật giá, và số ngày mở cửa. Thiếu bất kỳ thứ nào thì lưới
- * đặt sân hiện trống trơn hoặc giá 0đ — duyệt xong khách vào là thấy trang
- * hỏng. Nên ba con số đó đứng ngay cạnh nút duyệt, tô đỏ khi bằng 0, chứ không
- * bắt người duyệt tự đi mở từng tab kiểm tra.
+ * Sân con đang bật, luật giá, số ngày mở cửa, và tài khoản nhận tiền. Thiếu bất
+ * kỳ thứ nào thì lưới đặt sân hiện trống trơn, giá 0đ, hoặc trang thanh toán
+ * không có mã QR — duyệt xong khách vào là thấy trang hỏng. Nên chúng đứng ngay
+ * cạnh nút duyệt, tô đỏ khi thiếu, chứ không bắt người duyệt tự đi mở từng tab.
+ * (Cùng điều kiện với chốt chặn trong `VenueService.setStatus`.)
+ *
+ * ---
+ * TỪ CHỐI = TRẢ HỒ SƠ VỀ BẢN NHÁP, KÈM LÝ DO
+ *
+ * Không phải khoá. Chủ sân đọc lý do trên trang cài đặt, sửa, rồi gửi lại.
  */
 export function ApprovalRow({ venue }: { venue: PendingVenue }) {
   const [state, decide] = useActionState<ApprovalState, FormData>(decideVenueAction, {});
   const [showReject, setShowReject] = useState(false);
-  const style = sportStyle(venue.sportKey);
+  const sport = sportStyle(venue.sportKey);
 
-  const ready = venue.courtCount > 0 && venue.priceRuleCount > 0 && venue.openDayCount > 0;
+  const ready =
+    venue.courtCount > 0 &&
+    venue.priceRuleCount > 0 &&
+    venue.openDayCount > 0 &&
+    venue.hasBankAccount;
 
   if (state.ok) {
     return (
       <li className="rounded-token-lg border border-brand-line bg-brand-tint p-4">
-        <p className="font-medium text-brand-hover">
+        <p className="font-semibold text-brand-text">
           {venue.name} — {state.ok}
         </p>
       </li>
@@ -53,10 +65,10 @@ export function ApprovalRow({ venue }: { venue: PendingVenue }) {
   }
 
   return (
-    <li className="rounded-token-lg border border-line bg-surface p-4 shadow-nang-1">
-      <div className="flex items-start gap-3">
+    <li className="rounded-token-lg border border-line bg-surface p-4">
+      <div className="flex flex-wrap items-start gap-3">
         <span
-          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-token-md bg-gradient-to-br ${style.nen} ${style.mau}`}
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-token-md ${sport.tint} ${sport.text}`}
         >
           <SportIcon sportKey={venue.sportKey} />
         </span>
@@ -87,18 +99,26 @@ export function ApprovalRow({ venue }: { venue: PendingVenue }) {
         <Stat label="Sân con đang bật" value={venue.courtCount} />
         <Stat label="Luật giá" value={venue.priceRuleCount} />
         <Stat label="Ngày mở cửa" value={venue.openDayCount} />
+        <div className="flex items-baseline gap-1.5">
+          <dt className="text-muted">Tài khoản nhận tiền</dt>
+          <dd className={`font-bold ${venue.hasBankAccount ? "text-content" : "text-danger-text"}`}>
+            {venue.hasBankAccount ? "Đã khai" : "Chưa khai"}
+          </dd>
+        </div>
       </dl>
 
+      {/* Xám trung tính, không cam: đây là lời nhắc việc tiếp theo cho người
+          duyệt, không phải lỗi — các số 0 đã tô đỏ ngay ở trên. */}
       {!ready && (
-        <p className="mt-3 rounded-token-md bg-peak-tint px-3 py-2 text-sm text-peak-text">
-          Hồ sơ chưa đủ để mở bán. Duyệt bây giờ thì khách vào sẽ thấy lưới trống hoặc giá 0đ.
-        </p>
+        <Notice tone="neutral" className="mt-3">
+          Hồ sơ chưa đủ để mở bán — trả về để chủ sân khai nốt phần còn thiếu.
+        </Notice>
       )}
 
       {state.error && (
-        <p role="alert" className="alert alert-danger mt-3">
+        <Notice tone="danger" role="alert" className="mt-3">
           {state.error}
-        </p>
+        </Notice>
       )}
 
       <div className="mt-3 flex flex-wrap gap-2">
@@ -110,7 +130,7 @@ export function ApprovalRow({ venue }: { venue: PendingVenue }) {
 
         {!showReject && (
           <Button type="button" variant="outline" onClick={() => setShowReject(true)}>
-            Từ chối
+            Trả hồ sơ
           </Button>
         )}
       </div>
@@ -118,11 +138,12 @@ export function ApprovalRow({ venue }: { venue: PendingVenue }) {
       {showReject && (
         <form action={decide} className="mt-3 rounded-token-md border border-line bg-elevated p-3">
           <input type="hidden" name="venueId" value={venue.id} />
-          <input type="hidden" name="decision" value="ADMIN_LOCKED" />
+          <input type="hidden" name="decision" value="DRAFT" />
 
           <label htmlFor={`note-${venue.id}`} className="text-sm font-semibold text-content">
-            Lý do — chủ sân sẽ đọc câu này
+            Lý do trả hồ sơ — chủ sân sẽ đọc câu này để sửa
           </label>
+          {/* Báo lỗi thì dựng lại đúng lý do vừa gõ: React 19 đã xoá trắng form. */}
           <Input
             id={`note-${venue.id}`}
             name="note"
@@ -130,6 +151,7 @@ export function ApprovalRow({ venue }: { venue: PendingVenue }) {
             minLength={4}
             maxLength={300}
             placeholder="Ví dụ: thiếu ảnh sân và chưa khai bảng giá"
+            defaultValue={state.note}
             className="mt-1.5 bg-surface"
           />
 
@@ -149,7 +171,7 @@ function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div className="flex items-baseline gap-1.5">
       <dt className="text-muted">{label}</dt>
-      <dd className={`font-bold tabular-nums ${value === 0 ? "text-danger" : "text-content"}`}>
+      <dd className={`font-bold tabular-nums ${value === 0 ? "text-danger-text" : "text-content"}`}>
         {value}
       </dd>
     </div>
@@ -159,8 +181,8 @@ function Stat({ label, value }: { label: string; value: number }) {
 function ApproveButton({ ready }: { ready: boolean }) {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" disabled={pending || !ready} className={ready ? "shadow-chon" : ""}>
-      {pending ? "Đang duyệt…" : "Duyệt, cho mở bán"}
+    <Button type="submit" disabled={pending || !ready}>
+      {pending ? "Đang duyệt…" : ready ? "Duyệt, cho mở bán" : "Chưa duyệt được — hồ sơ còn thiếu"}
     </Button>
   );
 }
@@ -169,7 +191,7 @@ function RejectButton() {
   const { pending } = useFormStatus();
   return (
     <Button type="submit" variant="destructive" disabled={pending}>
-      {pending ? "Đang gửi…" : "Từ chối hồ sơ"}
+      {pending ? "Đang gửi…" : "Trả hồ sơ về cho chủ sân"}
     </Button>
   );
 }

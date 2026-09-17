@@ -17,13 +17,13 @@ const SPORTS = [
 ];
 
 export async function seedSports(prisma: PrismaClient): Promise<void> {
-  for (const mon of SPORTS) {
+  for (const sport of SPORTS) {
     await prisma.sport.upsert({
-      where: { key: mon.key },
+      where: { key: sport.key },
       // Cập nhật tên và thứ tự, KHÔNG đụng `isActive`: admin tắt một môn rồi
       // thì lần deploy sau không được tự bật lại.
-      update: { name: mon.name, sortOrder: mon.sortOrder },
-      create: mon,
+      update: { name: sport.name, sortOrder: sport.sortOrder },
+      create: sport,
     });
   }
 

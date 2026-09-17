@@ -24,6 +24,15 @@ vi.mock("@/services/permission.service", () => ({
   permissionService: { can: vi.fn(), canActOnResource: vi.fn() },
 }));
 
+// Phiên chưa bị thu hồi; nhật ký không ghi thật — thứ đang kiểm là quyền.
+vi.mock("@/services/security-stamp.service", () => ({
+  securityStampService: { isTokenStillValid: vi.fn().mockResolvedValue(true) },
+}));
+vi.mock("@/services/audit.service", () => ({
+  auditService: { record: vi.fn().mockResolvedValue(undefined) },
+}));
+
+import { InsufficientRoleLevelError } from "@/lib/errors";
 import { buildPaginationMeta, type Paginated } from "@/schemas/common.schema";
 import { signSession, type SessionPayload } from "@/lib/session";
 import { userService } from "@/services/user.service";
@@ -148,7 +157,7 @@ describe("POST /api/v1/users", () => {
     expect(userService.create).not.toHaveBeenCalled();
   });
 
-  it("201 khi ADMIN tạo user hợp lệ, và ADMIN được phép chỉ định vai trò", async () => {
+  it("201 khi ADMIN tạo user hợp lệ — và actorId đi xuống để service áp chốt Role.level", async () => {
     vi.mocked(userService.create).mockResolvedValue({
       id: "u-2",
       email: "new@example.com",
@@ -171,8 +180,28 @@ describe("POST /api/v1/users", () => {
     });
 
     expect(response.status).toBe(201);
-    // Khác hẳn form trên web: ở đó `roleKeys` bị bỏ qua hoàn toàn vì bất kỳ ai
-    // cũng gửi được field ẩn. Ở đây người gọi đã qua `user:create`.
-    expect(vi.mocked(userService.create).mock.calls[0]?.[0].roleKeys).toEqual(["ADMIN"]);
+    /*
+     * Lỗi thật trước đây: route gọi `create(body)` không kèm người thao tác, và
+     * bài test này còn khẳng định "ADMIN chỉ định được mọi vai trò" — tức là
+     * ADMIN tạo được tài khoản SUPER_ADMIN. Giờ `actorId` bắt buộc, và CHÍNH
+     * service quyết định vai trò nào ADMIN được gán (bài kế tiếp).
+     */
+    const [input, options] = vi.mocked(userService.create).mock.calls[0]!;
+    expect(input.roleKeys).toEqual(["ADMIN"]);
+    expect(options).toEqual({ actorId: "admin-1" });
+  });
+
+  it("403 khi service chặn vì vai trò vượt bậc người tạo (ADMIN tạo SUPER_ADMIN)", async () => {
+    vi.mocked(userService.create).mockRejectedValue(
+      new InsufficientRoleLevelError("Bạn không đủ thẩm quyền để gán vai trò: SUPER_ADMIN"),
+    );
+
+    const response = await post(await signSession(admin), {
+      email: "new@example.com",
+      roleKeys: ["SUPER_ADMIN"],
+    });
+
+    expect(response.status).toBe(403);
+    expect(((await response.json()) as ErrorBody).error.code).toBe("FORBIDDEN");
   });
 });

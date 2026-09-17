@@ -1,7 +1,7 @@
 import { enforceRateLimit } from "@/lib/api/auth";
 import { apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
 import { logger } from "@/lib/logger";
-import { RATE_LIMITS } from "@/lib/rate-limit";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS } from "@/lib/rate-limit";
 import { verifyEmailSchema } from "@/schemas/auth.schema";
 import { authService } from "@/services/auth.service";
 
@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(request: Request) {
   try {
-    await enforceRateLimit(request, "api:verify-email", RATE_LIMITS.passwordChange);
+    await enforceRateLimit(request, RATE_LIMIT_BUCKETS.emailVerify, RATE_LIMITS.passwordChange);
 
     const body = await parseJsonBody(request, verifyEmailSchema);
     const user = await authService.verifyEmail(body.token);

@@ -1,8 +1,9 @@
 "use client";
 
 import { useActionState } from "react";
+import { Notice } from "@/components/ui/notice";
 import { forgotPasswordAction, type AuthFormState } from "../actions";
-import { AuthFields, FORM_STYLE, type Field } from "../auth-form";
+import { AUTH_FORM_CLASS, AuthFields, type Field } from "../auth-form";
 
 const initialState: AuthFormState = {};
 
@@ -26,14 +27,14 @@ export function ForgotPasswordForm() {
   // tới nơi.
   if (state.success) {
     return (
-      <div className="alert alert-success" role="status">
+      <Notice tone="success" role="status">
         {state.success}
-      </div>
+      </Notice>
     );
   }
 
   return (
-    <form action={formAction} style={FORM_STYLE}>
+    <form action={formAction} className={AUTH_FORM_CLASS}>
       <AuthFields
         fields={FIELDS}
         state={state}

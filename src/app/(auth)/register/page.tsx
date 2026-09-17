@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getSession } from "@/lib/auth";
+import { safeRedirectPath } from "@/lib/safe-redirect";
+import { AuthHeader } from "../auth-form";
 import { OAuthButtons } from "../oauth-buttons";
 import { RegisterForm } from "./register-form";
 
@@ -14,23 +18,26 @@ export default async function RegisterPage({
   // link "Đăng nhập" — người bấm nhầm sang đây rồi quay lại vẫn về đúng chỗ.
   const { next } = await searchParams;
 
+  // Đã đăng nhập THẬT thì về `next` — kiểm ở đây, không ở proxy, vì proxy không
+  // biết phiên đã bị thu hồi (xem ghi chú ở trang /login).
+  if (await getSession()) redirect(safeRedirectPath(next, "/"));
+
   return (
-    <main className="container" style={{ maxWidth: 440 }}>
-      <div className="card">
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: 4 }}>Tạo tài khoản</h1>
-        <p style={{ color: "var(--text-muted)", fontSize: "0.9rem", marginBottom: 24 }}>
-          Tài khoản mới luôn được tạo với quyền USER.
-        </p>
+    <>
+      {/* Câu dẫn nói điều người đăng ký quan tâm — đặt sân, xem lại, huỷ — chứ
+          không nói tên vai trò kỹ thuật ("quyền USER") mà khách không hiểu. */}
+      <AuthHeader title="Tạo tài khoản">
+        Để đặt sân, xem lại và tự huỷ lượt đặt của bạn bất cứ lúc nào.
+      </AuthHeader>
 
-        <OAuthButtons next={next} />
+      <OAuthButtons next={next} />
 
-        <RegisterForm nextPath={next} />
+      <RegisterForm nextPath={next} />
 
-        <p style={{ marginTop: 20, fontSize: "0.9rem", color: "var(--text-muted)" }}>
-          Đã có tài khoản?{" "}
-          <Link href={next ? `/login?next=${encodeURIComponent(next)}` : "/login"}>Đăng nhập</Link>
-        </p>
-      </div>
-    </main>
+      <p className="mt-5 text-sm text-muted">
+        Đã có tài khoản?{" "}
+        <Link href={next ? `/login?next=${encodeURIComponent(next)}` : "/login"}>Đăng nhập</Link>
+      </p>
+    </>
   );
 }

@@ -1,6 +1,7 @@
 import "server-only";
 import { decodeIdToken, type ExchangedTokens } from "./client";
-import { OAuthExchangeError, type OAuthProfile, type OAuthProviderId } from "./types";
+import type { OAuthProfile, OAuthProviderId } from "./types";
+import { ProviderExchangeError } from "@/lib/errors";
 
 /**
  * `user` chỉ được Apple gửi (qua form POST, không phải token response) trong
@@ -14,7 +15,9 @@ async function fetchGithubProfile(accessToken: string): Promise<OAuthProfile> {
   const headers = {
     Authorization: `Bearer ${accessToken}`,
     Accept: "application/vnd.github+json",
-    "User-Agent": "nextjs-prisma-base",
+    // GitHub TỪ CHỐI request không có User-Agent (403). Giá trị chỉ cần định
+    // danh được ứng dụng trong log của họ.
+    "User-Agent": "ChotSan",
   };
 
   const [userRes, emailsRes] = await Promise.all([
@@ -22,7 +25,7 @@ async function fetchGithubProfile(accessToken: string): Promise<OAuthProfile> {
     fetch("https://api.github.com/user/emails", { headers }),
   ]);
 
-  if (!userRes.ok) throw new OAuthExchangeError("github", await userRes.text());
+  if (!userRes.ok) throw new ProviderExchangeError("github", await userRes.text());
 
   const user = (await userRes.json()) as { id: number; name: string | null; login: string };
 
@@ -53,7 +56,7 @@ async function fetchFacebookProfile(accessToken: string): Promise<OAuthProfile> 
   url.searchParams.set("access_token", accessToken);
 
   const response = await fetch(url);
-  if (!response.ok) throw new OAuthExchangeError("facebook", await response.text());
+  if (!response.ok) throw new ProviderExchangeError("facebook", await response.text());
 
   const profile = (await response.json()) as { id: string; name?: string; email?: string };
 
@@ -93,11 +96,11 @@ export async function fetchOAuthProfile(
     case "facebook":
       return fetchFacebookProfile(tokens.accessToken);
     case "google": {
-      if (!tokens.idToken) throw new OAuthExchangeError(provider, "Thiếu id_token");
+      if (!tokens.idToken) throw new ProviderExchangeError(provider, "Thiếu id_token");
       return fromIdToken("google", tokens.idToken);
     }
     case "apple": {
-      if (!tokens.idToken) throw new OAuthExchangeError(provider, "Thiếu id_token");
+      if (!tokens.idToken) throw new ProviderExchangeError(provider, "Thiếu id_token");
       const profile = fromIdToken("apple", tokens.idToken);
       const name = appleUser?.name;
       if (name) {

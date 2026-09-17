@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
+import { PERMISSIONS } from "@/lib/permissions";
 import { PermissionService } from "./permission.service";
 
 /**
@@ -18,6 +19,7 @@ type Member = {
   role: "OWNER" | "STAFF";
   status: "ACTIVE" | "INVITED" | "DISABLED";
   permissions: string[];
+  venue: { deletedAt: Date | null };
 };
 
 function createService(member: Member | null, globalPermissions: string[] = []) {
@@ -31,8 +33,35 @@ function createService(member: Member | null, globalPermissions: string[] = []) 
   return service;
 }
 
-const OWNER: Member = { role: "OWNER", status: "ACTIVE", permissions: [] };
-const STAFF: Member = { role: "STAFF", status: "ACTIVE", permissions: [] };
+/**
+ * Bản LỌC THẬT theo khoá `(venueId, userId)` — cho các bài có nhiều sân, nơi
+ * mock trả bừa một thành viên sẽ che mất đúng lỗi "quyền sân A dùng ở sân B".
+ */
+function createServiceWithMembers(
+  members: Array<Member & { venueId: string; userId: string }>,
+  globalPermissions: string[] = [],
+) {
+  const findUnique = vi.fn(
+    ({ where }: { where: { venueId_userId: { venueId: string; userId: string } } }) =>
+      Promise.resolve(
+        members.find(
+          (member) =>
+            member.venueId === where.venueId_userId.venueId &&
+            member.userId === where.venueId_userId.userId,
+        ) ?? null,
+      ),
+  );
+  const db = { venueMember: { findUnique } } as unknown as PrismaClient;
+
+  const service = new PermissionService(db);
+  vi.spyOn(service, "permissionsFor").mockResolvedValue(new Set(globalPermissions) as never);
+
+  return service;
+}
+
+const LIVE_VENUE = { deletedAt: null };
+const OWNER: Member = { role: "OWNER", status: "ACTIVE", permissions: [], venue: LIVE_VENUE };
+const STAFF: Member = { role: "STAFF", status: "ACTIVE", permissions: [], venue: LIVE_VENUE };
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -148,45 +177,71 @@ describe("canOnVenue — quản trị nền tảng", () => {
   });
 });
 
-describe("venuesWithPermission", () => {
-  function serviceWithMembers(members: unknown[], globalPermissions: string[] = []) {
-    const db = {
-      venueMember: { findMany: vi.fn().mockResolvedValue(members) },
-    } as unknown as PrismaClient;
-    const service = new PermissionService(db);
-    vi.spyOn(service, "permissionsFor").mockResolvedValue(new Set(globalPermissions) as never);
-    return service;
-  }
+describe("canOnVenue — sân đã xoá mềm hoặc đang bị khoá", () => {
+  it("sân đã xoá mềm: chủ và nhân viên cũ mất quyền", async () => {
+    const deleted = { deletedAt: new Date("2026-09-01T00:00:00Z") };
 
-  it("trả null nghĩa là MỌI sân, không phải không có sân nào", async () => {
-    // Trả danh sách id cho quản trị viên nghĩa là kéo hàng nghìn dòng mỗi lần
-    // mở màn hình. `null` là "không cần lọc".
-    const service = serviceWithMembers([], ["booking:read"]);
-
-    expect(await service.venuesWithPermission("admin", "booking:read")).toBeNull();
+    expect(
+      await createService({ ...OWNER, venue: deleted }).canOnVenue("u1", "booking:read", "v1"),
+    ).toBe(false);
+    expect(
+      await createService({ ...STAFF, venue: deleted }).canOnVenue("u2", "booking:read", "v1"),
+    ).toBe(false);
   });
 
-  it("chỉ trả sân mà người đó thật sự có quyền", async () => {
-    const service = serviceWithMembers([
-      { venueId: "v1", role: "OWNER", permissions: [] },
-      { venueId: "v2", role: "STAFF", permissions: [] },
-      { venueId: "v3", role: "STAFF", permissions: ["report:read"] },
-    ]);
+  it("quản trị nền tảng vẫn xem được sân đã xoá — cần khi xử lý khiếu nại", async () => {
+    const service = createService({ ...OWNER, venue: { deletedAt: new Date() } }, ["booking:read"]);
 
-    expect(await service.venuesWithPermission("u1", "report:read")).toEqual(["v1", "v3"]);
-    // `booking:lấy` nằm trong bộ mặc định của STAFF nên cả ba sân đều được.
-    expect(await service.venuesWithPermission("u1", "booking:read")).toEqual(["v1", "v2", "v3"]);
+    expect(await service.canOnVenue("admin", "booking:read", "v1")).toBe(true);
+  });
+});
+
+describe("venuePermissions — mọi quyền trên một sân trong một lượt", () => {
+  const members = [
+    { ...OWNER, venueId: "v1", userId: "chu" },
+    { ...STAFF, venueId: "v1", userId: "nv", permissions: ["payment:confirm"] },
+    // Nhân viên sân v2 KHÔNG có gì ở v1 — ca lệch sân.
+    { ...STAFF, venueId: "v2", userId: "nv2", permissions: ["pricing:update"] },
+  ];
+
+  it("chủ sân có cả nhóm chỉ-chủ-sân; nhân viên có mặc định + phần được tick", async () => {
+    const service = createServiceWithMembers(members);
+
+    const owner = await service.venuePermissions("chu", "v1");
+    expect(owner.has("payout:manage")).toBe(true);
+    expect(owner.has("venue:transfer")).toBe(true);
+
+    const staff = await service.venuePermissions("nv", "v1");
+    expect(staff.has("booking:read")).toBe(true);
+    expect(staff.has("payment:confirm")).toBe(true);
+    expect(staff.has("pricing:update")).toBe(false);
+    expect(staff.has("payout:manage")).toBe(false);
   });
 
-  it("quyền chỉ-chủ-sân chỉ trả về sân mình sở hữu", async () => {
-    const service = serviceWithMembers(
-      [
-        { venueId: "v1", role: "OWNER", permissions: [] },
-        { venueId: "v2", role: "STAFF", permissions: ["payout:manage"] },
-      ],
-      ["payout:manage"],
-    );
+  it("quyền tick ở sân B không mang sang sân A", async () => {
+    const service = createServiceWithMembers(members);
 
-    expect(await service.venuesWithPermission("u1", "payout:manage")).toEqual(["v1"]);
+    expect((await service.venuePermissions("nv2", "v1")).size).toBe(0);
+    expect((await service.venuePermissions("nv2", "v2")).has("pricing:update")).toBe(true);
+  });
+
+  it("LUÔN khớp canOnVenue với mọi quyền — giao diện và action không được nói hai lời", async () => {
+    const cases = [
+      { userId: "chu", venueId: "v1", global: [] },
+      { userId: "nv", venueId: "v1", global: [] },
+      { userId: "nv2", venueId: "v1", global: [] },
+      { userId: "admin", venueId: "v1", global: ["booking:read", "payout:manage", "user:read"] },
+    ];
+
+    for (const item of cases) {
+      const service = createServiceWithMembers(members, item.global);
+      const all = await service.venuePermissions(item.userId, item.venueId);
+
+      for (const permission of PERMISSIONS) {
+        expect(all.has(permission), `${item.userId} · ${permission} · ${item.venueId}`).toBe(
+          await service.canOnVenue(item.userId, permission, item.venueId),
+        );
+      }
+    }
   });
 });

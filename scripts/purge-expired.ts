@@ -1,68 +1,44 @@
 import "dotenv/config";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
-import { tokenService } from "@/services/token.service";
-import { verificationService } from "@/services/verification.service";
-import { auditService } from "@/services/audit.service";
+import { jobHandlers } from "@/jobs/handlers";
 
 /**
- * Dọn token đã hết hạn hoặc đã dùng.
+ * Dọn dữ liệu chỉ-tăng (token hết hạn, nhật ký cũ, thiết bị chết) — chạy TAY
+ * hoặc theo lịch của máy chủ.
  *
  * ---
- * VÌ SAO CẦN CHẠY ĐỊNH KỲ
+ * VÌ SAO GỌI THẲNG HANDLER CỦA JOB
  *
- * `refresh_tokens` và `verification_tokens` là hai bảng CHỈ TĂNG. Mỗi lần đăng
- * nhập trên điện thoại là một dòng refresh token; mỗi lần ai đó bấm "quên mật
- * khẩu" là một dòng verification token — kể cả khi họ không bao giờ mở email.
- * Không có gì tự xoá chúng.
+ * Việc dọn đã chạy tự động theo lịch `maintenance-purge-expired` (worker, hoặc
+ * chính tiến trình web khi `QUEUE_ENABLED=0` — xem `src/jobs/schedules.ts`).
+ * Script này là đường chạy tay của CÙNG handler đó.
  *
- * Cả hai service đều đã có sẵn `purgeExpired()` kèm ghi chú "gọi định kỳ bằng
- * cron", nhưng trước file này KHÔNG có cron nào gọi cả. Hai bảng cứ phình ra,
- * và thứ hỏng trước tiên là chính truy vấn tra token lúc đăng nhập.
+ * Bản trước tự viết lại các bước dọn và lệch khỏi handler: giữ nhật ký 90 ngày
+ * trong khi `AUDIT_RETENTION_DAYS` mặc định 365, và không dọn thiết bị cũ. Chạy
+ * tay một lần là xoá mất 9 tháng nhật ký mà cấu hình nói phải giữ.
  *
  * ---
  * CÁCH CHẠY
  *
  *   pnpm db:purge
  *
- * Trên máy chủ, gọi nó theo lịch — xem `deploy/nextjs-base-purge.timer`
- * (systemd) hoặc mục cron trong README.
- *
- * An toàn khi chạy nhiều lần và chạy song song: cả hai truy vấn đều là
- * `deleteMany` theo điều kiện thời gian, không có bước đọc-rồi-ghi nào để mà
- * tranh nhau.
+ * Trên máy chủ, gọi nó theo lịch — xem `deploy/chotsan-purge.timer` (systemd).
+ * An toàn khi chạy nhiều lần và chạy song song: mọi truy vấn đều là
+ * `deleteMany` theo điều kiện thời gian, không có bước đọc-rồi-ghi nào để tranh.
  */
 async function main() {
   const startedAt = Date.now();
 
-  // Chạy tuần tự chứ không song song: hai lệnh DELETE cùng lúc trên cùng một
-  // connection pool nhỏ chỉ làm chậm nhau, mà đây là tác vụ nền không ai đợi.
-  const refreshTokens = await tokenService.purgeExpired();
-  const verificationTokens = await verificationService.purgeExpired();
+  // Handler tự ghi log số dòng đã xoá của từng bảng.
+  await jobHandlers["maintenance:purge-expired"]({});
 
-  /*
-   * Nhật ký thao tác cũng là bảng chỉ tăng, nhưng giữ LÂU HƠN token rất nhiều.
-   *
-   * 90 ngày là con số cho vận hành: đủ để điều tra "tháng trước ai đổi phân
-   * quyền". Nếu bạn có yêu cầu tuân thủ (kế toán, y tế, tài chính) thì con số
-   * này phải do quy định quyết định, có thể là nhiều năm — và đừng bao giờ hạ
-   * nó xuống chỉ vì database đang đầy.
-   */
-  const auditDays = Number(process.env.AUDIT_RETENTION_DAYS ?? 90);
-  const auditLogs = await auditService.purgeOlderThan(auditDays);
-
-  logger.info("Dọn dữ liệu hết hạn xong", {
-    refreshTokens,
-    verificationTokens,
-    auditLogs,
-    auditRetentionDays: auditDays,
-    durationMs: Date.now() - startedAt,
-  });
+  logger.info("Dọn dữ liệu hết hạn xong", { durationMs: Date.now() - startedAt });
 }
 
 main()
   .catch((error: unknown) => {
-    logger.error("Dọn token hết hạn thất bại", error);
+    logger.error("Dọn dữ liệu hết hạn thất bại", error);
     // Thoát khác 0 để cron/systemd ghi nhận là chạy hỏng. Im lặng thất bại thì
     // bảng vẫn phình mà không ai biết.
     process.exitCode = 1;

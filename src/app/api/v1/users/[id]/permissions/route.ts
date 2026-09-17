@@ -1,6 +1,8 @@
-import { requireApiPermission } from "@/lib/api/auth";
+import { clientIp, requireApiPermission } from "@/lib/api/auth";
 import { apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
+import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
 import { setUserPermissionSchema } from "@/schemas/user.schema";
+import { auditService } from "@/services/audit.service";
 import { permissionService } from "@/services/permission.service";
 import { userService } from "@/services/user.service";
 
@@ -17,6 +19,9 @@ type RouteContext = { params: Promise<{ id: string }> };
  *
  * Thứ tự áp dụng: hợp mọi vai trò → cộng phần `isGranted: true` → TRỪ phần
  * `isGranted: false`. Cấm luôn thắng, kể cả khi một vai trò khác đang cho.
+ *
+ * Chốt ở service: không đụng người ngang/trên bậc mình, và CẤP thì người cấp
+ * phải đang có đúng quyền đó (`PermissionNotHeldError`).
  */
 export async function GET(request: Request, { params }: RouteContext) {
   try {
@@ -41,6 +46,21 @@ export async function PUT(request: Request, { params }: RouteContext) {
     await userService.setUserPermission(id, body.permissionKey, body.isGranted, {
       actorId: session.sub,
       expiresAt: body.expiresAt ?? null,
+    });
+
+    await auditService.record({
+      action: AUDIT_ACTIONS.USER_PERMISSION_OVERRIDDEN,
+      entity: "user",
+      entityId: id,
+      actorId: session.sub,
+      actorEmail: session.email,
+      metadata: {
+        permission: body.permissionKey,
+        isGranted: body.isGranted,
+        expiresAt: body.expiresAt?.toISOString() ?? null,
+      },
+      ip: clientIp(request),
+      userAgent: request.headers.get("user-agent"),
     });
 
     return apiOk({ permissions: await permissionService.explainFor(id) });

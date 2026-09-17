@@ -1,6 +1,9 @@
 /**
- * Bốn provider hỗ trợ. Union cứng — thêm provider mới bắt buộc phải cập nhật
- * `PROVIDERS` trong `config.ts`, TypeScript sẽ bắt lỗi mọi chỗ code còn thiếu.
+ * Bốn provider hỗ trợ — NGUỒN DUY NHẤT của danh sách này (schema, route và
+ * giao diện đều import từ đây). Union cứng: thêm provider mới bắt buộc phải cập
+ * nhật `PROVIDER_CONFIG` trong `config.ts`, TypeScript bắt mọi chỗ còn thiếu.
+ *
+ * Lớp lỗi OAuth KHÔNG nằm ở đây mà ở `@/lib/errors` — xem ghi chú ở đó.
  */
 export const OAUTH_PROVIDERS = ["google", "github", "facebook", "apple"] as const;
 export type OAuthProviderId = (typeof OAUTH_PROVIDERS)[number];
@@ -21,35 +24,3 @@ export type OAuthProfile = {
   email: string | null;
   fullName: string | null;
 };
-
-export class OAuthProviderNotConfiguredError extends Error {
-  constructor(readonly provider: OAuthProviderId) {
-    super(`Đăng nhập bằng ${provider} chưa được cấu hình`);
-    this.name = "OAuthProviderNotConfiguredError";
-  }
-}
-
-export class OAuthStateMismatchError extends Error {
-  constructor() {
-    super("Phiên đăng nhập OAuth không hợp lệ hoặc đã hết hạn");
-    this.name = "OAuthStateMismatchError";
-  }
-}
-
-export class OAuthEmailRequiredError extends Error {
-  constructor(readonly provider: OAuthProviderId) {
-    super(
-      `Tài khoản ${provider} của bạn không có email đã xác thực để liên kết. ` +
-        `Vui lòng công khai/xác thực email trên ${provider} rồi thử lại.`,
-    );
-    this.name = "OAuthEmailRequiredError";
-  }
-}
-
-export class OAuthExchangeError extends Error {
-  constructor(provider: OAuthProviderId, cause?: unknown) {
-    super(`Không đăng nhập được bằng ${provider}. Vui lòng thử lại.`);
-    this.name = "OAuthExchangeError";
-    this.cause = cause;
-  }
-}

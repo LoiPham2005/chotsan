@@ -12,7 +12,9 @@ import {
   type PickedSlot,
 } from "@/components/booking/slot-grid";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { fieldClassName, Input } from "@/components/ui/input";
+import { Notice } from "@/components/ui/notice";
+import { cn } from "@/lib/cn";
 import { encodeSelection, formatHhMm, formatVnd, SLOT_MINUTES, slotsToRanges } from "@/lib/slots";
 import type { DayAvailability } from "@/services/availability.service";
 
@@ -42,24 +44,35 @@ import type { DayAvailability } from "@/services/availability.service";
  * Các ô đã chọn được gói vào `?chon=` của đường quay lại (`encodeSelection`),
  * trang đọc ra thành `initialSelection`, và lưới dựng lại đúng như lúc rời đi.
  *
- * KHÔNG tự bấm đặt thay khách: giữ chỗ là bắt đầu đếm ngược 10 phút thanh
- * toán, và giá có thể đã đổi trong lúc họ đăng nhập. Việc của trang là đưa họ
- * về đúng chỗ, sát cạnh nút đặt — bấm hay không là quyết định của họ.
+ * KHÔNG tự bấm đặt thay khách: giữ chỗ là bắt đầu đếm ngược hạn thanh toán,
+ * và giá có thể đã đổi trong lúc họ đăng nhập. Việc của trang là đưa họ về
+ * đúng chỗ, sát cạnh nút đặt — bấm hay không là quyết định của họ.
+ *
+ * ---
+ * Ô NHẬP CÓ KIỂM SOÁT
+ *
+ * React 19 tự xoá form sau khi action trả về — KỂ CẢ khi action báo lỗi. Ô số
+ * điện thoại và ghi chú mà để tự do thì khách gõ sai một số, bấm đặt, đọc lỗi,
+ * và thấy cả hai ô trống trơn. Giữ giá trị trong state thì lỗi hiện ra mà chữ
+ * vẫn còn nguyên để sửa.
  */
 export function SelectAndBook({
   day,
   venueId,
   date,
-  nguoiDung,
-  duongDanHienTai,
+  user,
+  currentPath,
+  holdMinutes,
   initialSelection = [],
 }: {
   day: DayAvailability;
   venueId: string;
   date: string;
   /** `null` = chưa đăng nhập. */
-  nguoiDung: { ten: string; soDienThoai: string | null } | null;
-  duongDanHienTai: string;
+  user: { name: string; phone: string | null } | null;
+  currentPath: string;
+  /** Hạn giữ chỗ THẬT của sân — câu "chỗ được giữ N phút" không được viết cứng. */
+  holdMinutes: number;
   /** Lựa chọn mang về từ trang đăng nhập (`?chon=`), CHƯA kiểm còn trống hay không. */
   initialSelection?: readonly { courtId: string; minute: number }[];
 }) {
@@ -69,6 +82,8 @@ export function SelectAndBook({
   const [picked, setPicked] = useState<Record<string, PickedSlot>>(restored);
   const [axis, setAxis] = useState<GridAxis>("court-rows");
   const [state, formAction] = useActionState<HoldBookingState, FormData>(holdBookingAction, {});
+  const [phone, setPhone] = useState("");
+  const [note, setNote] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
 
   const restoredCount = Object.keys(restored).length;
@@ -118,12 +133,20 @@ export function SelectAndBook({
       window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
     }
 
-    if (nguoiDung === null || restoredCount === 0) return;
+    if (user === null || restoredCount === 0) return;
 
     // Nhịp sau: App Router cuộn trang mới lên đầu ở pha layout; cuộn ngay bây
     // giờ có thể bị chính lần cuộn đó đè mất.
+    //
+    // Người bật "giảm chuyển động" trong hệ điều hành thì NHẢY thẳng tới form,
+    // không lướt: chuyển động dài trên màn hình là thứ gây chóng mặt cho đúng
+    // những người đã tắt nó đi.
     const frame = requestAnimationFrame(() => {
-      formRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      formRef.current?.scrollIntoView({
+        behavior: reduceMotion ? "auto" : "smooth",
+        block: "center",
+      });
     });
     return () => cancelAnimationFrame(frame);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -146,8 +169,8 @@ export function SelectAndBook({
 
   // Đường quay lại sau đăng nhập/đăng ký: đúng sân, đúng ngày, đúng các ô.
   const returnPath = hasSelection
-    ? `${duongDanHienTai}${duongDanHienTai.includes("?") ? "&" : "?"}chon=${encodeSelection(list)}`
-    : duongDanHienTai;
+    ? `${currentPath}${currentPath.includes("?") ? "&" : "?"}chon=${encodeSelection(list)}`
+    : currentPath;
 
   return (
     <>
@@ -162,8 +185,8 @@ export function SelectAndBook({
       <form
         ref={formRef}
         action={formAction}
-        id="dat-san"
-        className="mt-4 scroll-mt-24 overflow-hidden rounded-token-lg border border-line bg-surface shadow-nang-1"
+        id="booking-form"
+        className="mt-4 scroll-mt-24 overflow-hidden rounded-token-lg border border-line bg-surface"
       >
         <input type="hidden" name="venueId" value={venueId} />
         <input type="hidden" name="date" value={date} />
@@ -173,7 +196,7 @@ export function SelectAndBook({
           value={JSON.stringify(list.map(({ courtId, minute }) => ({ courtId, minute })))}
         />
 
-        {nguoiDung !== null && restoredCount > 0 && hasSelection && (
+        {user !== null && restoredCount > 0 && hasSelection && (
           <div
             role="status"
             className="flex items-start gap-2.5 border-b border-brand-line bg-brand-tint px-4 py-3"
@@ -201,13 +224,16 @@ export function SelectAndBook({
           </div>
         )}
 
+        {/* XÁM, không cam, không đỏ: khung đã có người đặt là chuyện bình thường
+            (SKILL.md §2 "kín chỗ … tuyệt đối không đỏ"), và cam chỉ nói giờ vàng. */}
         {droppedCount > 0 && (
-          <p
+          <Notice
+            tone="neutral"
             role="status"
-            className="border-b border-peak-line bg-peak-tint px-4 py-3 text-sm text-peak-text"
+            className="rounded-none border-x-0 border-t-0 px-4 py-3"
           >
             {droppedCount} khung bạn chọn trước đó không còn trống nên đã được bỏ ra.
-          </p>
+          </Notice>
         )}
 
         {hasSelection && (
@@ -216,10 +242,11 @@ export function SelectAndBook({
               <p className="text-xs font-bold uppercase tracking-wide text-subtle">
                 Đã chọn ({list.length} khung · {ranges.length} lượt đặt)
               </p>
+              {/* Chữ nhỏ nhưng vùng bấm đủ 44px (`after:`), không làm dòng cao lên. */}
               <button
                 type="button"
                 onClick={() => setPicked({})}
-                className="text-xs font-semibold text-muted hover:text-danger"
+                className="relative text-xs font-semibold text-muted after:absolute after:-inset-x-2 after:-inset-y-3.5 hover:text-danger-text"
               >
                 Bỏ chọn tất cả
               </button>
@@ -232,7 +259,7 @@ export function SelectAndBook({
                     type="button"
                     onClick={() => toggle(item.courtId, item.minute)}
                     aria-label={`Bỏ ${courtName.get(item.courtId)} ${formatHhMm(item.minute)}`}
-                    className="inline-flex items-center gap-1.5 rounded-full bg-brand-tint px-3 py-1 text-xs font-semibold text-brand-hover ring-1 ring-brand-line transition hover:bg-emerald-100"
+                    className="relative inline-flex min-h-9 items-center gap-1.5 rounded-full bg-brand-tint px-3 text-xs font-semibold text-brand-text ring-1 ring-brand-line transition-colors after:absolute after:inset-x-0 after:-inset-y-1 hover:ring-brand"
                   >
                     {courtName.get(item.courtId)} · {formatHhMm(item.minute)}–
                     {formatHhMm(item.minute + SLOT_MINUTES)}
@@ -258,7 +285,7 @@ export function SelectAndBook({
           <div className="flex items-end justify-between gap-3">
             <div>
               <p className="text-sm text-muted">
-                Tạm tính {hasSelection ? `(${list.length} khung × 30 phút)` : ""}
+                Tạm tính {hasSelection ? `(${list.length} khung × ${SLOT_MINUTES} phút)` : ""}
               </p>
               {!hasSelection && (
                 <p className="text-xs text-subtle">
@@ -266,13 +293,14 @@ export function SelectAndBook({
                 </p>
               )}
             </div>
-            <p className="text-2xl font-bold tabular-nums text-brand">{formatVnd(total)}</p>
+            {/* Số tiền màu chữ chính (SKILL.md §2) — xanh `#10b981` làm chữ chỉ 2,5:1. */}
+            <p className="text-2xl font-extrabold tabular-nums text-content">{formatVnd(total)}</p>
           </div>
 
           {state.error && (
-            <p role="alert" className="alert alert-danger mt-3">
+            <Notice tone="danger" role="alert" className="mt-3">
               {state.error}
-            </p>
+            </Notice>
           )}
 
           {/*
@@ -281,9 +309,9 @@ export function SelectAndBook({
             Lượt đặt không gắn tài khoản mang `userId: null`: nó không bao giờ
             hiện ở "Lượt đặt của tôi" và khách không tự huỷ được.
           */}
-          {nguoiDung === null ? (
+          {user === null ? (
             <div className="mt-4">
-              <Button asChild size="lg" className="w-full shadow-chon">
+              <Button asChild size="lg" className="w-full">
                 <Link href={`/login?next=${encodeURIComponent(returnPath)}`}>
                   Đăng nhập để đặt sân
                 </Link>
@@ -294,7 +322,7 @@ export function SelectAndBook({
                   : "Có tài khoản thì xem lại và huỷ lượt đặt bất cứ lúc nào. "}
                 <Link
                   href={`/register?next=${encodeURIComponent(returnPath)}`}
-                  className="font-medium text-brand hover:underline"
+                  className="font-semibold text-brand-text hover:underline"
                 >
                   Chưa có tài khoản? Đăng ký
                 </Link>
@@ -303,7 +331,7 @@ export function SelectAndBook({
           ) : (
             <>
               {/* Hồ sơ đã có số thì KHÔNG hỏi lại. */}
-              {nguoiDung.soDienThoai === null && hasSelection && (
+              {user.phone === null && hasSelection && (
                 <div className="mt-4">
                   <label htmlFor="customerPhone" className="mb-1 block text-sm text-muted">
                     Số điện thoại để sân gọi khi có việc
@@ -316,11 +344,37 @@ export function SelectAndBook({
                     placeholder="0987654321"
                     required
                     autoComplete="tel"
-                    aria-describedby={state.fields?.customerPhone ? "loi-sdt" : undefined}
+                    value={phone}
+                    onChange={(event) => setPhone(event.target.value)}
+                    error={state.fields?.customerPhone?.[0]}
                   />
-                  {state.fields?.customerPhone && (
-                    <p id="loi-sdt" className="mt-1 text-xs text-danger">
-                      {state.fields.customerPhone[0]}
+                </div>
+              )}
+
+              {hasSelection && (
+                <div className="mt-4">
+                  <label htmlFor="customerNote" className="mb-1 block text-sm text-muted">
+                    Ghi chú cho sân (không bắt buộc)
+                  </label>
+                  <textarea
+                    id="customerNote"
+                    name="customerNote"
+                    rows={2}
+                    maxLength={300}
+                    value={note}
+                    onChange={(event) => setNote(event.target.value)}
+                    placeholder="Ví dụ: cho mượn vợt, đến muộn 10 phút"
+                    aria-invalid={state.fields?.customerNote ? true : undefined}
+                    aria-describedby={state.fields?.customerNote ? "customerNote-error" : undefined}
+                    className={cn(
+                      fieldClassName,
+                      "py-2",
+                      state.fields?.customerNote && "border-danger focus:border-danger",
+                    )}
+                  />
+                  {state.fields?.customerNote && (
+                    <p id="customerNote-error" className="mt-1 text-xs text-danger-text">
+                      {state.fields.customerNote[0]}
                     </p>
                   )}
                 </div>
@@ -329,9 +383,9 @@ export function SelectAndBook({
               <SubmitBookingButton disabled={!hasSelection} />
 
               <p className="mt-2 text-center text-xs text-muted">
-                Đặt với tên <strong>{nguoiDung.ten}</strong>
-                {nguoiDung.soDienThoai && ` · ${nguoiDung.soDienThoai}`}. Chỗ được giữ 10 phút, chưa
-                trừ tiền ở bước này.
+                Đặt với tên <strong>{user.name}</strong>
+                {user.phone && ` · ${user.phone}`}. Chỗ được giữ {holdMinutes} phút, chưa trừ tiền ở
+                bước này.
               </p>
             </>
           )}
@@ -341,19 +395,27 @@ export function SelectAndBook({
       {/*
         Thanh nhỏ dính đáy trên điện thoại: lưới dài hơn màn hình, người dùng
         chọn xong không phải cuộn đi tìm nút đặt — và vẫn thấy tổng tiền.
+
+        `data-booking-bar`: `globals.css` dựa vào nó để chừa chỗ ở ĐÁY TRANG khi
+        thanh đang hiện. Khoảng trống trước đây nằm ngay sau form — tức GIỮA form
+        và cột thông tin sân — nên vừa hở vô cớ, vừa để thanh che chân trang.
       */}
       {hasSelection && (
-        <div className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-between gap-3 border-t border-line bg-surface/95 px-4 py-2.5 shadow-[0_-4px_16px_rgba(15,23,42,0.08)] backdrop-blur sm:hidden">
+        <div
+          data-booking-bar
+          className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-between gap-3 border-t border-line bg-surface/95 px-4 py-2.5 shadow-dock backdrop-blur sm:hidden"
+        >
           <p className="text-sm">
             <span className="font-semibold text-content">{list.length} khung</span>
-            <span className="ml-2 font-bold text-brand">{formatVnd(total)}</span>
+            <span className="ml-2 font-extrabold tabular-nums text-content">
+              {formatVnd(total)}
+            </span>
           </p>
           <Button asChild size="sm">
-            <a href="#dat-san">Tiếp tục ↓</a>
+            <a href="#booking-form">Tiếp tục ↓</a>
           </Button>
         </div>
       )}
-      {hasSelection && <div className="h-16 sm:hidden" aria-hidden />}
     </>
   );
 }
@@ -366,12 +428,7 @@ function SubmitBookingButton({ disabled }: { disabled: boolean }) {
   const { pending } = useFormStatus();
 
   return (
-    <Button
-      type="submit"
-      size="lg"
-      disabled={pending || disabled}
-      className="mt-4 w-full shadow-chon"
-    >
+    <Button type="submit" size="lg" disabled={pending || disabled} className="mt-4 w-full">
       {pending
         ? "Đang giữ chỗ…"
         : disabled

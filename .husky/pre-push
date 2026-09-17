@@ -1,2 +1,3 @@
-# Chặn push nếu type hoặc test hỏng. Lint đã chạy ở pre-commit.
-# pnpm typecheck && pnpm test
+# Chặn push khi kiểu hoặc unit test hỏng (~10 giây). Lint đã chạy ở pre-commit;
+# coverage, e2e, build để CI lo.
+pnpm typecheck && pnpm test

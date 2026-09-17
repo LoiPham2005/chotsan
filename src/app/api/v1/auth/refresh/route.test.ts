@@ -19,6 +19,14 @@ vi.mock("@/services/user.service", () => ({
   userService: { findById: vi.fn() },
 }));
 
+vi.mock("@/services/audit.service", () => ({
+  auditService: { record: vi.fn().mockResolvedValue(undefined) },
+}));
+
+import { RefreshTokenReuseError } from "@/lib/errors";
+import { __clearRateLimits } from "@/lib/rate-limit";
+import { verifySession } from "@/lib/session";
+import { auditService } from "@/services/audit.service";
 import { tokenService } from "@/services/token.service";
 import { userService } from "@/services/user.service";
 import { POST } from "./route";
@@ -31,20 +39,22 @@ const ROTATED = {
     token: "refresh-token-mới",
     expiresAt: new Date("2026-12-01T00:00:00Z"),
   },
+  twoFactorAt: null,
 };
 
 function post(body: unknown) {
   return POST(
     new Request("http://localhost/api/v1/auth/refresh", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.5" },
       body: JSON.stringify(body),
     }),
   );
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  await __clearRateLimits();
   vi.mocked(tokenService.rotate).mockResolvedValue(ROTATED);
   vi.mocked(userService.findById).mockResolvedValue({
     id: "u-1",
@@ -96,5 +106,29 @@ describe("POST /api/v1/auth/refresh", () => {
     const response = await post({ refreshToken: "cũ" });
 
     expect(response.status).toBe(401);
+  });
+
+  it("phiên đã qua 2FA thì access token MỚI vẫn mang `mfa`, và IP được lưu vào token mới", async () => {
+    // Lỗi thật trước đây: từ lần refresh đầu tiên access token mất `mfa`, token
+    // mới cũng không lưu `ip` — màn thiết bị hiện IP trống.
+    const twoFactorAt = new Date("2026-09-10T08:00:00Z");
+    vi.mocked(tokenService.rotate).mockResolvedValue({ ...ROTATED, twoFactorAt });
+
+    const response = await post({ refreshToken: "cũ" });
+    const body = (await response.json()) as { data: { accessToken: string } };
+
+    expect((await verifySession(body.data.accessToken))?.mfa).toBe(twoFactorAt.toISOString());
+    expect(vi.mocked(tokenService.rotate).mock.calls[0]?.[1]).toMatchObject({ ip: "203.0.113.5" });
+  });
+
+  it("token đã thu hồi bị nộp lại → 401 VÀ một dòng nhật ký theo tài khoản", async () => {
+    vi.mocked(tokenService.rotate).mockRejectedValue(new RefreshTokenReuseError("u-1"));
+
+    const response = await post({ refreshToken: "bi-danh-cap" });
+
+    expect(response.status).toBe(401);
+    expect(auditService.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "auth.refresh_token_reused", entityId: "u-1" }),
+    );
   });
 });

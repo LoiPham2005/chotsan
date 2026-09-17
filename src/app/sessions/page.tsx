@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { Notice } from "@/components/ui/notice";
 import { requireUser } from "@/lib/auth";
+import { env } from "@/lib/env";
 import { formatDateTime } from "@/lib/format";
 import { tokenService } from "@/services/token.service";
 import { SessionRevokeButton } from "./session-revoke-button";
@@ -42,12 +45,22 @@ export default async function SessionsPage() {
   const sessions = await tokenService.listActive(user.id);
 
   return (
-    <main className="container" style={{ maxWidth: 720 }}>
-      <h1 className="trang-title">Thiết bị đang đăng nhập</h1>
-      <p className="page-subtitle">
-        Danh sách các thiết bị đã đăng nhập qua <strong>ứng dụng di động</strong>. Thấy thiết bị lạ
-        thì đăng xuất nó ngay, rồi đổi mật khẩu.
-      </p>
+    <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6 sm:py-8 lg:px-8">
+      <header>
+        <Link
+          href="/security"
+          className="inline-flex min-h-11 items-center text-sm font-medium text-muted hover:text-content"
+        >
+          ← Bảo mật tài khoản
+        </Link>
+        <h1 className="mt-1 text-2xl font-bold tracking-tight text-content sm:text-3xl">
+          Thiết bị đang đăng nhập
+        </h1>
+        <p className="mt-1 text-sm text-muted">
+          Danh sách các thiết bị đã đăng nhập qua <strong>ứng dụng di động</strong>. Thấy thiết bị
+          lạ thì đăng xuất nó ngay, rồi đổi mật khẩu.
+        </p>
+      </header>
 
       {/*
         Lời giải thích này BẮT BUỘC phải có, nếu không người dùng sẽ hoang mang.
@@ -56,50 +69,47 @@ export default async function SessionsPage() {
         trong bảng refresh token — nên trình duyệt bạn đang ngồi KHÔNG xuất
         hiện ở đây. Danh sách trống không có nghĩa là bạn chưa đăng nhập.
       */}
-      <div className="alert alert-warning" role="note" style={{ marginTop: 16 }}>
+      <Notice tone="neutral" role="note" className="mt-4">
         Trình duyệt bạn đang dùng <strong>không</strong> nằm trong danh sách này. Phiên trên web
         dùng cookie, không phải refresh token — muốn thoát khỏi trình duyệt này thì bấm{" "}
         <strong>Đăng xuất</strong> ở đầu trang.
-      </div>
+      </Notice>
 
-      <section className="card" style={{ marginTop: 20 }}>
-        {sessions.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "32px 0", color: "var(--text-muted)" }}>
-            <p>Chưa có thiết bị di động nào đăng nhập vào tài khoản này.</p>
-          </div>
-        ) : (
-          <ul className="user-list">
-            {sessions.map((item) => {
-              const label = describeUserAgent(item.userAgent);
+      {sessions.length === 0 ? (
+        <p className="mt-5 rounded-token-lg border border-dashed border-line bg-surface p-8 text-center text-sm text-muted">
+          Chưa có thiết bị di động nào đăng nhập vào tài khoản này.
+        </p>
+      ) : (
+        <ul className="mt-5 space-y-3">
+          {sessions.map((item) => {
+            const label = describeUserAgent(item.userAgent);
 
-              return (
-                <li key={item.id} className="user-item">
-                  <div className="user-info">
-                    <span className="user-email">{label}</span>
-                    <div className="user-meta">
-                      <span>Đăng nhập: {formatDateTime(item.createdAt)}</span>
-                      <span>Hết hạn: {formatDateTime(item.expiresAt)}</span>
-                    </div>
-                    {item.userAgent && (
-                      <span
-                        style={{
-                          color: "var(--text-muted)",
-                          fontSize: "0.75rem",
-                          wordBreak: "break-all",
-                        }}
-                      >
-                        {item.userAgent}
-                      </span>
-                    )}
-                  </div>
+            return (
+              <li
+                key={item.id}
+                className="flex flex-wrap items-start gap-3 rounded-token-lg border border-line bg-surface p-4"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-content">{label}</p>
+                  <p className="mt-0.5 text-sm text-muted">
+                    Đăng nhập {formatDateTime(item.createdAt)} · hết hạn{" "}
+                    {formatDateTime(item.expiresAt)}
+                  </p>
+                  {item.userAgent && (
+                    <p className="mt-1 break-all font-mono text-xs text-subtle">{item.userAgent}</p>
+                  )}
+                </div>
 
-                  <SessionRevokeButton sessionId={item.id} label={label} />
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-    </main>
+                <SessionRevokeButton
+                  sessionId={item.id}
+                  label={label}
+                  accessTokenMinutes={env.ACCESS_TOKEN_TTL_MINUTES}
+                />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }

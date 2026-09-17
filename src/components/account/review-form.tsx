@@ -6,7 +6,10 @@ import {
   createReviewAction,
   type ReviewState,
 } from "@/app/(account)/account/bookings/review-actions";
+import { useActionNotice } from "@/components/booking/action-notice";
 import { Button } from "@/components/ui/button";
+import { fieldClassName } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
 
 /**
  * Chấm sao cho một lượt đặt đã chơi.
@@ -20,19 +23,25 @@ import { Button } from "@/components/ui/button";
  *
  * Ô nhận xét KHÔNG bắt buộc: phần lớn người ta chỉ muốn chấm sao rồi đi, ép
  * viết là mất luôn cả đánh giá.
+ *
+ * ---
+ * CÂU CẢM ƠN ĐI LÊN THÔNG BÁO CỦA TRANG
+ *
+ * Gửi xong thì lượt đặt đã có đánh giá, trang dựng lại và form này bị gỡ —
+ * câu cảm ơn nằm trong form thì biến mất trước khi ai đọc được. Lời nhận xét
+ * giữ trong state: React tự xoá form sau action kể cả khi báo lỗi, và viết lại
+ * một đoạn nhận xét là lý do đủ để bỏ không đánh giá nữa.
  */
 export function ReviewForm({ bookingId }: { bookingId: string }) {
   const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState("");
   const [open, setOpen] = useState(false);
-  const [state, action] = useActionState<ReviewState, FormData>(createReviewAction, {});
-
-  if (state.ok) {
-    return (
-      <p role="status" className="mt-3 text-sm font-medium text-brand-hover">
-        {state.ok}
-      </p>
-    );
-  }
+  const notify = useActionNotice();
+  const [state, action] = useActionState<ReviewState, FormData>(async (previous, formData) => {
+    const result = await createReviewAction(previous, formData);
+    if (result.ok) notify(result.ok);
+    return result;
+  }, {});
 
   if (!open) {
     return (
@@ -61,11 +70,12 @@ export function ReviewForm({ bookingId }: { bookingId: string }) {
               onClick={() => setRating(star)}
               aria-label={`${star} sao`}
               aria-pressed={rating === star}
-              className="rounded p-1 transition hover:scale-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+              // 44px mỗi sao (SKILL.md §1, luật 5) — sao 32px + đệm 6px.
+              className="rounded-token-control p-1.5 transition-transform hover:scale-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
             >
               <svg
                 viewBox="0 0 24 24"
-                className={`h-8 w-8 ${star <= rating ? "fill-amber-400" : "fill-slate-200"}`}
+                className={`h-8 w-8 ${star <= rating ? "fill-rating" : "fill-line"}`}
                 aria-hidden
               >
                 <path d="m12 2.6 2.9 5.9 6.5.9-4.7 4.6 1.1 6.4-5.8-3-5.8 3 1.1-6.4L2.6 9.4l6.5-.9L12 2.6Z" />
@@ -83,12 +93,14 @@ export function ReviewForm({ bookingId }: { bookingId: string }) {
         name="comment"
         rows={2}
         maxLength={1000}
+        value={comment}
+        onChange={(event) => setComment(event.target.value)}
         placeholder="Mặt sân, đèn, chỗ để xe…"
-        className="mt-1 w-full rounded-token-md border border-line bg-surface p-2 text-sm text-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60"
+        className={cn(fieldClassName, "mt-1 py-2")}
       />
 
       {state.error && (
-        <p role="alert" className="mt-2 text-sm text-danger">
+        <p role="alert" className="mt-2 text-sm text-danger-text">
           {state.error}
         </p>
       )}

@@ -3,12 +3,13 @@
 import type { PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/server";
 import { headers } from "next/headers";
 import { createSession } from "@/lib/auth";
+import { actionClientIp, rateLimitAction } from "@/lib/define-action";
 import { DomainError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
-import { RATE_LIMITS, rateLimit } from "@/lib/rate-limit";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS } from "@/lib/rate-limit";
 import { landingPathFor } from "@/lib/landing";
 import { safeRedirectPath } from "@/lib/safe-redirect";
-import { issueWebAuthnTicket, verifyTicket } from "@/lib/tickets";
+import { consumeTicket, issueWebAuthnTicket, verifyTicket } from "@/lib/tickets";
 import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
 import { auditService } from "@/services/audit.service";
 import { webauthnService } from "@/services/webauthn.service";
@@ -23,13 +24,22 @@ import { webauthnService } from "@/services/webauthn.service";
  * phiên; REST route ở `/api/v1/auth/passkeys/login/*` phục vụ mobile và trả
  * Bearer token. Cùng service, hai bề mặt.
  */
-export async function getPasskeyLoginOptions(): Promise<{
-  options: PublicKeyCredentialRequestOptionsJSON;
-  challengeToken: string;
-}> {
+export async function getPasskeyLoginOptions(): Promise<
+  | { ok: true; options: PublicKeyCredentialRequestOptionsJSON; challengeToken: string }
+  | { ok: false; error: string }
+> {
+  // Cùng xô với `POST /api/v1/auth/passkeys/login/options`. Bản cũ không giới
+  // hạn gì: mỗi lần gọi là một vé ký bằng HMAC — rẻ, nhưng không có lý do để
+  // cho bơm vô hạn.
+  const limit = await rateLimitAction(RATE_LIMIT_BUCKETS.passkey, RATE_LIMITS.passkey);
+  if (!limit.success) {
+    return { ok: false, error: `Bạn đã thử quá nhiều lần. Đợi ${limit.retryAfterSeconds} giây.` };
+  }
+
   const options = await webauthnService.createAuthenticationOptions();
 
   return {
+    ok: true,
     /*
      * Trả về ĐÚNG kiểu của chuẩn WebAuthn, không hạ xuống `Record<string,
      * unknown>`: nó vốn đã là JSON thuần nên đi qua ranh giới Server Action
@@ -49,16 +59,18 @@ export async function verifyPasskeyLogin(
   next?: string,
 ): Promise<{ ok: true; next: string } | { ok: false; error: string }> {
   const headerList = await headers();
-  const forwarded = headerList.get("x-forwarded-for");
-  const ip = forwarded?.split(",")[0]?.trim() ?? headerList.get("x-real-ip") ?? "unknown";
+  const ip = await actionClientIp();
 
-  const limit = await rateLimit(`passkey:${ip}`, RATE_LIMITS.passkey);
+  const limit = await rateLimitAction(RATE_LIMIT_BUCKETS.passkey, RATE_LIMITS.passkey);
   if (!limit.success) {
     return { ok: false, error: `Bạn đã thử quá nhiều lần. Đợi ${limit.retryAfterSeconds} giây.` };
   }
 
+  // Tiêu vé TRƯỚC khi xác minh: passkey đồng bộ giữ bộ đếm chữ ký bằng 0, nên
+  // thư viện không nhận ra một phản hồi bị nộp lại — vé dùng một lần mới chặn
+  // được việc đăng nhập lại bằng đúng cặp vé + phản hồi cũ.
   const ticket = await verifyTicket(challengeToken, "webauthn_auth");
-  if (!ticket) {
+  if (!ticket || !(await consumeTicket(ticket))) {
     return { ok: false, error: "Phiên đăng nhập passkey đã hết hạn. Vui lòng thử lại." };
   }
 
@@ -87,7 +99,7 @@ export async function verifyPasskeyLogin(
       entityId: user.id,
       actorId: user.id,
       actorEmail: user.email,
-      metadata: { method: "passkey" },
+      metadata: { method: "passkey", surface: "web" },
       ip,
       userAgent: headerList.get("user-agent"),
     });

@@ -29,7 +29,9 @@ export function DateStrip({
 
   return (
     <div
-      className="-mx-4 flex snap-x snap-mandatory gap-2 overflow-x-auto px-4 pb-2 sm:mx-0 sm:px-0"
+      // `scroll-px-4`: điểm neo của `snap-start` lùi vào đúng lề 16px — thiếu nó thì
+      // trình duyệt cuộn sẵn dải ngày cho ô "Hôm nay" dính sát mép trái màn hình.
+      className="-mx-4 flex snap-x snap-mandatory scroll-px-4 gap-2 overflow-x-auto px-4 pb-2 sm:mx-0 sm:scroll-px-0 sm:px-0"
       role="group"
       aria-label="Chọn ngày"
     >

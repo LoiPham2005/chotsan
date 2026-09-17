@@ -15,9 +15,10 @@ export const roleKeySchema = z
 /**
  * Bậc quyền lực. Cao hơn = mạnh hơn.
  *
- * Thang của seed: USER 0 · STAFF 10 · MANAGER 20 · ADMIN 50 · SUPER_ADMIN 100.
- * Chừa khoảng trống giữa các bậc để sau này chèn vai trò mới vào giữa mà không
- * phải đánh số lại toàn bộ.
+ * Thang của seed: USER 0 · ADMIN 50 · SUPER_ADMIN 100. (Chủ sân và nhân viên
+ * KHÔNG nằm trên thang này — chúng là `VenueMember.role` theo từng sân.) Chừa
+ * khoảng trống giữa các bậc để sau này chèn vai trò mới vào giữa mà không phải
+ * đánh số lại toàn bộ.
  *
  * Trần 100 là có chủ đích: 100 dành riêng cho SUPER_ADMIN, và không ai tạo
  * được vai trò ngang nó qua API (`RoleService` còn chặn thêm: không tạo được

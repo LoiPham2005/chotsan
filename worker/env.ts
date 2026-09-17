@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { featureFlag } from "@/lib/feature-flag";
+import { scheduleEnvSchema } from "@/jobs/schedules";
 
 /**
  * Biến môi trường riêng của tiến trình worker.
@@ -11,12 +12,16 @@ import { featureFlag } from "@/lib/feature-flag";
  *     gì để làm nếu không có hàng đợi để lấy job ra — chạy mà không có Redis là
  *     một tiến trình ngồi im, tốn RAM, và trông như đang hoạt động.
  *   - `DATABASE_URL` cũng bắt buộc: job đọc/ghi database qua tầng service.
+ *
+ * ⚠️ Worker VẪN nạp schema của app (`src/lib/env.ts`, qua logger và tầng
+ * service), nên cũng cần `SESSION_SECRET` — compose truyền tường minh.
  */
 const schema = z
   .object({
     /**
      * Cùng biến với app (`src/lib/env.ts`). `0` = dự án này không dùng hàng đợi,
      * nên worker không có lý do tồn tại — `main.ts` sẽ thoát ngay thay vì chạy.
+     * Job theo lịch khi đó do chính tiến trình web chạy (`src/jobs/schedules.ts`).
      *
      * Nhận `1`/`0` vì `docker-compose.yml` dùng chính biến này làm `replicas`.
      */
@@ -51,20 +56,18 @@ const schema = z
     WORKER_HEALTH_PORT: z.coerce.number().int().positive().default(3003),
 
     /**
-     * Nhịp chạy job dọn theo lịch, dạng cron.
-     *
-     * `booking:expire-holds` mặc định MỖI PHÚT. Thưa hơn thì chỗ giữ quá hạn
-     * nằm lại lâu hơn đúng bằng khoảng đó — khách nhìn thấy "đã có người đặt"
-     * cho một khung thật ra đang trống.
+     * Địa chỉ `/health` lắng nghe. Mặc định CHỈ loopback: số job trong hàng đợi
+     * không phải thứ để Internet đọc, và `ufw` không chặn được mọi đường (xem
+     * docs/DEPLOY_VPS.md). Healthcheck của Docker chạy TRONG container nên
+     * loopback vẫn gọi được; cần gọi từ ngoài container thì đặt `HOST=0.0.0.0`.
      */
-    CRON_EXPIRE_HOLDS: z.string().default("* * * * *"),
+    HOST: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().min(1).default("127.0.0.1"),
+    ),
 
-    /** Dọn token/nhật ký cũ. Mặc định 3 giờ sáng, lúc ít người dùng nhất. */
-    CRON_PURGE_EXPIRED: z.string().default("0 3 * * *"),
-    /** Xuất hoá đơn hoa hồng: 02:00 ngày mùng 1 hằng tháng, giờ máy chủ. */
-    CRON_INVOICE_MONTHLY: z.string().default("0 2 1 * *"),
-    /** Đánh dấu hoá đơn quá hạn: 04:00 mỗi ngày. */
-    CRON_INVOICE_OVERDUE: z.string().default("0 4 * * *"),
+    // CRON_* — định nghĩa MỘT nơi, dùng chung với bộ chạy lịch của web.
+    ...scheduleEnvSchema.shape,
   })
   .superRefine((value, ctx) => {
     if (value.QUEUE_ENABLED && !value.REDIS_URL) {

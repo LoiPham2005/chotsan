@@ -1,3 +1,4 @@
+import { env } from "@/lib/env";
 import { getRedis } from "@/lib/redis";
 import { logger } from "@/lib/logger";
 
@@ -52,13 +53,26 @@ export const RATE_LIMITS = {
   passwordChange: { limit: 10, windowSeconds: 900 },
 
   /**
-   * Mọi endpoint nhập mã 2FA (xác minh lúc đăng nhập, bật, tắt, cấp lại mã).
+   * Mọi endpoint nhập mã 2FA (xác minh lúc đăng nhập, bật, tắt, cấp lại mã) —
+   * ngưỡng theo IP.
    *
    * Siết chặt vì mã TOTP chỉ có 10^6 khả năng và mã khôi phục thì ít hơn nhiều
-   * so với một token 256 bit. `VERIFICATION_MAX_ATTEMPTS` chặn theo từng mã;
-   * ngưỡng này chặn theo IP — hai lớp cho hai kiểu tấn công khác nhau.
+   * so với một token 256 bit. Ngưỡng này chặn MỘT IP dò nhiều lần; nhiều IP
+   * cùng dò MỘT tài khoản thì do `twoFactorAccount` bên dưới chặn — hai lớp cho
+   * hai kiểu tấn công khác nhau. (`VERIFICATION_MAX_ATTEMPTS` KHÔNG liên quan:
+   * nó chỉ đếm trên mã OTP gửi qua SMS.)
    */
   twoFactor: { limit: 10, windowSeconds: 300 },
+
+  /**
+   * Số lần nhập mã 2FA theo TÀI KHOẢN, dùng chung cho web và API.
+   *
+   * Đếm mọi lần thử (không chỉ lần sai) và xoá bộ đếm khi nhập đúng: đếm bằng
+   * INCR nguyên tử thì 20 request song song cũng bị tính đủ 20, còn "đọc số lần
+   * sai rồi mới quyết" thì cả 20 cùng đọc thấy 0. Vượt ngưỡng là chặn cả mã
+   * ĐÚNG tới hết cửa sổ — không thì kẻ dò chỉ cần đổi IP.
+   */
+  twoFactorAccount: { limit: 5, windowSeconds: 900 },
 
   /**
    * Đăng nhập/đăng ký bằng passkey.
@@ -83,6 +97,82 @@ export const RATE_LIMITS = {
 } as const satisfies Record<string, RateLimitOptions>;
 
 export type RateLimitScope = keyof typeof RATE_LIMITS;
+
+/**
+ * Tên XÔ ĐẾM của từng luồng, dùng CHUNG cho web (Server Action) và API.
+ *
+ * Trước đây web đếm `login:<ip>` còn API đếm `api:login:<ip>`: cùng một kẻ dò
+ * mật khẩu được gấp đôi số lần thử chỉ bằng cách luân phiên hai cửa. Khai tên
+ * ở đúng một chỗ thì hai cửa không thể lệch nhau nữa.
+ *
+ * Tên xô KHÔNG trùng tên ngưỡng trong `RATE_LIMITS`: nhiều luồng dùng chung
+ * một mức (đặt lại mật khẩu, xác thực email, đổi mật khẩu cùng 10/15 phút)
+ * nhưng phải đếm riêng — người vừa đặt lại mật khẩu không được mất lượt xác
+ * thực email.
+ */
+export const RATE_LIMIT_BUCKETS = {
+  login: "login",
+  register: "register",
+  refresh: "refresh",
+  twoFactor: "2fa",
+  passkey: "passkey",
+  passwordResetRequest: "password-reset-request",
+  passwordReset: "password-reset",
+  passwordChange: "password-change",
+  emailVerify: "email-verify",
+  emailVerificationRequest: "email-verification-request",
+  emailChangeRequest: "email-change-request",
+  emailChangeConfirm: "email-change-confirm",
+  phoneOtpRequest: "phone-otp-request",
+  phoneOtpVerify: "phone-otp-verify",
+} as const;
+
+export type RateLimitBucket = (typeof RATE_LIMIT_BUCKETS)[keyof typeof RATE_LIMIT_BUCKETS];
+
+/**
+ * Khoá đếm theo IP của một luồng — web và API đi qua CÙNG hàm này nên luôn
+ * ra cùng một khoá.
+ */
+export function ipRateLimitKey(bucket: RateLimitBucket, ip: string): string {
+  return `${bucket}:${ip}`;
+}
+
+/**
+ * IP của người gọi, đọc từ header do reverse proxy đặt.
+ *
+ * ---
+ * VÌ SAO KHÔNG LẤY PHẦN TỬ ĐẦU CỦA `X-Forwarded-For`
+ *
+ * Phần tử đầu do CLIENT gửi lên. Proxy kiểu nginx `proxy_add_x_forwarded_for`
+ * chỉ NỐI THÊM IP thật vào cuối, nên `X-Forwarded-For: 1.2.3.4` tự chế đi qua
+ * proxy thành `1.2.3.4, <ip thật>` — lấy phần tử đầu là để kẻ dò tự chọn xô
+ * đếm cho mình, mỗi request một IP bịa, và rate limit mất tác dụng.
+ *
+ * Phần tử đáng tin là cái do proxy CỦA TA thêm vào: đếm từ PHẢI qua đúng số
+ * proxy tin cậy (`TRUSTED_PROXY_HOPS`, mặc định 1 — một Caddy/nginx đứng trước
+ * app). Proxy ghi đè hẳn header (Caddy) thì chuỗi chỉ còn một phần tử và phép
+ * đếm này vẫn ra đúng nó.
+ *
+ * Không có `X-Forwarded-For` → `x-real-ip` → `"unknown"`. `"unknown"` nghĩa là
+ * MỌI người chung một xô — thà chặt quá tay còn hơn mở toang; triệu chứng đó
+ * nói rằng proxy chưa đặt header.
+ */
+export function clientIpFromHeaders(headers: Pick<Headers, "get">): string {
+  const hops =
+    headers
+      .get("x-forwarded-for")
+      ?.split(",")
+      .map((part) => part.trim())
+      .filter(Boolean) ?? [];
+
+  if (hops.length > 0 && env.TRUSTED_PROXY_HOPS > 0) {
+    // Ít phần tử hơn số proxy khai báo = cấu hình lệch (hoặc request không đi
+    // qua đủ các tầng). Không có phần tử nào đáng tin hơn, lấy cái xa nhất.
+    return hops[Math.max(0, hops.length - env.TRUSTED_PROXY_HOPS)]!;
+  }
+
+  return headers.get("x-real-ip")?.trim() || "unknown";
+}
 
 export type RateLimitResult = {
   success: boolean;
@@ -242,6 +332,25 @@ export async function rateLimit(key: string, options: RateLimitOptions): Promise
     limit: options.limit,
     retryAfterSeconds: Math.max(1, Math.ceil((hit.resetAt - Date.now()) / 1000)),
   };
+}
+
+/**
+ * Đánh dấu `key` đã dùng; `true` khi đây là lần ĐẦU TIÊN trong `ttlSeconds`.
+ *
+ * Dùng cho thứ chỉ được tiêu MỘT lần nhưng không đáng một bảng database: vé
+ * 2FA/passkey (theo `jti`) và bước thời gian TOTP đã dùng. Chạy trên cùng
+ * store với rate limit vì cần đúng thứ nó có — bộ đếm NGUYÊN TỬ có hạn: hai
+ * request song song cùng tiêu một vé thì INCR chỉ cho một bên thấy số 1.
+ *
+ * ⚠️ Cùng chính sách fail-open với `rateLimit`: store chết thì mọi lần đều là
+ * "lần đầu". Đánh đổi có chủ đích — vé vẫn có chữ ký và hạn 5 phút.
+ */
+export async function claimOnce(key: string, ttlSeconds: number): Promise<boolean> {
+  const result = await rateLimit(`once:${key}`, {
+    limit: 1,
+    windowSeconds: Math.max(1, Math.ceil(ttlSeconds)),
+  });
+  return result.success;
 }
 
 /** Xoá giới hạn của một key — gọi sau khi đăng nhập THÀNH CÔNG. */

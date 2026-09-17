@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import { z } from "zod";
 import { env } from "./env";
+import { claimOnce } from "./rate-limit";
 
 /**
  * Vé ngắn hạn — JWT KHÔNG phải phiên đăng nhập.
@@ -26,6 +28,15 @@ import { env } from "./env";
  * phản hồi cũ phát lại được. Ký nó vào một vé có hạn thì không cần bảng lưu,
  * không cần job dọn dẹp, và không có trạng thái nào để đồng bộ giữa nhiều
  * tiến trình web.
+ *
+ * ---
+ * NHƯNG VÉ PHẢI DÙNG MỘT LẦN
+ *
+ * Chữ ký và hạn không ngăn được việc NỘP LẠI cùng một vé. Passkey đồng bộ
+ * (iCloud, Google) thường giữ bộ đếm chữ ký bằng 0, nên thư viện không phát
+ * hiện được phản hồi phát lại — cùng một cặp vé + phản hồi đăng nhập được
+ * nhiều lần trong 5 phút. Mỗi vé mang `jti` ngẫu nhiên; `consumeTicket` đánh
+ * dấu nó đã dùng trong store dùng chung (Redis nếu có) tới hết đời vé.
  */
 
 const ALGORITHM = "HS256";
@@ -39,26 +50,34 @@ const secretKey = new TextEncoder().encode(env.SESSION_SECRET);
  */
 const WEBAUTHN_TTL_SECONDS = 5 * 60;
 
+/** Trường chung của mọi vé: định danh để tiêu một lần, và hạn để biết giữ dấu bao lâu. */
+const ticketBase = { jti: z.string().min(1), exp: z.number() };
+
 const ticketSchema = z.discriminatedUnion("typ", [
-  z.object({ typ: z.literal("2fa"), sub: z.string().min(1) }),
+  z.object({ typ: z.literal("2fa"), sub: z.string().min(1), ...ticketBase }),
   z.object({
     typ: z.literal("webauthn_reg"),
     challenge: z.string().min(1),
     sub: z.string().min(1),
+    ...ticketBase,
   }),
   // Luồng đăng nhập KHÔNG có `sub`: ở bước này chưa biết người dùng là ai, và
   // đó là điểm mạnh — danh tính đến từ chính passkey được chọn.
-  z.object({ typ: z.literal("webauthn_auth"), challenge: z.string().min(1) }),
+  z.object({ typ: z.literal("webauthn_auth"), challenge: z.string().min(1), ...ticketBase }),
 ]);
 
 export type Ticket = z.infer<typeof ticketSchema>;
 export type TicketType = Ticket["typ"];
 
-async function sign(payload: Ticket, ttlSeconds: number): Promise<string> {
+/** Nội dung do nơi cấp vé quyết định; `jti`/`exp` do `sign` tự thêm. */
+type TicketClaims = { [T in Ticket as T["typ"]]: Omit<T, "jti" | "exp"> }[TicketType];
+
+async function sign(payload: TicketClaims, ttlSeconds: number): Promise<string> {
   const issuedAt = Math.floor(Date.now() / 1000);
 
   return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: ALGORITHM })
+    .setJti(randomUUID())
     .setIssuedAt(issuedAt)
     .setExpirationTime(issuedAt + ttlSeconds)
     .sign(secretKey);
@@ -85,7 +104,7 @@ export async function issueWebAuthnTicket(
   challenge: string,
   userId?: string,
 ): Promise<string> {
-  const payload: Ticket =
+  const payload: TicketClaims =
     typ === "webauthn_reg"
       ? { typ, challenge, sub: userId ?? "" }
       : { typ: "webauthn_auth", challenge };
@@ -98,6 +117,9 @@ export async function issueWebAuthnTicket(
  *
  * Sai loại cũng trả `null` như hỏng: phân biệt hai ca đó chỉ giúp người đang
  * dò biết mình đoán đúng nửa đường.
+ *
+ * ⚠️ CHỈ đọc, KHÔNG tiêu vé: vé 2FA phải dùng lại được khi người dùng gõ nhầm
+ * mã. Xong bước cần bảo vệ thì gọi `consumeTicket`.
  */
 export async function verifyTicket<T extends TicketType>(
   token: string | undefined,
@@ -115,4 +137,23 @@ export async function verifyTicket<T extends TicketType>(
   } catch {
     return null;
   }
+}
+
+/**
+ * Đánh dấu vé đã dùng. `false` = vé đã bị tiêu trước đó (phát lại, hoặc hai
+ * request cùng hoàn tất một lúc) — nơi gọi phải từ chối.
+ *
+ * Gọi ở đâu:
+ *   • Vé 2FA: SAU khi mã đúng, TRƯỚC khi cấp phiên. Gõ sai mã thì vé vẫn còn.
+ *   • Vé passkey: ngay TRƯỚC bước xác minh. Mỗi lần thử trình duyệt đều xin vé
+ *     mới, nên tiêu sớm không làm khó ai, mà chặn luôn việc nộp lại một phản
+ *     hồi đã từng được chấp nhận.
+ *
+ * Dấu "đã dùng" chỉ cần sống tới khi vé hết hạn — sau đó chữ ký tự từ chối.
+ */
+export async function consumeTicket(ticket: Ticket): Promise<boolean> {
+  const remainingSeconds = ticket.exp - Math.floor(Date.now() / 1000);
+  if (remainingSeconds <= 0) return false;
+
+  return claimOnce(`ticket:${ticket.jti}`, remainingSeconds);
 }

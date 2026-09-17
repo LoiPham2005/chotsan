@@ -13,10 +13,11 @@ import { RefreshTokenReuseError } from "@/lib/errors";
  * 1. Database chỉ lưu SHA-256 của token. Rò database KHÔNG đồng nghĩa với rò
  *    phiên đăng nhập.
  * 2. Token XOAY VÒNG mỗi lần refresh — token cũ bị thu hồi ngay.
- * 3. Dùng lại một token đã bị thu hồi sẽ huỷ TOÀN BỘ phiên của tài khoản đó.
- *    Token đã xoay vòng mà còn được dùng lại chỉ có một cách giải thích hợp lý:
- *    nó đã bị đánh cắp. Lúc đó không thể biết bên nào là kẻ trộm, nên đá cả hai
- *    ra là phản ứng đúng.
+ * 3. Dùng lại một token đã bị thu hồi sẽ huỷ cả HỌ của nó — mọi token sinh ra
+ *    từ cùng một lần đăng nhập, trên đúng thiết bị đó. Token đã xoay vòng mà
+ *    còn được dùng lại chỉ có một cách giải thích hợp lý: nó đã bị đánh cắp.
+ *    Không thể biết bên nào là kẻ trộm, nên đá cả hai ra là phản ứng đúng. Phiên
+ *    trên các thiết bị KHÁC của tài khoản không bị đụng tới.
  */
 
 export type IssuedRefreshToken = {
@@ -105,7 +106,16 @@ export class TokenService {
   async rotate(
     token: string,
     context: RefreshContext = {},
-  ): Promise<{ userId: string; refresh: IssuedRefreshToken } | null> {
+  ): Promise<{
+    userId: string;
+    refresh: IssuedRefreshToken;
+    /**
+     * Mốc phiên này vượt qua 2FA/passkey, mang sang token mới. Route refresh ký
+     * nó vào claim `mfa` — không thì mỗi lần refresh, access token lại trông
+     * như "phiên chưa qua 2FA".
+     */
+    twoFactorAt: Date | null;
+  } | null> {
     const existing = await this.db.refreshToken.findUnique({
       where: { tokenHash: hashOpaqueToken(token) },
       select: {
@@ -140,31 +150,37 @@ export class TokenService {
 
     if (existing.expiresAt <= new Date()) return null;
 
-    // Token còn hạn nhưng chủ nhân đã bị khoá/xoá trong lúc đó. Không kiểm ở
-    // đây thì tài khoản bị ban vẫn tự gia hạn phiên vô thời hạn.
-    if (existing.user.deletedAt || existing.user.status === "BANNED") return null;
+    // Token còn hạn nhưng chủ nhân đã bị khoá/tạm ngưng/xoá trong lúc đó. Không
+    // kiểm ở đây thì tài khoản bị khoá vẫn tự gia hạn phiên vô thời hạn. Chặn
+    // MỌI trạng thái khác ACTIVE — bản cũ chỉ chặn BANNED, tài khoản INACTIVE
+    // vẫn gia hạn được.
+    if (existing.user.deletedAt || existing.user.status !== "ACTIVE") return null;
 
     await this.db.refreshToken.update({
       where: { id: existing.id },
       data: { revokedAt: new Date() },
     });
 
+    const twoFactorAt = context.twoFactorAt ?? existing.twoFactorAt;
+
     const refresh = await this.issue(
       existing.userId,
       {
+        // `ip`, `userAgent` của lần refresh NÀY — màn "thiết bị đang đăng nhập"
+        // hiện bản mới nhất của mỗi họ, nên phải là thông tin mới nhất.
         ...context,
         // Giữ nguyên thiết bị của phiên cũ nếu lần refresh này không khai báo —
         // nếu không, mỗi lần refresh là phiên mất dấu thiết bị.
         deviceId: context.deviceId ?? existing.deviceId,
         // 2FA đã vượt qua thì vượt qua cho cả phiên. Không mang theo giá trị
         // này là mỗi lần refresh lại thành "phiên chưa qua 2FA".
-        twoFactorAt: context.twoFactorAt ?? existing.twoFactorAt,
+        twoFactorAt,
       },
       // ĐÚNG họ cũ — đây là điều làm cho id phiên ổn định với client.
       existing.familyId,
     );
 
-    return { userId: existing.userId, refresh };
+    return { userId: existing.userId, refresh, twoFactorAt };
   }
 
   /** Đăng xuất một thiết bị. Token không tồn tại cũng coi là thành công. */
@@ -256,11 +272,16 @@ export class TokenService {
     return result.count;
   }
 
-  /** Đăng xuất mọi thiết bị. Dùng khi đổi mật khẩu hoặc phát hiện token bị dùng lại. */
   /**
-   * @param options.exceptFamilyId Họ được GIỮ LẠI — thường là phiên đang thực
-   * hiện thao tác. Thiếu nó thì đổi mật khẩu sẽ đăng xuất luôn chính thiết bị
-   * người dùng đang cầm, một trải nghiệm trông y như lỗi.
+   * Đăng xuất mọi thiết bị: đặt lại/đổi mật khẩu, đổi email, "đăng xuất khỏi
+   * tất cả thiết bị khác". (Token bị dùng lại thì chỉ `revokeFamily` — xem
+   * `rotate`.)
+   *
+   * @param options.exceptFamilyId Họ được GIỮ LẠI — phiên đang thực hiện thao
+   * tác, cho "đăng xuất các thiết bị khác". Đổi mật khẩu KHÔNG dùng tham số
+   * này mà thu hồi hết rồi cấp lại token mới cùng họ (xem route
+   * `auth/change-password`): giữ nguyên token cũ là giữ luôn bản sao kẻ gian
+   * có thể đã lấy được.
    */
   async revokeAllForUser(
     userId: string,

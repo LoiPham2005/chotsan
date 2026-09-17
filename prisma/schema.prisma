@@ -119,6 +119,7 @@ model User {
   bookings            Booking[]
   reviews             Review[]
   favorites           Favorite[]
+  disputes            Dispute[]
 
   @@index([email])
   @@index([phone])
@@ -390,12 +391,14 @@ model Venue {
   members           VenueMember[]
   courts            Court[]
   priceRules        PriceRule[]
+  priceOverrides    PriceOverride[]
   bookings          Booking[]
   reviews           Review[]
   favorites         Favorite[]
   payouts           Payout[]
   earnings          OwnerEarning[]
   invoices          PlatformInvoice[]
+  vouchers          Voucher[]
 
   @@index([status, province, ward])
   @@index([sportId, status])
@@ -474,25 +477,32 @@ enum CourtSurface {
 }
 
 model Court {
-  id        String          @id @default(cuid())
-  venueId   String          @map("venue_id")
-  venue     Venue           @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  sportId   String          @map("sport_id")
-  sport     Sport           @relation(fields: [sportId], references: [id])
-  name      String
+  id         String          @id @default(cuid())
+  venueId    String          @map("venue_id")
+  venue      Venue           @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  sportId    String          @map("sport_id")
+  sport      Sport           @relation(fields: [sportId], references: [id])
+  name       String
   // Để trống = chưa khai. Thà trống còn hơn đoán bừa một mặt sân sai.
-  surface   CourtSurface?
-  isIndoor  Boolean         @default(false) @map("is_indoor")
-  note      String?
-  isActive  Boolean         @default(true) @map("is_active")
-  sortOrder Int             @default(0) @map("sort_order")
-  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt DateTime?       @map("deleted_at") @db.Timestamptz(3)
-  closures  CourtClosure[]
-  bookings  Booking[]
-  overrides PriceOverride[]
+  surface    CourtSurface?
+  isIndoor   Boolean         @default(false) @map("is_indoor")
+  note       String?
+  isActive   Boolean         @default(true) @map("is_active")
+  sortOrder  Int             @default(0) @map("sort_order")
+  createdAt  DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt  DateTime?       @map("deleted_at") @db.Timestamptz(3)
+  closures   CourtClosure[]
+  bookings   Booking[]
+  overrides  PriceOverride[]
+  priceRules PriceRule[]
 
+  // Thừa về mặt "duy nhất" (id đã là khoá chính), nhưng là ĐÍCH của khoá ngoại
+  // hai cột (court_id, venue_id) từ bookings/price_rules/price_overrides: nhờ nó
+  // database tự từ chối một lượt đặt hay luật giá ghi venue_id lệch với cơ sở
+  // thật của sân con. Postgres chỉ cho khoá ngoại trỏ vào cột có ràng buộc duy
+  // nhất — và khai ở đây thì `migrate diff` biết nó, không bao giờ đòi xoá.
+  @@unique([id, venueId])
   @@index([venueId, sortOrder])
   @@map("courts")
 }
@@ -515,7 +525,13 @@ model PriceRule {
   id           String   @id @default(cuid())
   venueId      String   @map("venue_id")
   venue        Venue    @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  /// `null` = áp cho cả cơ sở.
   courtId      String?  @map("court_id")
+  // Khoá ngoại HAI CỘT: sân con phải thuộc đúng cơ sở của luật (court_id NULL thì
+  // Postgres bỏ qua phép kiểm — đúng nghĩa "cả cơ sở"). Cascade: luật giá là cấu
+  // hình, không phải lịch sử — lượt đặt tự giữ `total` của nó. Sân con chỉ bị
+  // xoá mềm nên nhánh này chỉ chạy khi xoá thật cả cơ sở (script kiểm tra).
+  court        Court?   @relation(fields: [courtId, venueId], references: [id, venueId], onDelete: Cascade)
   weekdays     Int[]    @default([])
   startMinute  Int      @map("start_minute")
   endMinute    Int      @map("end_minute")
@@ -531,9 +547,13 @@ model PriceRule {
 
 model PriceOverride {
   id           String   @id @default(cuid())
+  /// `null` = đè giá cho cả cơ sở.
   courtId      String?  @map("court_id")
-  court        Court?   @relation(fields: [courtId], references: [id], onDelete: Cascade)
+  // Như `PriceRule.court`: hai cột để sân con không thể thuộc cơ sở khác.
+  court        Court?   @relation(fields: [courtId, venueId], references: [id, venueId], onDelete: Cascade)
   venueId      String   @map("venue_id")
+  // Cascade cùng lý do với `PriceRule.venue`: đè giá là cấu hình của cơ sở.
+  venue        Venue    @relation(fields: [venueId], references: [id], onDelete: Cascade)
   date         DateTime @db.Date
   startMinute  Int      @map("start_minute")
   endMinute    Int      @map("end_minute")
@@ -568,7 +588,13 @@ model Booking {
   venueId       String              @map("venue_id")
   venue         Venue               @relation(fields: [venueId], references: [id])
   courtId       String              @map("court_id")
-  court         Court               @relation(fields: [courtId], references: [id])
+  // Khoá ngoại HAI CỘT tới (courts.id, courts.venue_id): database từ chối lượt
+  // đặt ghi venue_id lệch với cơ sở thật của sân con. Lệch là doanh thu, hoá đơn
+  // hoa hồng và hàng chờ duyệt tiền tính nhầm sang cơ sở khác. onDelete Restrict
+  // như cũ: sân con có lịch sử đặt thì không xoá thật được. onUpdate Restrict
+  // (không Cascade): chuyển sân con sang cơ sở khác KHÔNG được âm thầm kéo theo
+  // doanh thu cũ của nó sang cơ sở mới.
+  court         Court               @relation(fields: [courtId, venueId], references: [id, venueId], onDelete: Restrict, onUpdate: Restrict)
   userId        String?             @map("user_id")
   user          User?               @relation(fields: [userId], references: [id])
   customerName  String              @map("customer_name")
@@ -622,7 +648,12 @@ model Voucher {
   value        Int
   maxDiscount  Int?                @map("max_discount")
   minTotal     Int                 @default(0) @map("min_total")
+  /// `null` = mã của nền tảng, dùng ở mọi cơ sở.
   venueId      String?             @map("venue_id")
+  // Restrict, KHÔNG SetNull: SetNull biến mã giảm giá riêng của một sân thành mã
+  // dùng được ở MỌI sân. Cơ sở vốn chỉ xoá mềm, nên Restrict không cản gì hằng
+  // ngày — nó chỉ chặn một lệnh xoá thật lỡ tay cuốn theo dữ liệu tiền.
+  venue        Venue?              @relation(fields: [venueId], references: [id], onDelete: Restrict)
   startAt      DateTime            @map("start_at") @db.Timestamptz(3)
   endAt        DateTime            @map("end_at") @db.Timestamptz(3)
   usageLimit   Int?                @map("usage_limit")
@@ -697,7 +728,9 @@ model Payment {
   providerPaidAt DateTime?       @map("provider_paid_at") @db.Timestamptz(3)
   refundedAmount Int             @default(0) @map("refunded_amount")
 
-  receivedBy PaymentReceiver @default(PLATFORM) @map("received_by")
+  // Tiền đặt sân đi THẲNG vào tài khoản của sân (mô hình dòng tiền đã chốt) —
+  // mặc định PLATFORM là nói sai về chính giao dịch nào quên truyền giá trị.
+  receivedBy PaymentReceiver @default(VENUE) @map("received_by")
 
   declaredAt    DateTime? @map("declared_at") @db.Timestamptz(3)
   declaredNote  String?   @map("declared_note")
@@ -868,6 +901,9 @@ model Dispute {
   bookingId   String        @map("booking_id")
   booking     Booking       @relation(fields: [bookingId], references: [id])
   userId      String        @map("user_id")
+  // Restrict như `Review.user`: người dùng chỉ xoá mềm (`userService.softDelete`);
+  // khiếu nại là hồ sơ tiền, không được biến mất theo một lệnh xoá thật.
+  user        User          @relation(fields: [userId], references: [id], onDelete: Restrict)
   reason      String
   description String?
   status      DisputeStatus @default(OPEN)
@@ -894,8 +930,13 @@ enum InvoiceStatus {
 /// ⚠️ Tiền đặt sân đi THẲNG vào tài khoản của sân — nền tảng không giữ hộ.
 /// Nên đây là khoản chủ sân NỢ, không phải khoản đã bị trừ. Quá hạn thì khoá
 /// sân, đó là đòn bẩy duy nhất để đòi.
+///
+/// Hoá đơn là ẢNH CHỤP lúc xuất: lượt đặt xác nhận/hoàn tiền về sau và tỉ lệ
+/// hoa hồng đổi về sau KHÔNG sửa hoá đơn cũ — xem `InvoiceService`.
 model PlatformInvoice {
   id               String        @id @default(cuid())
+  /// `CS-YYYYMM-000042` — phần số lấy từ sequence `platform_invoice_number_seq`
+  /// (viết tay trong migration), nên không bao giờ trùng giữa hai cơ sở.
   number           String        @unique
   venueId          String        @map("venue_id")
   venue            Venue         @relation(fields: [venueId], references: [id])
@@ -911,8 +952,8 @@ model PlatformInvoice {
   waivedBy         String?       @map("waived_by")
   waiveReason      String?       @map("waive_reason")
   note             String?
-  createdAt        DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt        DateTime      @updatedAt @db.Timestamptz(3)
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@unique([venueId, periodStart])
   @@index([status, dueDate])

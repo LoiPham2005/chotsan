@@ -1,6 +1,6 @@
 import { enforceRateLimit } from "@/lib/api/auth";
 import { apiOk, handleApiError } from "@/lib/api/response";
-import { RATE_LIMITS } from "@/lib/rate-limit";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS } from "@/lib/rate-limit";
 import { issueWebAuthnTicket } from "@/lib/tickets";
 import { webauthnService } from "@/services/webauthn.service";
 
@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(request: Request) {
   try {
-    await enforceRateLimit(request, "api:passkey", RATE_LIMITS.passkey);
+    await enforceRateLimit(request, RATE_LIMIT_BUCKETS.passkey, RATE_LIMITS.passkey);
     const options = await webauthnService.createAuthenticationOptions();
 
     return apiOk({

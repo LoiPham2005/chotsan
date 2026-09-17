@@ -1,7 +1,7 @@
 import { enforceRateLimit } from "@/lib/api/auth";
 import { apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
 import { logger } from "@/lib/logger";
-import { RATE_LIMITS } from "@/lib/rate-limit";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS } from "@/lib/rate-limit";
 import { forgotPasswordSchema } from "@/schemas/auth.schema";
 import { authService } from "@/services/auth.service";
 
@@ -27,7 +27,11 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(request: Request) {
   try {
-    await enforceRateLimit(request, "api:forgot-password", RATE_LIMITS.passwordResetRequest);
+    await enforceRateLimit(
+      request,
+      RATE_LIMIT_BUCKETS.passwordResetRequest,
+      RATE_LIMITS.passwordResetRequest,
+    );
 
     const body = await parseJsonBody(request, forgotPasswordSchema);
 

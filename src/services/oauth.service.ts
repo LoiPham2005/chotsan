@@ -4,9 +4,11 @@ import { userService } from "./user.service";
 import { SYSTEM_ROLES } from "@/lib/permissions";
 import { type PublicUser } from "@/schemas/user.schema";
 import {
-  AccountBannedError,
   ForbiddenError,
+  InvalidCredentialsError,
   OAuthEmailRequiredError,
+  OAuthEmailUnverifiedError,
+  TwoFactorRequiredError,
   assertLoginAllowed,
 } from "@/lib/errors";
 import { type UserService, toPublicUser } from "./user.service";
@@ -18,13 +20,20 @@ import type { OAuthProfile } from "@/lib/oauth/types";
  * Ba đường, theo đúng thứ tự ưu tiên:
  *
  *   1. `provider` + `providerAccountId` đã từng đăng nhập → user cũ, xong.
- *   2. Chưa từng, nhưng email trùng với user có sẵn (đăng ký bằng mật khẩu
- *      trước đó, hoặc đã liên kết provider khác) → LIÊN KẾT vào user đó.
+ *   2. Chưa từng, nhưng email trùng với user có sẵn ĐÃ XÁC THỰC email → LIÊN
+ *      KẾT vào user đó.
  *   3. Chưa từng, email cũng chưa ai dùng → tạo user mới.
  *
- * Chỉ tin email khi provider xác nhận đã xác thực (`client.ts` đã lọc theo điều
- * kiện đó) — liên kết theo một email chưa xác thực là mở đường chiếm tài khoản
- * người khác bằng chính email của họ.
+ * Email phải được xác thực ở CẢ HAI phía trước khi liên kết:
+ *
+ *   • Phía provider: chỉ tin email provider xác nhận (`profile.ts` đã lọc).
+ *   • Phía ChốtSân: tài khoản có sẵn phải có `emailVerifiedAt`. Đăng ký bằng
+ *     mật khẩu không bắt xác thực email, nên kẻ xấu đăng ký TRƯỚC bằng email
+ *     nạn nhân được. Tự liên kết thì nạn nhân "Tiếp tục với Google" là bước vào
+ *     đúng tài khoản kẻ xấu vẫn giữ mật khẩu (tiền-chiếm tài khoản).
+ *
+ * Tài khoản đã bật 2FA thì KHÔNG trả user mà ném `TwoFactorRequiredError` —
+ * như luồng mật khẩu: nơi gọi không thể vô tình cấp phiên khi còn thiếu bước 2.
  */
 export class OAuthService {
   constructor(
@@ -55,7 +64,17 @@ export class OAuthService {
     // BANNED chặn mọi cách đăng nhập, kể cả OAuth. `lockedUntil` thì KHÔNG áp
     // dụng ở đây — đó là khoá do brute-force MẬT KHẨU, không liên quan gì tới
     // việc đăng nhập bằng Google/GitHub.
-    assertLoginAllowed(user.status);
+    assertLoginAllowed(user.status, user.id);
+
+    /*
+     * Đã bật 2FA thì Google cũng chỉ là MỘT yếu tố. Bản cũ cấp phiên luôn ở
+     * đây, nên ai chiếm được tài khoản Google của người dùng là vào thẳng
+     * ChốtSân, bỏ qua lớp bảo vệ họ đã cố ý bật.
+     *
+     * Khác passkey (`userVerification: required` đã là hai yếu tố): OAuth
+     * không cho ta biết provider có bắt 2FA hay không.
+     */
+    if (user.twoFactorEnabled) throw new TwoFactorRequiredError(user.id);
 
     return user;
   }
@@ -72,10 +91,15 @@ export class OAuthService {
     });
 
     if (linked) {
-      const user = await this.users.findById(linked.userId, { includeDeleted: true });
+      const user = await this.users.findById(linked.userId);
       // Tài khoản đã xoá mềm nhưng liên kết OAuth còn sót lại. Không dọn liên
-      // kết ở đây (xoá mềm giữ lại dữ liệu có chủ đích), chỉ từ chối đăng nhập.
-      if (!user) throw new AccountBannedError();
+      // kết ở đây (xoá mềm giữ lại dữ liệu có chủ đích), chỉ từ chối đăng nhập
+      // — callback hiện "Tài khoản không còn khả dụng".
+      //
+      // Bản cũ tra kèm tài khoản đã xoá rồi để `assertLoginAllowed` chặn: tài
+      // khoản xoá mềm mang `INACTIVE`, lỗi rơi vào nhánh "không rõ" và bị ghi
+      // log như sự cố.
+      if (!user) throw new InvalidCredentialsError();
       return user;
     }
 
@@ -84,6 +108,9 @@ export class OAuthService {
     const existing = await this.users.findByEmail(profile.email);
 
     if (existing) {
+      // Xem ghi chú đầu lớp: chưa ai chứng minh email này là của chủ tài khoản.
+      if (!existing.emailVerifiedAt) throw new OAuthEmailUnverifiedError();
+
       await this.db.oAuthAccount.create({
         data: {
           userId: existing.id,

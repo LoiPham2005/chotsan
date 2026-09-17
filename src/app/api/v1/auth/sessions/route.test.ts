@@ -17,7 +17,18 @@ vi.mock("@/services/token.service", () => ({
   tokenService: { listActive: vi.fn(), revokeById: vi.fn() },
 }));
 
+// Phiên hợp lệ về mặt thu hồi — thứ đang kiểm là ranh giới sở hữu, không phải
+// việc đọc ảnh tài khoản (đã có `security-stamp.service.test.ts`).
+vi.mock("@/services/security-stamp.service", () => ({
+  securityStampService: { isTokenStillValid: vi.fn().mockResolvedValue(true) },
+}));
+
+vi.mock("@/services/audit.service", () => ({
+  auditService: { record: vi.fn().mockResolvedValue(undefined) },
+}));
+
 import { signSession, type SessionPayload } from "@/lib/session";
+import { securityStampService } from "@/services/security-stamp.service";
 import { tokenService } from "@/services/token.service";
 import { GET } from "./route";
 import { DELETE } from "./[id]/route";
@@ -30,6 +41,7 @@ type SessionsBody = { data: { sessions: { id: string; userAgent: string | null }
 beforeEach(() => {
   vi.clearAllMocks();
   cookieStore.get.mockReturnValue(undefined);
+  vi.mocked(securityStampService.isTokenStillValid).mockResolvedValue(true);
 });
 
 function requestWith(token?: string) {

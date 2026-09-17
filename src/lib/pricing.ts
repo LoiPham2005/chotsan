@@ -17,9 +17,19 @@ import { overlaps, SLOT_MINUTES } from "./slots";
  * chia đôi ra 87.500, và tuỳ chỗ làm tròn mà hai khung cộng lại thành 174.000
  * hay 176.000. Chủ sân sẽ phát hiện ra khi đối soát cuối tháng, và không ai
  * giải thích nổi vài nghìn đồng chênh từ đâu.
+ *
+ * ---
+ * LUẬT CHỒNG NHAU PHẢI RA CÙNG MỘT GIÁ MỖI LẦN HỎI
+ *
+ * Trước đây hai luật cùng priority phủ cùng một khung thì luật nào thắng tuỳ
+ * thứ tự database trả về — mà truy vấn không `orderBy`, nên thứ tự đó đổi theo
+ * kế hoạch truy vấn. Khách thấy 70k trên lưới rồi bị giữ chỗ với giá 110k. Nay
+ * thứ tự được chốt ngay trong hàm này, không phụ thuộc thứ tự đầu vào:
+ * priority cao → luật riêng sân con → luật mới hơn → `id` nhỏ hơn.
  */
 
 export type PriceRuleInput = {
+  id: string;
   /** Null = áp cho mọi sân con của cơ sở. */
   courtId: string | null;
   /** Rỗng = mọi ngày trong tuần. 0 = Chủ nhật. */
@@ -29,14 +39,17 @@ export type PriceRuleInput = {
   pricePerSlot: number;
   isPeak: boolean;
   priority: number;
+  createdAt: Date;
 };
 
 export type PriceOverrideInput = {
+  id: string;
   courtId: string | null;
   startMinute: number;
   endMinute: number;
   pricePerSlot: number;
   isPeak: boolean;
+  createdAt: Date;
 };
 
 export type SlotPrice = {
@@ -45,10 +58,28 @@ export type SlotPrice = {
 };
 
 /**
+ * Thứ tự khi mọi tiêu chí nghiệp vụ khác đã bằng nhau: riêng sân con trước cả
+ * cơ sở, mới hơn trước cũ hơn, rồi `id` — tiêu chí cuối cùng luôn phân định
+ * được, nên không bao giờ có "hoà".
+ */
+function specificFirstThenNewest(
+  a: { id: string; courtId: string | null; createdAt: Date },
+  b: { id: string; courtId: string | null; createdAt: Date },
+): number {
+  const specific = (b.courtId === null ? 0 : 1) - (a.courtId === null ? 0 : 1);
+  if (specific !== 0) return specific;
+
+  const newer = b.createdAt.getTime() - a.createdAt.getTime();
+  if (newer !== 0) return newer;
+
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
  * Giá của MỘT khung, cho một sân con, vào một thứ cụ thể.
  *
- * `overrides` đã được lọc sẵn theo ngày ở tầng gọi — hàm này không biết gì về
- * `Date`, đó là lý do nó test được mà không cần dựng dữ liệu thời gian.
+ * `overrides` đã được lọc sẵn theo ngày ở tầng gọi — hàm này không cần biết
+ * khung thuộc ngày nào, đó là lý do nó test được mà không dựng dữ liệu lịch.
  */
 export function priceForSlot(params: {
   courtId: string;
@@ -61,13 +92,16 @@ export function priceForSlot(params: {
   const { courtId, weekday, slotStartMinute, basePrice, rules, overrides } = params;
   const slotEnd = slotStartMinute + SLOT_MINUTES;
 
-  // Tầng 3 — đè theo ngày. Thắng mọi luật, không cần xét priority: mỗi ngày lễ
-  // chỉ có một bảng giá, chồng chéo ở đây là lỗi nhập liệu chứ không phải luật.
-  const override = overrides.find(
-    (item) =>
-      (item.courtId === null || item.courtId === courtId) &&
-      overlaps(item.startMinute, item.endMinute, slotStartMinute, slotEnd),
-  );
+  // Tầng 3 — đè theo ngày. Thắng mọi luật, không xét priority: mỗi ngày lễ chỉ
+  // nên có một bảng giá. Chồng nhau vẫn phải ra một giá xác định — đè riêng
+  // cho sân con thắng đè cả cơ sở, rồi đè mới nhất.
+  const override = overrides
+    .filter(
+      (item) =>
+        (item.courtId === null || item.courtId === courtId) &&
+        overlaps(item.startMinute, item.endMinute, slotStartMinute, slotEnd),
+    )
+    .sort(specificFirstThenNewest)[0];
 
   if (override) {
     return { price: override.pricePerSlot, isPeak: override.isPeak };
@@ -75,19 +109,15 @@ export function priceForSlot(params: {
 
   // Tầng 2 — luật theo tuần. Luật CỤ THỂ HƠN thắng: priority cao trước, và khi
   // bằng nhau thì luật gắn đích danh sân con thắng luật áp cho cả cơ sở.
-  const matched = rules
+  const rule = rules
     .filter(
-      (rule) =>
-        (rule.courtId === null || rule.courtId === courtId) &&
-        (rule.weekdays.length === 0 || rule.weekdays.includes(weekday)) &&
-        overlaps(rule.startMinute, rule.endMinute, slotStartMinute, slotEnd),
+      (item) =>
+        (item.courtId === null || item.courtId === courtId) &&
+        (item.weekdays.length === 0 || item.weekdays.includes(weekday)) &&
+        overlaps(item.startMinute, item.endMinute, slotStartMinute, slotEnd),
     )
-    .sort((a, b) => {
-      if (b.priority !== a.priority) return b.priority - a.priority;
-      return (b.courtId === null ? 0 : 1) - (a.courtId === null ? 0 : 1);
-    });
+    .sort((a, b) => b.priority - a.priority || specificFirstThenNewest(a, b))[0];
 
-  const rule = matched[0];
   if (rule) return { price: rule.pricePerSlot, isPeak: rule.isPeak };
 
   // Tầng 1 — giá cơ sở. Không đánh dấu giờ vàng: giờ vàng là một quyết định của

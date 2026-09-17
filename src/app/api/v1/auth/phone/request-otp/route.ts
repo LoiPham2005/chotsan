@@ -1,6 +1,6 @@
 import { enforceRateLimit, requireApiUser } from "@/lib/api/auth";
 import { apiOk, handleApiError, parseJsonBody } from "@/lib/api/response";
-import { RATE_LIMITS } from "@/lib/rate-limit";
+import { RATE_LIMIT_BUCKETS, RATE_LIMITS } from "@/lib/rate-limit";
 import { requestPhoneOtpSchema } from "@/schemas/auth.schema";
 import { authService } from "@/services/auth.service";
 
@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const session = await requireApiUser(request);
-    await enforceRateLimit(request, "api:phone-otp", RATE_LIMITS.phoneOtp);
+    await enforceRateLimit(request, RATE_LIMIT_BUCKETS.phoneOtpRequest, RATE_LIMITS.phoneOtp);
 
     const body = await parseJsonBody(request, requestPhoneOtpSchema);
     await authService.requestPhoneVerification(session.sub, body.phone);

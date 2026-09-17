@@ -1,5 +1,5 @@
 /**
- * Cấu hình PM2 cho Next.js standalone + máy chủ realtime.
+ * Cấu hình PM2 cho ChốtSân: Next.js standalone + máy chủ realtime + worker.
  *
  *   pm2 start ecosystem.config.cjs --env production
  *   pm2 reload ecosystem.config.cjs --env production   # nạp lại không rớt kết nối
@@ -101,7 +101,7 @@ module.exports = {
   apps: [
     {
       ...shared,
-      name: "nextjs-base",
+      name: "chotsan",
       script: ".next/standalone/server.js",
       instances,
       // `cluster` cho phép `pm2 reload` xoay vòng từng tiến trình nên không rớt
@@ -117,7 +117,7 @@ module.exports = {
     },
     realtimeEnabled && {
       ...shared,
-      name: "nextjs-base-realtime",
+      name: "chotsan-realtime",
       script: "realtime/dist/server.cjs",
       // LUÔN 1 instance, kể cả khi web chạy cluster: Socket.IO cần adapter
       // Redis mới phát tin được giữa các tiến trình. Nhiều instance mà thiếu
@@ -131,7 +131,7 @@ module.exports = {
     },
     queueEnabled && {
       ...shared,
-      name: "nextjs-base-worker",
+      name: "chotsan-worker",
       script: "worker/dist/worker.cjs",
       // Chạy nhiều worker LÀ an toàn: BullMQ khoá job qua Redis nên mỗi job
       // chỉ được giao cho đúng một worker. Nhưng mặc định vẫn để 1 — nâng lên

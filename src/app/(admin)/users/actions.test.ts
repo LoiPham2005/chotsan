@@ -14,6 +14,10 @@ import { SelfActionForbiddenError, DuplicateFieldError } from "@/lib/errors";
 
 vi.mock("@/lib/auth", () => ({ getSession: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("next/headers", () => ({ headers: () => Promise.resolve(new Headers()) }));
+vi.mock("@/services/audit.service", () => ({
+  auditService: { record: vi.fn().mockResolvedValue(undefined) },
+}));
 
 /**
  * `defineAction` hỏi `permissionService.can()` chứ không so `role === "ADMIN"`
@@ -30,14 +34,15 @@ vi.mock("@/services/user.service", async (importOriginal) => {
   const actual = await importOriginal<typeof UserServiceModule>();
   return {
     ...actual,
-    userService: { create: vi.fn(), softDelete: vi.fn() },
+    userService: { create: vi.fn(), softDelete: vi.fn(), setStatus: vi.fn() },
   };
 });
 
 import { getSession } from "@/lib/auth";
+import { auditService } from "@/services/audit.service";
 import { permissionService } from "@/services/permission.service";
 import { userService } from "@/services/user.service";
-import { createUserAction, deleteUserAction } from "./actions";
+import { createUserAction, deleteUserAction, setUserStatusAction } from "./actions";
 
 const adminSession: SessionPayload = {
   typ: "access",
@@ -160,6 +165,8 @@ describe("createUserAction", () => {
       fullName: "Nguyễn Văn A",
       username: "nguyenvana",
     });
+    // Người thao tác đi xuống service — chốt `Role.level` cần biết AI đang tạo.
+    expect(vi.mocked(userService.create).mock.calls[0]?.[1]).toEqual({ actorId: "admin-1" });
   });
 
   it("đưa lỗi trùng tên đăng nhập về đúng ô username", async () => {
@@ -175,6 +182,32 @@ describe("createUserAction", () => {
     // form: `DuplicateFieldError` mang sẵn tên trường trong `fields`.
     expect(result.fieldErrors?.username?.[0]).toContain("Tên đăng nhập");
     expect(result.fieldErrors?.email).toBeUndefined();
+    // Chữ vừa gõ đi kèm lỗi — form dựng lại đúng như lúc bấm.
+    expect(result.values).toEqual({ email: "new@example.com", fullName: "", username: "trung" });
+  });
+
+  it("tên đăng nhập quá ngắn: câu lỗi tiếng Việt của schema, chữ vừa gõ được trả lại", async () => {
+    vi.mocked(getSession).mockResolvedValue(adminSession);
+
+    const result = await createUserAction(
+      {},
+      form({ email: "new@example.com", fullName: "An", username: "ab" }),
+    );
+
+    expect(result.fieldErrors?.username).toEqual(["Tên đăng nhập tối thiểu 3 ký tự"]);
+    expect(result.values).toEqual({ email: "new@example.com", fullName: "An", username: "ab" });
+    expect(userService.create).not.toHaveBeenCalled();
+  });
+
+  it("họ tên quá dài: câu lỗi nói đúng ô, không phải câu tiếng Anh mặc định của Zod", async () => {
+    vi.mocked(getSession).mockResolvedValue(adminSession);
+
+    const result = await createUserAction(
+      {},
+      form({ email: "new@example.com", fullName: "A".repeat(101) }),
+    );
+
+    expect(result.fieldErrors?.fullName).toEqual(["Họ và tên dài quá — tối đa 100 ký tự"]);
   });
 });
 
@@ -221,5 +254,71 @@ describe("deleteUserAction", () => {
     expect(userService.softDelete).toHaveBeenCalledWith("victim-id", {
       actorId: adminSession.sub,
     });
+  });
+});
+
+describe("setUserStatusAction — nút Khoá / Mở khoá", () => {
+  const PUBLIC_USER = {
+    id: "victim-id",
+    email: "v@example.com",
+    username: null,
+    fullName: null,
+    emailVerifiedAt: null,
+    status: "BANNED" as const,
+    lockedUntil: null,
+    roles: ["USER"],
+    phone: null,
+    avatarUrl: null,
+    twoFactorEnabled: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  it("nhận ĐÚNG hình dạng nút gửi lên — `{ status }` — và chuyển chuỗi trạng thái xuống service", async () => {
+    /*
+     * Lỗi thật trước đây: action parse bằng `userStatusSchema` (enum, chỉ nhận
+     * chuỗi) trong khi nút gửi `{ status: "BANNED" }`. Parse luôn trượt, mọi
+     * lần bấm đều báo "Trạng thái không hợp lệ" — không ai khoá được ai từ web.
+     */
+    vi.mocked(getSession).mockResolvedValue(adminSession);
+    vi.mocked(userService.setStatus).mockResolvedValue({
+      user: PUBLIC_USER,
+      previousStatus: "ACTIVE",
+    });
+
+    const result = await setUserStatusAction("victim-id", { status: "BANNED" });
+
+    expect(result.error).toBeUndefined();
+    expect(userService.setStatus).toHaveBeenCalledWith("victim-id", "BANNED", {
+      actorId: "admin-1",
+    });
+    // Nhật ký ghi `{ from, to }` bằng hằng, không phải "user.banned"/"user.unbanned".
+    expect(auditService.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "user.status_changed",
+        metadata: expect.objectContaining({ from: "ACTIVE", to: "BANNED" }),
+      }),
+    );
+  });
+
+  it("trạng thái lạ → báo lỗi, KHÔNG chạm service", async () => {
+    vi.mocked(getSession).mockResolvedValue(adminSession);
+
+    const result = await setUserStatusAction("victim-id", { status: "SUPER" } as never);
+
+    // Câu lỗi nói giá trị nào được nhận và phải làm gì — không phải "không hợp lệ".
+    expect(result.error).toBe(
+      "Không đổi được trạng thái: chỉ nhận Hoạt động, Tạm ngưng, Khoá. Tải lại trang rồi bấm lại giúp bạn nhé.",
+    );
+    expect(userService.setStatus).not.toHaveBeenCalled();
+  });
+
+  it("user thường gọi thẳng action → bị chặn trước khi parse", async () => {
+    vi.mocked(getSession).mockResolvedValue(userSession);
+
+    const result = await setUserStatusAction("victim-id", { status: "BANNED" });
+
+    expect(result.error).toContain("không có quyền");
+    expect(userService.setStatus).not.toHaveBeenCalled();
   });
 });

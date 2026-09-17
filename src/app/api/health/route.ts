@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { healthService } from "@/services/health.service";
 import { logger } from "@/lib/logger";
 import { env } from "@/lib/env";
+import { schedulingMode } from "@/jobs/schedules";
 
 /**
  * Health check cho Docker / Kubernetes / load balancer.
@@ -29,11 +30,19 @@ export const revalidate = 0;
  *   - `redis`  — đường đi thật: có hàng đợi, có worker xử lý.
  *
  * Gộp `inline` vào `on` là giấu đúng cái trạng thái cần nhìn thấy nhất.
+ *
+ * `schedules` — AI chạy job theo lịch (nhả giao dịch quá hạn, xuất hoá đơn):
+ *
+ *   - `worker`     — tiến trình worker đăng ký lịch vào Redis. Nhớ kiểm cả `:3003/health`.
+ *   - `in-process` — chính tiến trình web này chạy lịch (không dùng hàng đợi).
+ *   - `off`        — KHÔNG ai chạy: bật cờ mà thiếu `REDIS_URL`. Trên production phải
+ *                    sửa; trên máy dev là cố ý (để database Neon được ngủ).
  */
 function featureStatus() {
   return {
     queue: !env.QUEUE_ENABLED ? "off" : env.REDIS_URL ? "redis" : "inline",
     realtime: env.REALTIME_ENABLED ? "on" : "off",
+    schedules: schedulingMode(env),
   } as const;
 }
 

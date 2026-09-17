@@ -12,10 +12,10 @@
     "postbuild": "node scripts/prepare-standalone.mjs",
     "start": "node --env-file-if-exists=.env .next/standalone/server.js",
     "realtime:dev": "tsx watch --env-file-if-exists=.env realtime/main.ts",
-    "realtime:build": "esbuild realtime/main.ts --bundle --platform=node --format=cjs --target=node22 --outfile=realtime/dist/server.cjs --packages=external --alias:server-only=./test/stubs/server-only.ts",
+    "realtime:build": "esbuild realtime/main.ts --bundle --platform=node --format=cjs --target=node22 --outfile=realtime/dist/server.cjs --packages=external --alias:server-only=./test/stubs/server-only.ts --metafile=realtime/dist/meta.json",
     "realtime:start": "node --env-file-if-exists=.env realtime/dist/server.cjs",
     "worker:dev": "tsx watch --env-file-if-exists=.env worker/main.ts",
-    "worker:build": "esbuild worker/main.ts --bundle --platform=node --format=cjs --target=node22 --outfile=worker/dist/worker.cjs --packages=external --alias:server-only=./test/stubs/server-only.ts",
+    "worker:build": "esbuild worker/main.ts --bundle --platform=node --format=cjs --target=node22 --outfile=worker/dist/worker.cjs --packages=external --alias:server-only=./test/stubs/server-only.ts --metafile=worker/dist/meta.json",
     "worker:start": "node --env-file-if-exists=.env worker/dist/worker.cjs",
     "pm2:start": "pm2 start ecosystem.config.cjs --env production",
     "pm2:reload": "pm2 reload ecosystem.config.cjs --env production",
@@ -31,14 +31,10 @@
     "test:e2e:ui": "playwright test --ui",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test:coverage",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:migrate:create": "prisma migrate dev --create-only",
     "db:migrate:diff": "prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script",
     "db:deploy": "prisma migrate deploy",
-    "db:push": "prisma db push",
-    "db:reset": "prisma migrate reset",
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
     "db:seed:prod": "NODE_ENV=production tsx prisma/seed.ts",
@@ -58,8 +54,8 @@
     }
   },
   "lint-staged": {
-    "*.{js,jsx,ts,tsx}": [
-      "eslint --fix",
+    "*.{js,jsx,mjs,cjs,ts,tsx}": [
+      "eslint --fix --no-warn-ignored",
       "prettier --write"
     ],
     "*.{json,css,md,yml,yaml}": [
@@ -79,9 +75,11 @@
     "bullmq": "^6.1.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "cron-parser": "^5.10.0",
+    "ioredis": "^5.11.1",
     "jose": "^6.2.7",
     "lucide-react": "^1.31.0",
-    "next": "^16.3.1",
+    "next": "^16.3.5",
     "nodemailer": "^9.1.1",
     "otpauth": "^9.5.1",
     "qrcode": "^1.5.4",
@@ -95,7 +93,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@next/eslint-plugin-next": "^16.3.1",
+    "@next/eslint-plugin-next": "^16.3.5",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@testing-library/jest-dom": "^7.0.0",

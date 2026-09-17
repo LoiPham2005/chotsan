@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { requirePermission } from "@/lib/auth";
+import { formatDate } from "@/lib/format";
 import { userService } from "@/services/user.service";
 import { UserForm } from "./user-form";
 import { UserDeleteButton } from "./user-delete-button";
@@ -17,6 +18,23 @@ export const dynamic = "force-dynamic";
  * càng dài thì càng dễ bấm nhầm dòng bên cạnh.
  */
 const PER_PAGE = 20;
+
+/** Nhãn nhỏ cạnh tên — trạng thái nói bằng CẢ màu LẪN chữ (SKILL.md §1, luật 4). */
+const TAG = {
+  neutral: "bg-elevated text-muted ring-line",
+  danger: "bg-danger-tint text-danger-text ring-danger-line",
+  brand: "bg-brand-tint text-brand-text ring-brand-line",
+} as const;
+
+function Tag({ tone, children }: { tone: keyof typeof TAG; children: React.ReactNode }) {
+  return (
+    <span
+      className={`whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ${TAG[tone]}`}
+    >
+      {children}
+    </span>
+  );
+}
 
 export default async function UsersPage({
   searchParams,
@@ -42,74 +60,88 @@ export default async function UsersPage({
   });
 
   return (
-    <>
-      <div
-        style={{
-          marginBottom: 24,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: 16,
-          flexWrap: "wrap",
-        }}
-      >
-        <div>
-          <Link href="/" style={{ fontSize: "0.9rem", color: "var(--text-muted)" }}>
-            ← Quay lại trang chủ
-          </Link>
-          <h1 className="trang-title">Quản lý người dùng</h1>
-        </div>
-        <span className="badge badge-primary">Tổng: {meta.total}</span>
-      </div>
+    // Lề và khoảng đệm do `(admin)/layout.tsx` lo — trang chỉ giới hạn bề rộng chữ.
+    <div className="max-w-4xl">
+      <h1 className="text-2xl font-bold tracking-tight text-content sm:text-3xl">
+        Quản lý người dùng
+      </h1>
+      <p className="mt-1 text-sm text-muted">
+        <span className="font-semibold text-content">{meta.total}</span> người dùng
+      </p>
 
-      <section className="card">
-        <h2 style={{ fontSize: "1.2rem", marginBottom: 16 }}>Thêm người dùng mới</h2>
+      <section
+        aria-labelledby="new-user-heading"
+        className="mt-6 rounded-token-lg border border-line bg-surface p-4 sm:p-5"
+      >
+        <h2 id="new-user-heading" className="text-lg font-bold text-content">
+          Thêm người dùng mới
+        </h2>
+        <p className="mb-4 mt-1 text-sm text-muted">
+          Tài khoản mới mang vai trò USER và chưa có mật khẩu — người dùng tự đặt qua “Quên mật
+          khẩu”.
+        </p>
         <UserForm />
       </section>
 
-      <section className="card">
-        <h2 style={{ fontSize: "1.2rem", marginBottom: 16 }}>Danh sách người dùng</h2>
+      <section aria-labelledby="user-list-heading" className="mt-8">
+        <h2 id="user-list-heading" className="text-lg font-bold text-content">
+          Danh sách người dùng
+        </h2>
 
         {users.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "32px 0", color: "var(--text-muted)" }}>
-            <p style={{ fontSize: "1.1rem" }}>Chưa có người dùng nào trong cơ sở dữ liệu.</p>
-          </div>
+          <p className="mt-3 rounded-token-lg border border-dashed border-line bg-surface p-8 text-center text-sm text-muted">
+            Chưa có người dùng nào trong cơ sở dữ liệu.
+          </p>
         ) : (
-          <ul className="user-list">
-            {users.map((user: (typeof users)[number]) => (
-              <li key={user.id} className="user-item">
-                <div className="user-info">
-                  <span className="user-email">{user.email ?? user.username ?? ""}</span>
-                  <div className="user-meta">
-                    {user.fullName && <span>👤 {user.fullName}</span>}
-                    {user.username && <span>@{user.username}</span>}
-                    <span className="badge badge-success">{user.roles.join(", ")}</span>
-                    {user.status === "BANNED" && (
-                      <span className="badge badge-danger">Đã khoá</span>
-                    )}
-                    {user.status === "ACTIVE" &&
-                      user.lockedUntil &&
-                      user.lockedUntil > new Date() && (
-                        <span className="badge badge-warning">Khoá tạm (sai mật khẩu)</span>
-                      )}
-                    <span>📅 {user.createdAt.toLocaleDateString("vi-VN")}</span>
+          <ul className="mt-3 space-y-2">
+            {users.map((user: (typeof users)[number]) => {
+              const identity = user.email ?? user.username ?? "";
+              const lockedNow =
+                user.status === "ACTIVE" &&
+                user.lockedUntil !== null &&
+                user.lockedUntil > new Date();
+
+              return (
+                // Điện thoại: nút xuống dưới thông tin — đứng cạnh nhau thì email bị
+                // cắt còn vài chữ, mà email là thứ quản trị viên đọc để khỏi bấm nhầm.
+                <li
+                  key={user.id}
+                  className="flex flex-col gap-3 rounded-token-lg border border-line bg-surface p-3 sm:flex-row sm:items-start sm:p-4"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-semibold text-content">{identity}</p>
+                    <p className="mt-0.5 flex flex-wrap gap-x-2 text-sm text-muted">
+                      {user.fullName && <span>{user.fullName}</span>}
+                      {user.username && <span>@{user.username}</span>}
+                      <span>tạo {formatDate(user.createdAt)}</span>
+                    </p>
+                    <p className="mt-1.5 flex flex-wrap gap-1.5">
+                      {user.roles.map((role) => (
+                        <Tag key={role} tone="neutral">
+                          {role}
+                        </Tag>
+                      ))}
+                      {user.status === "BANNED" && <Tag tone="danger">Đã khoá</Tag>}
+                      {lockedNow && <Tag tone="neutral">Khoá tạm (sai mật khẩu)</Tag>}
+                      {user.id === currentUser.id && <Tag tone="brand">Bạn</Tag>}
+                    </p>
                   </div>
-                </div>
-                {user.id === currentUser.id ? (
-                  <span className="badge badge-primary">Bạn</span>
-                ) : (
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <UserStatusButton
-                      id={user.id}
-                      email={user.email ?? user.username ?? ""}
-                      status={user.status}
-                      lockedUntil={user.lockedUntil?.toISOString() ?? null}
-                    />
-                    <UserDeleteButton id={user.id} email={user.email ?? user.username ?? ""} />
-                  </div>
-                )}
-              </li>
-            ))}
+
+                  {/* Không có nút cho CHÍNH MÌNH — service cũng chặn tự khoá/tự xoá. */}
+                  {user.id !== currentUser.id && (
+                    <div className="flex min-w-0 flex-wrap items-start gap-2">
+                      <UserStatusButton
+                        id={user.id}
+                        email={identity}
+                        status={user.status}
+                        lockedUntil={user.lockedUntil?.toISOString() ?? null}
+                      />
+                      <UserDeleteButton id={user.id} email={identity} />
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
 
@@ -121,22 +153,15 @@ export default async function UsersPage({
           một URL riêng nên nút Back của trình duyệt vẫn làm đúng việc của nó.
         */}
         {(meta.page > 1 || meta.hasNext) && (
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: 12,
-              marginTop: 20,
-              paddingTop: 16,
-              borderTop: "1px solid var(--border-color)",
-            }}
+          <nav
+            aria-label="Phân trang"
+            className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4"
           >
-            <span style={{ color: "var(--text-muted)", fontSize: "0.85rem" }}>
+            <span className="text-sm text-muted">
               Trang {meta.page}/{meta.totalPages} · {meta.total} người dùng
             </span>
 
-            <div style={{ display: "flex", gap: 8 }}>
+            <div className="flex gap-2">
               {meta.page > 1 && (
                 <Button asChild variant="outline" size="sm">
                   <Link href={{ pathname: "/users", query: { page: meta.page - 1 } }}>
@@ -152,9 +177,9 @@ export default async function UsersPage({
                 </Button>
               )}
             </div>
-          </div>
+          </nav>
         )}
       </section>
-    </>
+    </div>
   );
 }

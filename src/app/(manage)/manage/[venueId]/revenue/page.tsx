@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { ManageNav } from "@/components/manage/manage-nav";
 import { RevenueChart } from "@/components/manage/revenue-chart";
 import { requireVenueAccess } from "@/lib/auth";
-import { addDays, fullDateLabel, parseDateKey } from "@/lib/date";
+import { addDays, dateKey, fullDateLabel, parseDateKey } from "@/lib/date";
 import { formatVnd } from "@/lib/slots";
 import { courtService } from "@/services/court.service";
 import { reportService } from "@/services/report.service";
@@ -52,6 +52,15 @@ export default async function RevenuePage({
   if (!venue) notFound();
 
   const courtName = new Map(courts.map((court) => [court.id, court.name]));
+
+  // SQL chỉ trả những ngày CÓ doanh thu. Vẽ thẳng thì 3 ngày lẻ trong 30 ngày
+  // thành 3 cột đứng sát nhau, trông như 3 ngày liền — điền đủ mọi ngày của
+  // khoảng, ngày trống là cột 0.
+  const revenueByDate = new Map(daily.map((row) => [row.date, row]));
+  const chartRows = Array.from({ length: days }, (_, index) => {
+    const key = dateKey(addDays(from, index));
+    return revenueByDate.get(key) ?? { date: key, bookings: 0, revenue: 0 };
+  });
   const byCourt = [...summary.byCourt].sort((a, b) => b.revenue - a.revenue);
   const average = summary.bookingCount > 0 ? Math.round(summary.revenue / summary.bookingCount) : 0;
 
@@ -60,7 +69,7 @@ export default async function RevenuePage({
       <header>
         <Link
           href={`/manage/${venueId}`}
-          className="text-sm font-medium text-muted hover:text-content"
+          className="inline-flex min-h-11 items-center text-sm font-medium text-muted hover:text-content"
         >
           ← {venue.name}
         </Link>
@@ -73,16 +82,18 @@ export default async function RevenuePage({
         <ManageNav venueId={venueId} userId={user.id} active="revenue" />
       </div>
 
-      <nav className="mt-5 flex gap-2" aria-label="Khoảng thời gian">
+      {/* Cùng kiểu "tab đang mở" với thanh quản lý sân (nền xanh nhạt) — không
+          phải khối xanh đặc: màn này không có hành động chính nào để tranh chỗ. */}
+      <nav className="mt-5 flex flex-wrap gap-2" aria-label="Khoảng thời gian">
         {RANGES.map((range) => (
           <Link
             key={range.key}
             href={`/manage/${venueId}/revenue?range=${range.key}`}
             aria-current={Number(range.key) === days ? "page" : undefined}
-            className={`rounded-token-md px-3 py-1.5 text-sm font-semibold transition ${
+            className={`flex min-h-11 items-center rounded-token-control border-[1.5px] px-3 text-sm font-semibold transition-colors ${
               Number(range.key) === days
-                ? "bg-brand text-white shadow-chon"
-                : "border border-line bg-surface text-content hover:border-brand-line"
+                ? "border-brand-line bg-brand-tint text-brand-text"
+                : "border-line-strong bg-surface text-content hover:bg-elevated"
             }`}
           >
             {range.label}
@@ -107,18 +118,19 @@ export default async function RevenuePage({
 
       {(summary.holdingCount > 0 || summary.cancelledCount > 0) && (
         <p className="mt-3 text-sm text-muted">
-          Ngoài ra: <strong className="text-peak-text">{summary.holdingCount}</strong> lượt đang chờ
-          thanh toán · <strong>{summary.cancelledCount}</strong> lượt huỷ hoặc không tới.
+          Ngoài ra: <strong className="text-content">{summary.holdingCount}</strong> lượt đang chờ
+          thanh toán · <strong className="text-content">{summary.cancelledCount}</strong> lượt huỷ
+          hoặc không tới.
         </p>
       )}
 
       <div className="mt-5">
-        <RevenueChart rows={daily} />
+        <RevenueChart rows={daily.length > 0 ? chartRows : []} />
       </div>
 
       {byCourt.length > 0 && (
-        <section className="mt-8" aria-labelledby="theo-san">
-          <h2 id="theo-san" className="text-lg font-bold text-content">
+        <section className="mt-8" aria-labelledby="by-court-heading">
+          <h2 id="by-court-heading" className="text-lg font-bold text-content">
             Theo sân con
           </h2>
 
@@ -129,7 +141,7 @@ export default async function RevenuePage({
               return (
                 <li
                   key={row.courtId}
-                  className="rounded-token-lg border border-line bg-surface p-3 shadow-nang-1"
+                  className="rounded-token-lg border border-line bg-surface p-3"
                 >
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="font-semibold text-content">
@@ -167,10 +179,13 @@ function Stat({
   big?: boolean;
 }) {
   return (
-    <div className="rounded-token-lg border border-line bg-surface p-4 shadow-nang-1">
+    <div className="rounded-token-lg border border-line bg-surface p-4">
       <p className="text-xs font-bold uppercase tracking-wide text-subtle">{label}</p>
+      {/* Số tiền luôn màu chữ chính (SKILL.md §2). Ô chính nổi bằng CỠ chữ, không
+          bằng màu xanh — bản trước gắn cả `text-content` lẫn `text-brand` cùng lúc,
+          màu nào thắng là do thứ tự CSS. */}
       <p
-        className={`mt-1 font-bold tabular-nums text-content ${big ? "text-2xl text-brand" : "text-xl"}`}
+        className={`mt-1 tabular-nums text-content ${big ? "text-2xl font-extrabold" : "text-xl font-bold"}`}
       >
         {value}
       </p>

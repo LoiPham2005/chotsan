@@ -1,14 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
+import { dateKey } from "@/lib/date";
 import { prisma } from "@/lib/prisma";
 import { priceForSlot } from "@/lib/pricing";
-import {
-  atMinuteVN,
-  minuteOfDayInVN,
-  overlaps,
-  SLOT_MINUTES,
-  slotRange,
-  weekdayInVN,
-} from "@/lib/slots";
+import { atMinuteVN, overlaps, SLOT_MINUTES, slotRange, weekdayInVN } from "@/lib/slots";
 
 /**
  * Lịch trống của một cơ sở trong một ngày — lưới SÂN × KHUNG 30 PHÚT.
@@ -17,8 +11,8 @@ import {
  * VÌ SAO MỘT HÀM TRẢ CẢ LƯỚI, KHÔNG PHẢI HỎI TỪNG Ô
  *
  * Màn đặt sân hiển thị 10 sân × 32 khung = 320 ô. Hỏi từng ô là 320 lần gọi
- * database cho một lần mở trang. Ở đây tất cả đọc trong BỐN truy vấn, phần còn
- * lại là tính trong bộ nhớ.
+ * database cho một lần mở trang. Ở đây tất cả đọc trong BẢY truy vấn chạy song
+ * song, phần còn lại là tính trong bộ nhớ.
  *
  * ---
  * NGƯỜI TA HỎI "19H CÒN SÂN NÀO?", KHÔNG HỎI "SÂN 7 CÓ RẢNH KHÔNG?"
@@ -27,7 +21,17 @@ import {
  * diện vẽ được dải tổng quan cả ngày mà không phải quét lại toàn lưới.
  */
 
-export type SlotStatus = "FREE" | "TAKEN" | "CLOSED" | "PAST";
+/**
+ * - `FREE`: đặt được.
+ * - `TAKEN`: đã có người giữ/đặt.
+ * - `CLOSED`: sân con đang bảo trì (`CourtClosure`).
+ * - `PAST`: khung đã bắt đầu (giờ bắt đầu ≤ bây giờ) — gồm MỌI khung của ngày đã qua.
+ * - `NOT_FOR_SALE`: không luật giá nào phủ khung này (giá 0đ) — chủ sân chưa mở bán giờ đó.
+ */
+export type SlotStatus = "FREE" | "TAKEN" | "CLOSED" | "PAST" | "NOT_FOR_SALE";
+
+/** Ngày đang xem so với hôm nay, theo giờ Việt Nam. */
+export type DayTiming = "PAST" | "TODAY" | "FUTURE";
 
 export type SlotCell = {
   /** Phút từ 00:00, giờ Việt Nam. */
@@ -47,10 +51,15 @@ export type DayAvailability = {
   venueId: string;
   /** `"2026-09-04"` theo giờ Việt Nam. */
   date: string;
+  /**
+   * Giao diện cần phân biệt "hôm nay đã hết giờ" với "ngày này đã qua" — hai câu
+   * khác nhau với người đang chọn ngày, dù lưới của cả hai đều toàn ô đã qua.
+   */
+  timing: DayTiming;
   /** Phút bắt đầu của mọi khung trong ngày — trục hoành của lưới. */
   minutes: number[];
   courts: CourtAvailability[];
-  /** Số sân còn trống theo từng khung, cùng thứ tự với `phút`. */
+  /** Số sân còn trống theo từng khung, cùng thứ tự với `minutes`. */
   summary: number[];
   isClosed: boolean;
 };
@@ -86,6 +95,24 @@ export function occupyingBookingWhere(now: Date) {
   };
 }
 
+/**
+ * Vì sao một dãy không đặt được — để nơi gọi nói ĐÚNG lý do thay vì một câu
+ * chung "đã có người đặt hoặc ngoài giờ mở cửa" cho mọi trường hợp.
+ *
+ * - `DAY_CLOSED`: sân nghỉ cả ngày (chưa khai giờ, hoặc cơ sở không mở bán).
+ * - `COURT`: sân con không thuộc cơ sở, đã tắt hoặc đã xoá.
+ * - `OUTSIDE_HOURS`: dãy vượt ra ngoài giờ mở cửa.
+ * - Còn lại trùng tên `SlotStatus` của khung chặn nó.
+ */
+export type RangeUnavailableReason =
+  "DAY_CLOSED" | "COURT" | "OUTSIDE_HOURS" | "PAST" | "CLOSED" | "TAKEN" | "NOT_FOR_SALE";
+
+/**
+ * Một dãy có nhiều khung chặn khác nhau thì báo lý do đứng trước: "đã qua giờ"
+ * là chuyện không sửa được, nên nói nó trước "đã có người đặt".
+ */
+const BLOCKING_ORDER = ["PAST", "CLOSED", "TAKEN", "NOT_FOR_SALE"] as const;
+
 /** Báo giá của một dãy trong một lần đặt nhiều dãy. */
 export type RangeQuote = {
   courtId: string;
@@ -95,6 +122,8 @@ export type RangeQuote = {
   courtName: string | null;
   /** `false` khi có bất kỳ khung nào không đặt được — khi đó tiền là 0. */
   available: boolean;
+  /** `null` khi `available`. */
+  reason: RangeUnavailableReason | null;
   slotCount: number;
   total: number;
 };
@@ -112,24 +141,31 @@ export function quoteFromDay(
     : day.courts.find((item) => item.courtId === range.courtId);
   const base = { ...range, courtName: court?.courtName ?? null };
 
-  if (!court) return { ...base, available: false, slotCount: 0, total: 0 };
+  const unavailable = (reason: RangeUnavailableReason): RangeQuote => ({
+    ...base,
+    available: false,
+    reason,
+    slotCount: 0,
+    total: 0,
+  });
+
+  if (day.isClosed) return unavailable("DAY_CLOSED");
+  if (!court) return unavailable("COURT");
 
   const wanted = court.slots.filter(
     (slot) => slot.minute >= range.startMinute && slot.minute < range.endMinute,
   );
   const expected = Math.floor((range.endMinute - range.startMinute) / SLOT_MINUTES);
 
-  if (
-    wanted.length === 0 ||
-    wanted.length !== expected ||
-    wanted.some((slot) => slot.status !== "FREE")
-  ) {
-    return { ...base, available: false, slotCount: 0, total: 0 };
-  }
+  if (wanted.length === 0 || wanted.length !== expected) return unavailable("OUTSIDE_HOURS");
+
+  const blocked = BLOCKING_ORDER.find((status) => wanted.some((slot) => slot.status === status));
+  if (blocked) return unavailable(blocked);
 
   return {
     ...base,
     available: true,
+    reason: null,
     slotCount: wanted.length,
     total: wanted.reduce((sum, slot) => sum + slot.price, 0),
   };
@@ -145,19 +181,21 @@ export class AvailabilityService {
   ): Promise<DayAvailability> {
     const now = options.now ?? new Date();
     const weekday = weekdayInVN(date);
-    const dateKey = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Ho_Chi_Minh",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(date);
+
+    // Ngày theo giờ Việt Nam đi qua `date.ts` — một chỗ duy nhất biết múi giờ.
+    // Bản trước tự dựng `Intl.DateTimeFormat` hai lần ngay trong hàm này.
+    const key = dateKey(date);
+    const todayKey = dateKey(now);
+    const timing: DayTiming = key < todayKey ? "PAST" : key === todayKey ? "TODAY" : "FUTURE";
 
     const dayStart = atMinuteVN(date, 0);
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
 
     const [venue, hour, courts, bookings, closures, rules, overrides] = await Promise.all([
       this.db.venue.findFirst({
-        where: { id: venueId, deletedAt: null },
+        // CHỈ cơ sở đang mở bán. Nháp, chờ duyệt, tạm nghỉ, bảo trì hay bị khoá
+        // đều ra lưới rỗng — kể cả khi ai đó gọi thẳng bằng `venueId` tự chế.
+        where: { id: venueId, status: "ACTIVE", deletedAt: null },
         select: { id: true },
       }),
       this.db.venueHour.findUnique({
@@ -187,7 +225,10 @@ export class AvailabilityService {
       }),
       this.db.priceRule.findMany({
         where: { venueId },
+        // `id` + `createdAt` để `priceForSlot` chọn được MỘT luật xác định khi
+        // các luật chồng nhau — không phụ thuộc thứ tự database trả về.
         select: {
+          id: true,
           courtId: true,
           weekdays: true,
           startMinute: true,
@@ -195,23 +236,27 @@ export class AvailabilityService {
           pricePerSlot: true,
           isPeak: true,
           priority: true,
+          createdAt: true,
         },
       }),
       this.db.priceOverride.findMany({
-        where: { venueId, date: new Date(`${dateKey}T00:00:00Z`) },
+        where: { venueId, date: new Date(`${key}T00:00:00Z`) },
         select: {
+          id: true,
           courtId: true,
           startMinute: true,
           endMinute: true,
           pricePerSlot: true,
           isPeak: true,
+          createdAt: true,
         },
       }),
     ]);
 
     const empty: DayAvailability = {
       venueId,
-      date: dateKey,
+      date: key,
+      timing,
       minutes: [],
       courts: [],
       summary: [],
@@ -227,21 +272,7 @@ export class AvailabilityService {
     const minutes = slotRange(hour.openMinute, hour.closeMinute);
     if (minutes.length === 0) return empty;
 
-    // Khung đã trôi qua trong ngày hôm nay thì không bán được nữa. So sánh theo
-    // giờ Việt Nam, không theo giờ máy chủ.
-    const todayKey = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Asia/Ho_Chi_Minh",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(now);
-    const isToday = todayKey === dateKey;
-    const nowMinute = isToday ? minuteOfDayInVN(now) : -1;
-
-    const toMinutes = (at: Date) => {
-      const diff = Math.round((at.getTime() - dayStart.getTime()) / 60_000);
-      return diff;
-    };
+    const toMinutes = (at: Date) => Math.round((at.getTime() - dayStart.getTime()) / 60_000);
 
     const courtsResult: CourtAvailability[] = courts.map((court) => {
       const taken = bookings
@@ -263,17 +294,30 @@ export class AvailabilityService {
           overrides,
         });
 
+        /*
+         * Đã qua = giờ BẮT ĐẦU của khung ≤ bây giờ, so bằng mốc tuyệt đối.
+         *
+         * Bản trước chỉ xét "hôm nay" (`nowMinute = -1` cho mọi ngày khác), nên
+         * mở `?date=` của hôm qua là cả ngày hiện FREE và đặt được. So mốc tuyệt
+         * đối thì ngày đã qua, hôm nay và ngày mai cùng một phép tính — và khớp
+         * đúng điều kiện `BookingService.holdCheckout` dùng để từ chối.
+         */
+        const started = dayStart.getTime() + minute * 60_000 <= now.getTime();
+
         // Thứ tự xét quan trọng: sân đang bảo trì thì hiện "đóng" chứ không
         // hiện "đã có người" — hai chuyện khác nhau với người đang tìm sân.
+        // Khung chưa có giá xét SAU "đã qua": khung đã qua thì nói đã qua.
         const status: SlotStatus = closed.some((range) =>
           overlaps(range.start, range.end, minute, end),
         )
           ? "CLOSED"
           : taken.some((range) => overlaps(range.start, range.end, minute, end))
             ? "TAKEN"
-            : minute < nowMinute
+            : started
               ? "PAST"
-              : "FREE";
+              : price <= 0
+                ? "NOT_FOR_SALE"
+                : "FREE";
 
         return { minute, status, price, isPeak };
       });
@@ -287,7 +331,8 @@ export class AvailabilityService {
 
     return {
       venueId,
-      date: dateKey,
+      date: key,
+      timing,
       minutes,
       courts: courtsResult,
       summary,
@@ -334,8 +379,8 @@ export class AvailabilityService {
    * Báo giá cho NHIỀU dãy trong cùng một ngày — một lần đặt nhiều sân.
    *
    * Đọc lịch một lần rồi báo giá từng dãy. Trả đủ mọi dãy, kể cả dãy không đặt
-   * được (`available: false`), để nơi gọi báo đúng tên sân + giờ bị hỏng thay
-   * vì một câu chung chung.
+   * được (`available: false` kèm `reason`), để nơi gọi báo đúng tên sân + giờ +
+   * lý do thay vì một câu chung chung.
    */
   async quoteMany(params: {
     venueId: string;

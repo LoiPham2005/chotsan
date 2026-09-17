@@ -41,14 +41,32 @@ describe("formatCurrency", () => {
   });
 });
 
+/*
+ * Mốc thời gian viết kèm múi giờ (`Z` hoặc `+07:00`): chuỗi không múi giờ được
+ * hiểu theo giờ MÁY CHẠY TEST, và bài test sẽ xanh trên máy dev ở Việt Nam mà đỏ
+ * trên CI chạy UTC — đúng loại lỗi mà các hàm này vừa được sửa để tránh.
+ */
 describe("formatDate", () => {
   it("định dạng ngày/tháng/năm kiểu Việt Nam", () => {
-    expect(formatDate(new Date("2026-08-16T00:00:00"))).toBe("16/08/2026");
+    expect(formatDate(new Date("2026-08-16T09:00:00+07:00"))).toBe("16/08/2026");
   });
 
   it("nhận cả chuỗi lẫn timestamp", () => {
-    expect(formatDate("2026-01-05T00:00:00")).toBe("05/01/2026");
-    expect(formatDate(new Date("2026-01-05T00:00:00").getTime())).toBe("05/01/2026");
+    expect(formatDate("2026-01-05T09:00:00+07:00")).toBe("05/01/2026");
+    expect(formatDate(new Date("2026-01-05T09:00:00+07:00").getTime())).toBe("05/01/2026");
+  });
+
+  it("theo NGÀY Việt Nam dù máy chủ chạy UTC — 00:30 sáng VN vẫn là ngày mới", () => {
+    // 2026-08-15T17:30Z = 00:30 ngày 16/08 giờ VN. Không đặt timeZone thì máy
+    // chủ UTC in ra 15/08 — lệch một ngày cho mọi mốc từ 0h tới 7h sáng.
+    expect(formatDate(new Date("2026-08-15T17:30:00Z"))).toBe("16/08/2026");
+  });
+
+  it("options tự truyền vẫn giữ giờ VN, trừ khi khai timeZone khác", () => {
+    const instant = new Date("2026-08-15T17:30:00Z");
+
+    expect(formatDate(instant, { day: "2-digit" })).toBe("16");
+    expect(formatDate(instant, { day: "2-digit", timeZone: "UTC" })).toBe("15");
   });
 
   it("trả chuỗi rỗng khi ngày không hợp lệ, không ném lỗi", () => {
@@ -60,9 +78,17 @@ describe("formatDate", () => {
 
 describe("formatDateTime", () => {
   it("có cả giờ phút lẫn ngày tháng năm", () => {
-    const result = formatDateTime(new Date("2026-08-16T17:45:00"));
+    const result = formatDateTime(new Date("2026-08-16T17:45:00+07:00"));
 
     expect(result).toContain("17:45");
+    expect(result).toContain("16/08/2026");
+  });
+
+  it("giờ hiện theo giờ Việt Nam — phiên đăng nhập 06:30 sáng không thành 23:30 hôm trước", () => {
+    // Lỗi thật trước đây ở /sessions và /security trên máy chủ UTC.
+    const result = formatDateTime(new Date("2026-08-15T23:30:00Z"));
+
+    expect(result).toContain("06:30");
     expect(result).toContain("16/08/2026");
   });
 });

@@ -3,17 +3,17 @@
 # Deploy lên VPS sử dụng PM2 (Process Manager).
 #
 #   ssh deploy@server
-#   cd /var/www/nextjs-base && ./scripts/deploy-pm2.sh
+#   cd /var/www/chotsan && ./scripts/deploy-pm2.sh
 #
 # Ghi đè mặc định bằng biến môi trường:
-#   APP_DIR=/srv/app ENV_FILE=/etc/nextjs-base/env ./scripts/deploy-pm2.sh
+#   APP_DIR=/srv/app ENV_FILE=/etc/chotsan/env ./scripts/deploy-pm2.sh
 
 # -e dừng ngay khi có lệnh lỗi, -u báo lỗi khi dùng biến chưa khai báo,
 # pipefail để lỗi giữa pipe không bị nuốt.
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/var/www/nextjs-base}"
-ENV_FILE="${ENV_FILE:-/etc/nextjs-base/env}"
+APP_DIR="${APP_DIR:-/var/www/chotsan}"
+ENV_FILE="${ENV_FILE:-/etc/chotsan/env}"
 ECOSYSTEM_FILE="${ECOSYSTEM_FILE:-ecosystem.config.cjs}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3000/api/health}"
 
@@ -71,6 +71,13 @@ fi
 
 step "Khởi động / Reload PM2"
 if [ -f "$ECOSYSTEM_FILE" ]; then
+	# App đổi tên từ `nextjs-base*` (di sản bộ khung) sang `chotsan*`. Không tự
+	# gỡ: trên VPS dùng chung, `nextjs-base` có thể là app của dự án KHÁC — mà
+	# chạy song song với `chotsan` thì hai bên tranh cổng 3000.
+	if pm2 describe nextjs-base >/dev/null 2>&1; then
+		printf '  \033[1;33m⚠️  PM2 còn app tên cũ nextjs-base*. Nếu là của ChốtSân: pm2 delete nextjs-base nextjs-base-realtime nextjs-base-worker && pm2 save\033[0m\n'
+	fi
+
 	pm2 startOrReload "$ECOSYSTEM_FILE" --env production --update-env
 
 	# Gỡ tiến trình vừa bị tắt bằng cờ (QUEUE_ENABLED / REALTIME_ENABLED).
@@ -81,9 +88,9 @@ if [ -f "$ECOSYSTEM_FILE" ]; then
 	# `pm2 list` vẫn hiện "online" nên chẳng ai nghi ngờ.
 	#
 	# Docker không có vấn đề này (`replicas: 0` là compose tự gỡ container),
-	# systemd thì phải `systemctl disable --now`. Chỉ PM2 cần dọn tay.
+	# systemd thì `scripts/deploy-vps.sh` tự `systemctl disable --now` theo cờ.
 	configured=$(node -e 'console.log(require("./ecosystem.config.cjs").apps.map((a) => a.name).join(" "))')
-	for app in nextjs-base-realtime nextjs-base-worker; do
+	for app in chotsan-realtime chotsan-worker; do
 		case " $configured " in
 		*" $app "*) ;;
 		*)

@@ -115,6 +115,9 @@ services:
       # môi trường chứ không chắc có tạo file `.env` cạnh compose.
       QUEUE_ENABLED: ${QUEUE_ENABLED:-1}
       REALTIME_ENABLED: ${REALTIME_ENABLED:-1}
+      # Link trong email (xác thực, đặt lại mật khẩu) và passkey dựng từ đây.
+      # Bỏ trống thì các luồng đó báo lỗi thay vì gửi link localhost.
+      APP_URL: ${APP_URL:-}
     # Chỉ nghe loopback: reverse proxy (Caddy/Traefik/Coolify) là cửa duy nhất
     # đi vào. Mở ra 0.0.0.0 thì client gọi thẳng cổng 3000, bỏ qua TLS — và
     # nguy hiểm hơn: bỏ qua luôn bước proxy GHI ĐÈ X-Forwarded-For, nên ai cũng
@@ -184,9 +187,17 @@ services:
     env_file:
       - path: .env
         required: false
+    # Tường minh MỌI biến mà schema env của tiến trình này bắt buộc. Realtime đọc
+    # database lúc bắt tay để kiểm phiên đã bị thu hồi (đổi mật khẩu, bị khoá), nên
+    # cần `DATABASE_URL` thật và chờ postgres sẵn sàng.
     environment:
+      <<: *database-url
       NODE_ENV: production
       REALTIME_PORT: 3002
+      # Trong container phải nghe mọi card mạng — cổng công bố bên dưới đi vào IP
+      # của container, không vào loopback (mặc định của tiến trình). Ghi ở đây
+      # chứ không chỉ trong Dockerfile để `HOST` trong .env không đè mất.
+      HOST: 0.0.0.0
       REDIS_URL: redis://redis:6379
       REALTIME_CORS_ORIGIN: ${REALTIME_CORS_ORIGIN:-http://localhost:3000}
       REALTIME_ENABLED: ${REALTIME_ENABLED:-1}
@@ -197,6 +208,8 @@ services:
     ports:
       - "127.0.0.1:${REALTIME_PORT:-3002}:3002"
     depends_on:
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -234,14 +247,18 @@ services:
     env_file:
       - path: .env
         required: false
+    # Tường minh MỌI biến mà schema env của worker bắt buộc: `worker/env.ts`
+    # (REDIS_URL khi QUEUE_ENABLED=1) VÀ schema của app mà nó nạp theo
+    # (`DATABASE_URL`, `SESSION_SECRET`). SMTP_*, CRON_*, MAIL_FROM… là tuỳ chọn,
+    # đến qua `env_file`.
     environment:
       <<: *database-url
       NODE_ENV: production
       # BẮT BUỘC với worker — khác web và realtime, nó không có việc gì để làm
-      # nếu thiếu hàng đợi. `:?` khiến compose dừng ngay thay vì dựng một tiến
-      # trình ngồi im trông như đang hoạt động.
+      # nếu thiếu hàng đợi. Trỏ thẳng vào service `redis` của compose.
       REDIS_URL: redis://redis:6379
       QUEUE_ENABLED: ${QUEUE_ENABLED:-1}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET là bắt buộc}
     depends_on:
       postgres:
         condition: service_healthy

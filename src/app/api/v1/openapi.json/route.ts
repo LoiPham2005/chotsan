@@ -8,9 +8,8 @@ export const dynamic = "force-dynamic";
  * `src/lib/openapi/registry.ts`) — không phải file viết tay có thể lệch dần
  * khỏi code.
  *
- * Dán URL này vào editor.swagger.io, Postman ("Import từ link"), hoặc bất kỳ
- * tool sinh client nào để có tài liệu tương tác — repo này không tự kèm UI
- * riêng để tránh thêm dependency chỉ cho việc hiển thị.
+ * Trang tài liệu tương tác của chính app là `/docs` (Scalar, đọc URL này). Dán
+ * URL vào Postman ("Import từ link") hoặc công cụ sinh client để dựng SDK mobile.
  */
 export function GET() {
   return NextResponse.json(getOpenApiDocument());

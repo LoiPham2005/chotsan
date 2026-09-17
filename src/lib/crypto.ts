@@ -27,7 +27,7 @@ import { hash as argon2Hash, verify as argon2Verify } from "@node-rs/argon2";
  * `verifyPassword` trả về "sai mật khẩu" — thất bại AN TOÀN, không crash. Nếu
  * dự án của bạn THẬT SỰ phải nhận dữ liệu cũ, cách đúng là:
  *
- *   1. `pnpm add bcryptjs` trong packages/core
+ *   1. `pnpm add bcryptjs`
  *   2. Trong `verifyPassword`, nhận diện tiền tố `$2` rồi so bằng bcrypt
  *   3. Trả `needsRehash: true` khi đúng — mỗi lần đăng nhập thành công là một
  *      bản ghi được nâng cấp sang Argon2id mà người dùng không phải làm gì
