@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { SelectAndBook } from "@/components/booking/select-and-book";
 import { SportIcon, sportStyle } from "@/components/venue/sport-icon";
+import { VenueGallery } from "@/components/venue/venue-gallery";
 import { DateStrip } from "@/components/booking/date-strip";
 import { getCurrentUser } from "@/lib/auth";
 import { parseDateKey, dateKey, fullDateLabel } from "@/lib/date";
@@ -101,6 +102,8 @@ export default async function VenueDetailPage({ params, searchParams }: Props) {
           </div>
         </div>
       </header>
+
+      <VenueGallery images={venue.images} name={venue.name} />
 
       {/*
         Sân đang đóng thì nói RÕ vì sao và tới bao giờ — "hiện không nhận đặt"

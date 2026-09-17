@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { SportIcon, sportStyle } from "@/components/venue/sport-icon";
+import { VenuePhoto } from "@/components/venue/venue-photo";
 import { requireUser } from "@/lib/auth";
 import { venueService } from "@/services/venue.service";
 
@@ -58,11 +59,17 @@ export default async function ManageHomePage() {
                   href={`/manage/${venue.id}`}
                   className="flex items-center gap-3 rounded-token-lg border border-line bg-surface p-4 shadow-nang-1 transition-all hover:-translate-y-0.5 hover:border-brand-line hover:shadow-nang-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
                 >
-                  <span
-                    className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-token-md bg-gradient-to-br ${style.nen} ${style.mau}`}
-                  >
-                    <SportIcon sportKey={venue.sport.key} />
-                  </span>
+                  {venue.images[0] ? (
+                    <span className="relative h-11 w-11 shrink-0 overflow-hidden rounded-token-md bg-elevated ring-1 ring-line">
+                      <VenuePhoto src={venue.images[0].url} alt="" sizes="44px" />
+                    </span>
+                  ) : (
+                    <span
+                      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-token-md bg-gradient-to-br ${style.nen} ${style.mau}`}
+                    >
+                      <SportIcon sportKey={venue.sport.key} />
+                    </span>
+                  )}
 
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-semibold text-content">{venue.name}</span>

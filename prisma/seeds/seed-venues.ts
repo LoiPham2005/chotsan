@@ -61,7 +61,7 @@ const SAMPLE_VENUES: SampleVenue[] = [
     cancelFeePercent: 100,
   },
   {
-    slug: "court-bong-my-dinh",
+    slug: "san-bong-my-dinh",
     name: "Sân bóng đá Mỹ Đình",
     sportKey: "football",
     address: "Lô C2 Khu liên hợp thể thao",

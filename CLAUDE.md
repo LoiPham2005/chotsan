@@ -50,6 +50,11 @@ chậm hơn hẳn khi lướt cây thư mục, và trộn hai ngôn ngữ trong 
 biến "trang chủ" thành "page chủ" trong 71 tệp không liên quan. Đổi tên thì sửa từng tệp, hoặc
 dùng chức năng rename của IDE (nó hiểu phạm vi định danh, regex thì không).
 
+Hậu quả còn sót, phát hiện muộn: slug mẫu `san-bong-my-dinh` trong seed bị đổi thành
+`court-bong-my-dinh`, seed chạy lại tạo ra một sân **trùng tên** hiện hai lần ở trang tìm sân (sửa
+17/09). Thấy dữ liệu hay chuỗi nào lạ có chữ `court`/`page` chen vào tiếng Việt, nghi ngay lần đổi
+tên đó.
+
 ## Ba quyền KHÔNG BAO GIỜ tick được cho STAFF
 
 `payout:manage` (rút tiền) · `venue:delete` · `venue:transfer`. Giao diện phải **không có ô để

@@ -49,6 +49,28 @@ test.describe("Khách đặt sân", () => {
     await expect(page.locator("button[data-minute]").first()).toBeVisible();
   });
 
+  test("thẻ sân và trang chi tiết có ảnh thật, tải được qua bộ tối ưu ảnh", async ({ page }) => {
+    await page.goto("/venues");
+
+    // Ảnh phải TẢI ĐƯỢC, không chỉ có thẻ <img>: CSP chặn, đường dẫn sai hay bộ
+    // tối ưu ảnh hỏng đều để lại một thẻ <img> nằm đó với naturalWidth = 0.
+    const anhThe = page.locator('a[href^="/venues/"] img').first();
+    await expect(anhThe).toBeVisible();
+    await expect
+      .poll(() => anhThe.evaluate((img: HTMLImageElement) => img.naturalWidth))
+      .toBeGreaterThan(0);
+
+    await page.goto("/venues/cau-long-thanh-cong");
+
+    const bangAnh = page.getByRole("region", { name: /^Ảnh Nhà thi đấu Cầu lông Thành Công/ });
+    await expect(bangAnh.locator("img")).toHaveCount(4);
+    const anhBia = bangAnh.locator("img").first();
+    await expect
+      .poll(() => anhBia.evaluate((img: HTMLImageElement) => img.naturalWidth))
+      .toBeGreaterThan(0);
+    await expect(anhBia).toHaveAttribute("alt", /Nhà thi đấu Cầu lông Thành Công — ảnh 1/);
+  });
+
   test("chưa đăng nhập thì được dẫn tới đăng nhập, KHÔNG hỏi tên và số", async ({ page }) => {
     await page.goto("/venues/cau-long-thanh-cong");
 

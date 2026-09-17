@@ -52,6 +52,19 @@ trên database thật.
 | Quy ước màu/chữ/khoảng cách          | `.claude/skills/chotsan-thiet-ke/`     |
 | Lưới sân × khung giờ + dải tổng quan | `src/components/booking/slot-grid.tsx` |
 
+## Ảnh sân
+
+Thẻ sân (trang chủ, tìm sân), băng ảnh ở trang chi tiết (máy tính: 1 ảnh bìa + 3 ảnh nhỏ; điện
+thoại: vuốt ngang) và ảnh bìa nhỏ ở khu quản lý đều đọc `VenueImage` — ảnh đầu (`isPrimary`) là
+ảnh bìa. Chưa có ảnh thì thẻ giữ khối màu + biểu tượng môn, trang chi tiết không dựng băng ảnh.
+
+Dữ liệu dev có **12 ảnh mẫu** (4 ảnh × 3 sân) ở `public/demo/venues/`, gắn bằng
+`prisma/seeds/seed-venue-images.ts`. Tất cả là **CC0** (tìm qua Openverse), nguồn từng tệp ghi
+trong seed. Seed không bao giờ ghi đè sân đã có ảnh.
+
+Ảnh nội bộ đi qua `next/image` (trình duyệt nhận WebP đúng cỡ); ảnh ở host ngoài dùng `<img>`
+thường cho tới khi khai `images.remotePatterns` — xem `VenuePhoto`. CSP không phải nới gì.
+
 ## Các chốt chặn tiền đã chứng minh trên database thật
 
 Chạy `pnpm db:check-conflict` — script tự tạo sân riêng, chạy thao tác **đồng thời thật**, rồi tự

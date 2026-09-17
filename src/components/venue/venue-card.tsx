@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SportIcon, sportStyle } from "@/components/venue/sport-icon";
+import { VenuePhoto } from "@/components/venue/venue-photo";
 import { formatVndShort } from "@/lib/slots";
 
 /**
@@ -48,13 +49,20 @@ export function VenueCard({
         className={`relative w-28 shrink-0 overflow-hidden bg-gradient-to-br ${mon.nen} sm:h-44 sm:w-full`}
       >
         {court.imageUrl ? (
-          /* eslint-disable-next-line @next/next/no-img-element -- ảnh do chủ sân tải lên, không biết trước kích thước */
-          <img
-            src={court.imageUrl}
-            alt=""
-            loading="lazy"
-            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.04]"
-          />
+          <>
+            {/* `alt` rỗng: tên sân đứng ngay dưới, đọc lại lần nữa chỉ làm phiền trình đọc màn hình. */}
+            <VenuePhoto
+              src={court.imageUrl}
+              alt=""
+              sizes="(min-width: 1024px) 370px, (min-width: 640px) 50vw, 112px"
+              className="transition-transform duration-300 group-hover:scale-[1.04]"
+            />
+            {/* Tối nhẹ mép trên để nhãn môn thể thao luôn đọc được trên ảnh sáng. */}
+            <span
+              aria-hidden
+              className="absolute inset-x-0 top-0 h-14 bg-gradient-to-b from-black/25 to-transparent"
+            />
+          </>
         ) : (
           <div className={`flex h-full w-full items-center justify-center ${mon.mau}`}>
             <SportIcon

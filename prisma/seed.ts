@@ -6,6 +6,7 @@ import { seedAdmin } from "./seeds/seed-admin";
 import { seedDev } from "./seeds/seed-dev";
 import { seedSports } from "./seeds/seed-sports";
 import { seedVenues } from "./seeds/seed-venues";
+import { seedVenueImages } from "./seeds/seed-venue-images";
 
 /**
  * Chạy: `pnpm db:seed`
@@ -60,6 +61,7 @@ async function main() {
   } else {
     await seedDev(prisma);
     await seedVenues(prisma);
+    await seedVenueImages(prisma);
   }
 
   console.log("🌱 Xong.");

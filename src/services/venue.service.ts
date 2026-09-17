@@ -444,6 +444,7 @@ export class VenueService {
             province: true,
             ward: true,
             sport: { select: { key: true, name: true } },
+            images: { where: { isPrimary: true }, take: 1, select: { url: true } },
           },
         },
       },
