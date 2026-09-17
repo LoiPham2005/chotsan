@@ -99,7 +99,11 @@ bảng ngoài ý muốn.
 **Bài học**: sau khi test xong với `DATABASE_URL` override, **luôn đóng terminal hoặc chạy
 `Remove-Item Env:\DATABASE_URL`** trước khi chạy lệnh `db:*` tiếp theo. Không có cách nào khác để
 biết chắc terminal đang trỏ DB nào ngoài tự kiểm tra `echo $env:DATABASE_URL` trước mỗi lệnh nhạy
-cảm (`db:push`, `db:migrate`, `db:reset`).
+cảm.
+
+> Cập nhật 17/09/2026: script `db:push`, `db:migrate`, `db:migrate:create`, `db:reset` đã bị gỡ
+> khỏi `package.json` (chúng xoá ràng buộc viết tay — xem #11). Bài học về `DATABASE_URL` bị
+> override vẫn nguyên giá trị với `db:deploy`, `db:seed`, `db:check-conflict`.
 
 ## 7. Xoá mềm (`deletedAt`) + cột `email` là `@unique` — không thể để trống khi xoá
 
@@ -107,9 +111,11 @@ Muốn giải phóng email cho phép đăng ký lại sau khi xoá mềm, nhưng
 (`String @unique`, không nullable) — không thể set `null` để "giải phóng" như cách làm với
 `username` (nullable, Postgres cho phép nhiều `NULL` trên cột unique).
 
-**Fix**: đổi `email` thành giá trị vô hại nhưng chắc chắn duy nhất khi xoá mềm:
-`` `deleted_${id}@deleted.invalid` `` (`id` là cuid, tự đảm bảo không trùng ai). Dùng domain
-`.invalid` (RFC 2606, dành riêng cho địa chỉ không hợp lệ) để không vô tình trùng domain thật nào.
+**Fix** (mã thật, `UserService.softDelete` trong `src/services/user.service.ts`): nối hậu tố
+vào giá trị cũ thay vì xoá — `<email>:deleted:<timestamp>` (cùng hậu tố cho `username` và `phone`
+nếu có). Chuỗi có `:` không bao giờ là email/username/số điện thoại hợp lệ nên không trùng ai còn
+sống, và vẫn đọc được tài khoản đã xoá từng dùng email gì. Cùng transaction đó thu hồi mọi refresh
+token; sau đó `invalidateUser` + `securityStamps.invalidate` (xoá cache mốc bảo mật) để phiên web/API đang mở bị cắt ngay.
 
 **Bài học**: trước khi thêm xoá mềm vào 1 bảng, kiểm tra kỹ các cột `@unique` không nullable —
 không có công thức chung, mỗi cột phải tự quyết định "giải phóng bằng cách nào" (null hoá nếu
@@ -176,7 +182,8 @@ Và lỗi **im lặng**: nhánh bắt lỗi không chạy, lỗi bung lên thàn
 tác đúng cùng lúc. Typecheck không thấy, unit test với lỗi tự bịa cũng không thấy, vì lỗi tự bịa
 có đúng hình dạng mà người viết test tưởng tượng ra.
 
-**Fix**: đừng bao giờ tự dò. Dùng `isUniqueViolation(error, "ten_rang_buoc_hoac_ten_cot")` và
+**Fix** (đã làm ở mọi service, gồm `UserService.catchDuplicate` trong
+`src/services/user.service.ts` — nay dùng `isUniqueViolation`): đừng bao giờ tự dò. Dùng `isUniqueViolation(error, "ten_rang_buoc_hoac_ten_cot")` và
 `isExclusionViolation(error, ...)` trong [`src/lib/prisma-errors.ts`](../src/lib/prisma-errors.ts)
 — chúng dò cả `message`, `meta.target` (nếu có) lẫn `meta.driverAdapterError.cause`.
 `prisma-errors.test.ts` giữ các lỗi **chép nguyên từ database thật**, không phải bịa.
@@ -205,15 +212,18 @@ trong `schema.prisma` nên Prisma biết và không đụng vào.
 
 ```bash
 # 1. Sinh SQL nhưng KHÔNG áp
-pnpm exec prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script \
-  > prisma/migrations/<timestamp>_<ten>/migration.sql
+pnpm db:migrate:diff > prisma/migrations/<timestamp>_<english_name>/migration.sql
 
-# 2. ĐỌC file vừa sinh, xoá mọi DROP INDEX / DROP CONSTRAINT đụng vào ràng buộc viết tay
-# 3. Áp
-pnpm exec prisma migrate deploy
+# 2. ĐỌC file vừa sinh, xoá mọi DROP INDEX / DROP CONSTRAINT / DROP SEQUENCE đụng vào ràng buộc viết tay
+# 3. Áp, sinh lại client, kiểm ràng buộc
+pnpm db:deploy
+pnpm db:generate
+pnpm db:check-conflict
+# 4. Khởi động lại `pnpm dev` (#18)
 ```
 
-⚠️ **Đừng dùng `prisma migrate dev`** trên dự án này. Nó vừa sinh vừa áp, nên tới lúc nhìn thấy
+⚠️ **Đừng dùng `prisma migrate dev`** (hay `db push`, `migrate reset`) trên dự án này — các script
+bọc chúng đã bị gỡ khỏi `package.json` và `Makefile`. Nó vừa sinh vừa áp, nên tới lúc nhìn thấy
 SQL thì index đã bị xoá rồi.
 
 **Danh sách ràng buộc viết tay phải bảo vệ** (kiểm bằng `pnpm db:check-conflict` sau mỗi lần
@@ -227,6 +237,7 @@ migrate):
 | `venues_name_trgm_idx`, `venues_address_trgm_idx`  | Tìm sân thành quét toàn bảng            |
 | `users_email_active_key`, `users_phone_active_key` | Trùng email/sđt giữa tài khoản còn sống |
 | 7 ràng buộc `CHECK`                                | Điểm sao ngoài 1–5, tiền âm, giờ ngược  |
+| `platform_invoice_number_seq` (SEQUENCE)           | Hai hoá đơn hoa hồng cùng số            |
 
 ## 12. Server Action ở dev chạy tới 10 giây — đừng vội kết luận là hỏng
 
@@ -431,6 +442,131 @@ cho người dò rằng id đó tồn tại.
 Test cho mỗi thao tác như vậy phải có một ca "id của sân khác → NOT_FOUND" — mock `findMany` phải
 LỌC THẬT theo `venueId`, mock trả bừa mọi thứ thì bài test không chứng minh được gì.
 
+## 20. BullMQ 6 cần gói `ioredis` trong `package.json` — thiếu là worker chết lúc chạy
+
+BullMQ 6 chỉ `require("ioredis")` khi dựng kết nối (nạp lười), và không import nào trong mã của dự
+án trỏ tới `ioredis`. Nên thiếu gói đó thì typecheck, lint, build đều xanh — còn worker và mọi
+`enqueue()` có Redis chết lúc chạy với `BullMQ could not load the optional 'ioredis' package`.
+
+**Fix** (đã làm): thêm `ioredis` vào `dependencies`. `src/lib/queue.test.ts` có ca "BullMQ tìm thấy
+`ioredis` từ CHÍNH vị trí của nó" để gỡ nhầm là đỏ.
+
+**Bài học**: phụ thuộc tuỳ chọn được nạp lười không lộ ra ở bước build — phải có một test nạp thử.
+
+## 21. `setTimeout` quá ~24,8 ngày bị Node rút còn 1 ms
+
+`setTimeout` nhận tối đa 2^31−1 ms (~24,8 ngày); quá mức đó Node coi là 1 ms và in cảnh báo. Bộ chạy
+lịch trong tiến trình (`startInProcessScheduler`, `src/jobs/schedules.ts`) mà hẹn thẳng tới mốc của
+một lịch hằng tháng thì job chạy NGAY rồi chạy liên tục.
+
+**Fix** (đã làm): chờ từng quãng ngắn (`MAX_TIMER_DELAY_MS` = 60 giây) rồi so lại đồng hồ thật —
+né được cả đồng hồ máy nhảy (NTP chỉnh, máy ảo ngủ rồi thức). Test:
+`schedules.test.ts` "lịch HẰNG THÁNG không chạy ngay".
+
+## 22. `/health` của worker treo vô hạn khi mất Redis
+
+Redis không tới được thì `getJobCounts` KHÔNG ném lỗi — ioredis giữ lệnh lại chờ kết nối lại, mãi
+mãi. `curl /health` treo thay vì trả 503, nên Docker/systemd chỉ thấy "hết giờ" (đã gặp khi chạy thử
+bundle với Redis tắt).
+
+**Fix** (đã làm): `HEALTH_TIMEOUT_MS = 2_000` trong `worker/worker.ts` — quá 2 giây trả 503, ngắn
+hơn `--timeout=5s` của HEALTHCHECK. `/health` của worker và realtime cũng chỉ nghe `127.0.0.1`
+(biến `HOST`) vì nó lộ số job trong hàng đợi.
+
+## 23. Payload `null` từ client làm sập cả tiến trình realtime
+
+Handler `ping:user` từng đọc thẳng `payload.toUserId`. Một client đã đăng nhập gửi `null` là ném
+`TypeError` trong listener — không ai bắt, tiến trình realtime chết, mọi người đang online rớt kết
+nối.
+
+**Fix** (đã làm, `realtime/server.ts`): validate bằng Zod (`toUserId` ≤ 128 ký tự, `text` ≤ 2000),
+giới hạn 10 tin / 10 giây mỗi socket (`PING_USER_RATE_LIMIT`).
+
+**Bài học**: mọi thứ đến qua socket là dữ liệu từ client, không tin được — giống body của route.
+
+## 24. `pnpm dev` không có Redis mà chạy lịch mỗi phút làm database Neon không bao giờ ngủ
+
+Lịch nhả chỗ giữ chạy MỖI PHÚT. Compute của Neon chỉ tự ngủ khi vài phút không có truy vấn; để
+`pnpm dev` chạy qua đêm mà hỏi database mỗi phút là compute thức 24/7, đốt hết giờ compute của
+gói rồi database ngừng phục vụ tới cuối tháng.
+
+**Fix / quyết định** (`schedulingMode` trong `src/jobs/schedules.ts`, gọi từ
+`src/instrumentation.ts`): `QUEUE_ENABLED=1` mà thiếu `REDIS_URL` → chế độ `off`. Production thì
+log lỗi; **máy dev thì cố ý không chạy lịch**, chỉ log một dòng info. Ở dev không lịch nào là bắt
+buộc (lịch trống đã coi chỗ giữ quá hạn là trống — luật "đúng-sai không phụ thuộc worker"). Cần thử
+lịch: `pnpm worker:dev` với `REDIS_URL`, hoặc `QUEUE_ENABLED=0` (web tự chạy lịch). Chế độ đang
+chạy xem ở `/api/health` → `features.schedules`.
+
+## 25. React 19 xoá trắng form sau khi action chạy — kể cả khi action báo lỗi
+
+Form dùng `<form action={...}>` + `useActionState`: React 19 reset các ô không kiểm soát sau khi
+action chạy xong, cả khi action trả lỗi. Người dùng gõ cả form dài, sai một ô, bấm gửi — mọi ô trống
+trơn.
+
+**Fix** (đã làm ở các form nhiều ô): action trả kèm `values` (đúng chữ vừa gõ) và form dựng lại bằng
+`defaultValue={state.values?.x}`, hoặc dùng ô có kiểm soát. `<select>` cần thêm `key` đổi theo giá
+trị trả về, vì `defaultValue` chỉ đọc lúc mount. **Không bao giờ trả lại mật khẩu hay mã OTP.** Câu
+lỗi cụ thể theo ô lấy từ `src/lib/form-errors.ts` (`formErrorMap`, `firstIssueMessage`).
+
+## 26. Thông báo thành công nằm trong dòng bị gỡ cùng dòng khi dòng rời danh sách
+
+Khách bấm "Huỷ lượt đặt", chủ sân bấm "Đã nhận đủ tiền": action gọi `revalidatePath`, dòng vừa
+bấm đổi nhóm ("Sắp tới" → "Đã qua") hoặc rời hẳn hàng chờ. Component giữ `useActionState` bị gỡ
+cùng dòng — câu "Đã huỷ. Sân sẽ hoàn 360.000đ" biến mất trước khi ai kịp đọc.
+
+**Fix** (đã làm): `ActionNoticeProvider` (`src/components/booking/action-notice.tsx`) ở cấp trang,
+thông báo thành công dính mép dưới màn hình, không tự tắt. Lỗi vẫn hiện ngay tại dòng (dòng còn
+nguyên khi thao tác hỏng).
+
+## 27. `EXCLUDE` không biết lịch đóng sân — kiểm rồi ghi rời nhau là có khe
+
+Ràng buộc chống trùng chỉ so `bookings` với `bookings`. Không có ràng buộc nào giữa `bookings` và
+`court_closures`, cũng không có gì bắt sân con còn bật khi lượt đặt được chèn. Giữ chỗ đọc "sân mở"
+rồi ghi, trong khi chủ sân đóng sân giữa hai bước → lượt đặt rơi vào giờ đóng.
+
+**Fix** (đã làm): `holdCheckout` khoá dòng sân con trong transaction (`lockCourts`,
+`SELECT … FOR UPDATE OF c`, lọc `is_active`, cùng cơ sở, cơ sở `ACTIVE`) rồi mới kiểm lịch đóng;
+`CourtService.close` cũng khoá dòng sân con và từ chối khi chồng lượt còn sống
+(`CourtClosureConflictError`).
+
+## 28. `FOR NO KEY UPDATE` không chặn phép kiểm khoá ngoại — `FOR UPDATE` thì có
+
+Chèn một dòng có khoá ngoại tới `courts` làm Postgres lấy `FOR KEY SHARE` trên dòng cha. `FOR KEY
+SHARE` xung đột với `FOR UPDATE` nhưng KHÔNG xung đột với `FOR NO KEY UPDATE`.
+
+- Muốn chèn lượt đặt phải CHỜ (đóng sân con): dùng `FOR UPDATE` (`court.service.ts`).
+- Chỉ muốn tuần tự hoá một việc mà không chặn người chèn dòng con (hai đánh giá đồng thời trên cùng
+  cơ sở): dùng `FOR NO KEY UPDATE` (`review.service.ts`).
+
+Chọn nhầm thì hoặc khoá không có tác dụng, hoặc chặn cả luồng đặt sân.
+
+## 29. `NOT` của Prisma trên cột nullable sai theo luật NULL của SQL
+
+`NOT (status = 'HOLDING' AND hold_expires_at <= now)` gặp `hold_expires_at = NULL` cho ra `NULL`,
+không phải `true` — dòng bị loại. Hậu quả thật: lượt đã khai chuyển khoản (`holdExpiresAt = null`)
+biến mất khỏi "Lượt đặt của tôi".
+
+**Fix**: viết điều kiện dạng KHẲNG ĐỊNH, liệt kê nhánh `null` tường minh (xem `listForUser` trong
+`booking.service.ts`: `OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }]`).
+
+## 30. `new Date("2026-02-31")` không lỗi — nó cuộn sang 03/03
+
+JavaScript chấp nhận ngày không tồn tại và cuộn sang tháng sau. Kiểm bằng `Number.isNaN` là không
+đủ.
+
+**Fix** (`parseDateKey` trong `src/lib/date.ts`): parse xong, định dạng ngược lại và so với chuỗi
+gốc; lệch là ngày không tồn tại → về hôm nay. Mọi chỗ nhận ngày từ URL/form đi qua hàm này.
+
+## 31. `height: X%` trong khung `flex items-end` ra 0px
+
+Biểu đồ doanh thu từng có khung, có trục, không có cột nào: khung ngoài `flex h-40 items-end`, mỗi
+cột `flex-1` không có chiều cao, thanh bên trong `height: X%`. Với `items-end` (không phải
+`stretch`), cột con cao theo nội dung — không xác định — và phần trăm của chiều cao không xác định
+tính như `auto`: 0px.
+
+**Fix** (`src/components/manage/revenue-chart.tsx`): mỗi cột `h-full` + `flex-col justify-end`,
+phần trăm tính trên chiều cao xác định của khung.
+
 ## Lưu ý chung khi code
 
 - **Ưu tiên `pnpm typecheck`/`pnpm test` qua terminal hơn tin theo IDE** khi vừa đổi
@@ -441,7 +577,7 @@ LỌC THẬT theo `venueId`, mock trả bừa mọi thứ thì bài test không 
 - **Mọi cột `@unique` không nullable phải có kế hoạch xoá mềm riêng**, không áp dụng chung 1 công
   thức cho mọi cột.
 - **Ràng buộc chạy đua (trùng chỗ, trùng tiền) phải kiểm bằng `pnpm db:check-conflict`**, không
-  chỉ bằng unit test — xem gotcha #10.
+  chỉ bằng unit test — xem gotcha #10, #11.
 - **Không chạy `prisma migrate dev`** — nó xoá index viết tay. Dùng `migrate diff` + đọc SQL +
   `migrate deploy`, xem gotcha #11.
 - **Không mặc định chuyển hướng về `/users`** sau đăng nhập/đăng ký — đó là trang của quản trị,
@@ -451,3 +587,7 @@ LỌC THẬT theo `venueId`, mock trả bừa mọi thứ thì bài test không 
 - **Id lấy từ form trong action theo sân phải lọc theo `ctx.venueId`** — xem gotcha #19.
 - **Đổi `schema.prisma` xong thì khởi động lại `pnpm dev`** — xem gotcha #18.
 - **Đừng để đúng-sai phụ thuộc worker còn sống**: hạn giữ chỗ tự tính ở lịch, cron chỉ dọn cho gọn.
+- **Phụ thuộc nạp lười (`ioredis` của BullMQ) phải có test nạp thử** — xem gotcha #20.
+- **Dữ liệu qua socket là dữ liệu từ client**: validate + giới hạn tần suất — xem gotcha #23.
+- **Form báo lỗi phải giữ chữ người dùng vừa gõ** (trừ mật khẩu/OTP) — xem gotcha #25.
+- **Điều kiện Prisma trên cột nullable viết dạng khẳng định**, đừng dùng `NOT` — xem gotcha #29.

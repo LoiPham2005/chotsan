@@ -1,5 +1,20 @@
 # 🚀 Hướng Dẫn Kiến Trúc & Lộ Trình Phát Triển Hệ Thống RBAC & Auth (Next.js + Prisma)
 
+> ⚠️ **TÀI LIỆU LỖI THỜI — đừng dùng làm căn cứ khi code.** Tệp này viết cho bộ khung cũ, trước khi
+> thành ChốtSân và trước đợt sửa bảo mật 17/09/2026; nhiều chi tiết bên dưới SAI so với mã hiện tại.
+> Nguồn đúng: [`.claude/skills/chotsan-project/references/auth-rbac.md`](../.claude/skills/chotsan-project/references/auth-rbac.md).
+> Vài điểm đã khác:
+>
+> - Mật khẩu băm **Argon2id**, không phải bcrypt.
+> - Chỉ **3 vai trò nền tảng** (`USER`/`ADMIN`/`SUPER_ADMIN`), không có MANAGER/STAFF/CUSTOMER trong
+>   bảng `roles`; OWNER/STAFF là `VenueMember.role`, quyền theo sân hỏi bằng `canOnVenue`.
+> - `User` không có `roleId`: một người mang nhiều vai trò qua `UserRole`.
+> - Access token **không** mang danh sách quyền; quyền luôn tra DB theo `userId` (cache 60 giây).
+>   Phiên thu hồi được qua security stamp (khoá/xoá/đổi mật khẩu cắt phiên cũ).
+> - Refresh token sống 30 ngày (`REFRESH_TOKEN_TTL_DAYS`), không phải 7; không có `seed-prod.ts`
+>   (dùng `pnpm db:seed:prod`); vai trò hệ thống vẫn SỬA được (chỉ không xoá được), trong giới hạn
+>   `Role.level`.
+
 Tài liệu này cung cấp hướng dẫn toàn diện về kiến trúc phân quyền **RBAC (Role-Based Access Control)**, cơ chế xác thực bảo mật và các bước triển khai/mở rộng trong dự án `chotsan`.
 
 ---

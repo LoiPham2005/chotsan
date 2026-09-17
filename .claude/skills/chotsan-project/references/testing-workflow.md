@@ -2,17 +2,17 @@
 
 ## 1. Thang kiểm tra — chạm vào gì thì chạy gì
 
-| Thay đổi chạm vào                                                                                  | Bắt buộc                                                                                                              |
-| -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Bất kỳ mã nào                                                                                      | `pnpm check` = `typecheck` → `lint` → `format:check` → `test` (dừng ở bước hỏng đầu tiên). Chưa xanh thì chưa xong.   |
-| `src/services/**`, `src/lib/api/**`                                                                | Thêm `pnpm test:coverage` — CI áp ngưỡng coverage, `pnpm check` KHÔNG. Máy xanh mà CI đỏ thường là tụt ngưỡng.        |
-| Form, Server Action, route, redirect, proxy/CSP, `next.config.mjs`, luồng đăng nhập/đặt/thanh toán | Thêm/sửa bài e2e rồi `pnpm test:e2e` (hoặc một spec). Lớp DUY NHẤT thấy lỗi tên trường form ↔ schema.                 |
-| Ràng buộc DB, transaction, tiền, giữ chỗ, migration                                                | `pnpm db:check-conflict` (thao tác đồng thời THẬT trên DB thật). Không nằm trong `pnpm check` lẫn CI — phải nhớ chạy. |
-| `prisma/schema.prisma`                                                                             | Quy trình migration (`data-model.md`) → `pnpm db:generate` → `db:check-conflict` → **khởi động lại `pnpm dev`**       |
-| Route mới trong `src/app/api/v1/**`                                                                | Khai trong OpenAPI registry — `registry.test.ts` so khớp hai chiều với `route.ts` trên đĩa                            |
-| Job nền mới                                                                                        | Đăng ký cả loại job lẫn handler — `src/jobs/handlers.test.ts` bắt thiếu                                               |
-| Giao diện                                                                                          | Chụp màn hình thật ở 390px và 1280px, kiểm `document.documentElement.scrollWidth` ≤ bề ngang, XEM ảnh chụp            |
-| Lỗi người dùng báo                                                                                 | Tái hiện trên chính môi trường của họ (mục 6) trước khi kết luận                                                      |
+| Thay đổi chạm vào                                                                                  | Bắt buộc                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bất kỳ mã nào                                                                                      | `pnpm check` = `typecheck` → `lint` → `format:check` → **`test:coverage`** (dừng ở bước hỏng đầu). Chưa xanh thì chưa xong.                         |
+| `src/services/**`, `src/lib/api/**`                                                                | Ngưỡng coverage đã nằm TRONG `pnpm check` (cùng lệnh với CI) — tụt ngưỡng là đỏ ngay ở máy.                                                         |
+| Form, Server Action, route, redirect, proxy/CSP, `next.config.mjs`, luồng đăng nhập/đặt/thanh toán | Thêm/sửa bài e2e rồi `pnpm test:e2e` (hoặc một spec). Lớp DUY NHẤT thấy lỗi tên trường form ↔ schema.                                               |
+| Ràng buộc DB, transaction, tiền, giữ chỗ, migration                                                | `pnpm db:check-conflict` (thao tác đồng thời THẬT trên DB thật). Không nằm trong `pnpm check` — CI có chạy (job `validate`), máy dev phải nhớ chạy. |
+| `prisma/schema.prisma`                                                                             | Quy trình migration (`data-model.md`) → `pnpm db:generate` → `db:check-conflict` → **khởi động lại `pnpm dev`**                                     |
+| Route mới trong `src/app/api/v1/**`                                                                | Khai trong OpenAPI registry — `registry.test.ts` so khớp hai chiều với `route.ts` trên đĩa                                                          |
+| Job nền mới                                                                                        | Đăng ký cả loại job lẫn handler — `src/jobs/handlers.test.ts` bắt thiếu; job theo lịch thêm vào `src/jobs/schedules.ts` (`schedules.test.ts`)       |
+| Giao diện                                                                                          | Chụp màn hình thật ở 390px và 1280px, kiểm `document.documentElement.scrollWidth` ≤ bề ngang, XEM ảnh chụp                                          |
+| Lỗi người dùng báo                                                                                 | Tái hiện trên chính môi trường của họ (mục 6) trước khi kết luận                                                                                    |
 
 Lệnh lẻ:
 
@@ -33,7 +33,7 @@ pnpm exec prettier --write <tệp>                  # format:check đỏ thì fo
 
 | Project | Môi trường | Tệp                                                                   |
 | ------- | ---------- | --------------------------------------------------------------------- |
-| `node`  | node       | `src/**/*.test.ts`, `realtime/**/*.test.ts`                           |
+| `node`  | node       | `src/**/*.test.ts`, `realtime/**/*.test.ts`, `worker/**/*.test.ts`    |
 | `dom`   | jsdom      | `src/**/*.test.tsx` (setup `vitest.setup.ts`: jest-dom + `cleanup()`) |
 
 - Alias `@` → `src`, `server-only` → `test/stubs/server-only.ts` (stub chỉ ở Vitest, esbuild của
@@ -53,35 +53,40 @@ pnpm exec prettier --write <tệp>                  # format:check đỏ thì fo
 
 **Playwright** (`playwright.config.ts`):
 
-| Cấu hình              | Giá trị và lý do                                                                                                                 |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Máy chủ               | `pnpm build && pnpm start` (standalone) ở cổng **3100**, chờ `/api/health`, 180s — bản PRODUCTION: CSP và React Refresh khác dev |
-| `reuseExistingServer` | Bật khi không phải CI → cổng 3100 còn server CŨ là test chạy bản build cũ. Kiểm trước: `lsof -nP -iTCP:3100 -sTCP:LISTEN`        |
-| `workers: 1`          | Rate limit đăng nhập theo IP (5 lần/5 phút, reset khi đúng); mọi bài từ 127.0.0.1                                                |
-| `timeout` / `expect`  | 60s / 15s (Server Action lần đầu 6–10s). Bài dài tự `test.setTimeout(120_000)`                                                   |
-| Khác                  | chỉ chromium; `trace: retain-on-failure`, `screenshot: only-on-failure` (ra `test-results/`); CI: `retries 1`, `forbidOnly`      |
-| Database              | Nạp `.env` → DB DEV DÙNG CHUNG, không reset, e2e ghi dồn dữ liệu (user `e2e-*@example.com`, lượt đặt). Cần `pnpm db:seed` trước  |
+| Cấu hình              | Giá trị và lý do                                                                                                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Máy chủ               | `pnpm build && pnpm start` (standalone) ở cổng **3100**, chờ `/api/health`, 180s — bản PRODUCTION: CSP và React Refresh khác dev                                                                     |
+| `reuseExistingServer` | **`false` ở mọi nơi** — trước đây bật ở máy cá nhân nên chạy nhầm bản build cũ. Cổng 3100 bị chiếm thì Playwright báo lỗi ngay: dừng tiến trình cũ (`lsof -nP -iTCP:3100 -sTCP:LISTEN`) rồi chạy lại |
+| `webServer.env`       | `PORT`, `NODE_ENV=production`, **`QUEUE_ENABLED=0`** (thắng `.env`) — job chạy ngay trong request, không cần Redis/worker; production bật cờ mà thiếu `REDIS_URL` thì `enqueue()` ném                |
+| `workers: 1`          | Rate limit đăng nhập theo IP (5 lần/5 phút, reset khi đúng); mọi bài từ 127.0.0.1                                                                                                                    |
+| `timeout` / `expect`  | 60s / 15s (Server Action lần đầu 6–10s). Bài dài tự `test.setTimeout(120_000)`                                                                                                                       |
+| Khác                  | chỉ chromium; `trace: retain-on-failure`, `screenshot: only-on-failure` (ra `test-results/`); CI: `retries 1`, `forbidOnly`, reporter `github` + `list` + **`html`** (`playwright-report/`)          |
+| Database              | Nạp `.env` → DB DEV DÙNG CHUNG, không reset, e2e ghi dồn dữ liệu (user `e2e-*@example.com`, lượt đặt). Cần `pnpm db:seed` trước                                                                      |
 
 **CI** (`.github/workflows/ci.yml`, push/PR vào `main`/`master`/`dev`):
 
-| Job        | Làm gì                                                                                                                                                       |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `validate` | Postgres 16 service → `pnpm install --frozen-lockfile` → `db:generate` → `db:deploy` → `format:check` → `lint` → `typecheck` → **`test:coverage`** → `build` |
-| `e2e`      | Postgres 16 → `playwright install --with-deps chromium` → `db:deploy` → `db:seed` → `test:e2e` (upload `playwright-report/` khi hỏng)                        |
-| `audit`    | `pnpm audit --prod --audit-level high \|\| true` — không bao giờ đỏ                                                                                          |
-| `docker`   | Build target `runner`, chạy thử container với DB không tồn tại, poll `/api/health` (mã khác `000` là đạt)                                                    |
+| Job        | Làm gì                                                                                                                                                                                                                                                                                              |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `validate` | **Postgres 17** service (cùng major với Neon) → `pnpm install --frozen-lockfile` → `db:generate` → `db:deploy` → **`pnpm check`** (đúng lệnh máy dev) → **`db:check-conflict`** → `build`                                                                                                           |
+| `e2e`      | Postgres 17 + **mailpit** (SMTP giả cổng 1025) → env `APP_URL`/`NEXT_PUBLIC_APP_URL=http://127.0.0.1:3100`, **`QUEUE_ENABLED=0`**, `SMTP_*` → `playwright install --with-deps chromium` → `db:deploy` → `db:seed` → `test:e2e` (khi hỏng upload `playwright-report/` + `test-results/`, giữ 7 ngày) |
+| `audit`    | `pnpm audit --prod --audit-level high` — **ĐỎ** khi có lỗ hổng high trở lên (bản cũ `\|\| true` để lọt Next RCE critical)                                                                                                                                                                           |
+| `docker`   | Build **3 image** `runner`, `realtime`, `worker`. Chạy thử web (poll `/api/health`, mã khác `000` là đạt); realtime `/health` qua `docker exec` phải 200; worker trỏ Redis không tồn tại phải **503** (không treo) và log không có `Cannot find module`                                             |
 
-CI KHÔNG chạy `db:check-conflict`. CI dùng Postgres 16, dev/prod dùng Neon (Postgres 17).
+Không có mail thật mà production thiếu SMTP thì mailer ném — CI không nới chốt đó, mà cho mailpit để luồng gửi
+thư chạy thật đầu-cuối.
 
-**Git hook**: husky 9 cài `core.hooksPath=.husky/_`, nhưng `.husky/pre-commit` và `pre-push` chỉ có
-dòng chú thích → **không hook nào chạy**; `lint-staged` trong `package.json` là cấu hình chết. Không
-có gate cục bộ — phải tự `pnpm check`.
+**Git hook** (husky 9, `prepare: husky || true`):
+
+- `pre-commit`: `pnpm exec lint-staged` — chỉ tệp đang commit: `*.{js,jsx,mjs,cjs,ts,tsx}` → `eslint --fix
+--no-warn-ignored` + `prettier --write`; `*.{json,css,md,yml,yaml}` → `prettier --write`.
+- `pre-push`: `pnpm typecheck && pnpm test` (~10 giây). Coverage, e2e, build để CI lo.
+- Gate đầy đủ vẫn là `pnpm check`. Bỏ qua hook khi thật cần: `--no-verify`.
 
 ---
 
 ## 3. Unit test — khuôn mẫu của dự án
 
-Hiện có 50 tệp test, khoảng 615 bài. Test nằm CẠNH mã (`x.service.ts` ↔ `x.service.test.ts`).
+Hiện có **103 tệp test / 1216 bài** (`pnpm check` 17/09/2026; trước đợt sửa là 615). Test nằm CẠNH mã (`x.service.ts` ↔ `x.service.test.ts`).
 Service nhận `db` (và service phụ thuộc) qua constructor → test truyền mock, không `vi.mock` Prisma,
 không chạm DB/Redis thật (ngoại lệ có chủ đích: `realtime/server.test.ts` dựng Socket.IO thật ở cổng
 34567). Crypto dùng thật (argon2, AES-GCM, otpauth, `signSession`).
@@ -169,25 +174,25 @@ không có `meta.target`) giữ ở `src/lib/prisma-errors.test.ts` — bắt bu
   test bằng Testing Library theo label/role (`auth-form.test.tsx`).
 - Luôn `await expect(...).rejects/resolves`. Tham số không dùng đặt tiền tố `_`. Object thiếu trường ép `as never`.
 
-**Chưa có test**: `auth.service.ts` (trừ nhánh SĐT), `defineVenueAction`, `definePublicAction`,
-service `audit`/`device`/`health`/`notification`/`role`/`sport`, `worker/`. CLAUDE.md nhắc
-`auth.service.test.ts` — tệp đó KHÔNG tồn tại.
+**Chưa có test**: service `health`/`sport`. (Đã có: `auth.service.test.ts`, `define-action.test.ts` phủ cả
+`defineVenueAction`/`definePublicAction`, `audit`/`device`/`notification`/`role`/`security-stamp`,
+`worker/worker.test.ts`, `src/jobs/schedules.test.ts`, `realtime/server.test.ts`.)
 
 ---
 
 ## 4. E2E — luật và danh sách bài
 
-Tài khoản mẫu (`e2e/tro-giup.ts`, mật khẩu `matkhau123`, khớp `prisma/seeds/seed-dev.ts`):
+Tài khoản mẫu (`e2e/helpers.ts`, `PASSWORD = "matkhau123"`, khớp `prisma/seeds/seed-dev.ts`):
 
-| Email                | Vai trò                          | Đích sau đăng nhập |
-| -------------------- | -------------------------------- | ------------------ |
-| `admin@dev.local`    | Quản trị nền tảng (ADMIN)        | `/venue-approvals` |
-| `chusan@dev.local`   | Chủ 3 cơ sở mẫu                  | `/manage`          |
-| `nhanvien@dev.local` | Nhân viên (có `payment:confirm`) | `/manage`          |
-| `user@dev.local`     | Khách                            | `/`                |
+| `ACCOUNTS.*` | Email                | Vai trò                          | Đích sau đăng nhập |
+| ------------ | -------------------- | -------------------------------- | ------------------ |
+| `admin`      | `admin@dev.local`    | Quản trị nền tảng (ADMIN)        | `/venue-approvals` |
+| `owner`      | `chusan@dev.local`   | Chủ 3 cơ sở mẫu                  | `/manage`          |
+| `staff`      | `nhanvien@dev.local` | Nhân viên (có `payment:confirm`) | `/manage`          |
+| `customer`   | `user@dev.local`     | Khách                            | `/`                |
 
-Helper: `dangNhap(page, email)` (điền `identifier`/`password`, chờ rời `/login`), `moSanDauTien(page)`
-(lấy `a[href^="/manage/"]` đầu tiên — nếu cần đúng sân thì lọc theo tên như `combined-checkout`).
+Helper: `login(page, email)` (điền `identifier`/`password`, chờ rời `/login`), `openFirstVenue(page)`
+(lấy `a[href^="/manage/"]` đầu tiên, trả `venueId` — nếu cần đúng sân thì lọc theo tên như `combined-checkout`).
 
 Luật:
 
@@ -207,19 +212,19 @@ Luật:
 - Log `[WebServer] ⨯ Error: The destination stream closed early` là nhiễu (GOTCHAS #17). Đừng grep chữ
   `Error` để biết kết quả — đọc `test-results/.last-run.json` (`status`, `failedTests`).
 
-Danh sách (41 bài):
+Danh sách (42 bài):
 
-| Spec                        | Bài | Kiểm                                                                                                                                                                                                                                                                   |
-| --------------------------- | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auth.spec.ts`              | 8   | Đăng nhập nhanh vắng mặt ở production (HTML + endpoint 404); đăng nhập email → đích; sai mật khẩu hiện alert; chưa đăng nhập → `/login?next=`; đăng ký giữ họ tên và về `?next=`; quên mật khẩu luôn cùng thông điệp; `/reset-password` thiếu token                    |
-| `phan-quyen.spec.ts`        | 15  | Trang công khai 200; khu cần đăng nhập → `/login`; đích theo 4 vai; `?next=` thắng; đăng xuất xoá cookie; khách không thấy "Quản lý sân", khu quản trị 404; nhân viên vào lịch nhưng `/staff` 404; admin thấy duyệt cơ sở + hoá đơn, không vào `/manage/<id>/settings` |
-| `khach-dat-san.spec.ts`     | 9   | Trang chủ + tìm; lọc môn giữ trên URL; lưới đủ sân (sân tắt không hiện); ảnh tải được; chưa đăng nhập không hỏi tên/số; đặt → thanh toán QR; chọn ô → đăng nhập → giữ lựa chọn → đặt tiếp; đổi ngày không 404 và không mang ô cũ; mã không tồn tại 404                 |
-| `combined-checkout.spec.ts` | 1   | Hai sân → một màn thanh toán (1 QR, "CS <mã>") → khai chuyển khoản → chủ sân thấy MỘT thẻ 2 lượt → duyệt một lần → khách thấy "Đặt sân thành công"                                                                                                                     |
-| `chu-san.spec.ts`           | 8   | Thấy 3 cơ sở; lịch sân 14 ngày; hàng chờ tiền (theo nhánh); sân con bật/tắt; bảng giá; bảng quyền KHÔNG có 3 quyền cấm; cài đặt cảnh báo tài khoản nhận tiền; doanh thu nói rõ "tiền đã chốt"                                                                          |
+| Spec                        | Bài | Kiểm                                                                                                                                                                                                                                                                                                                          |
+| --------------------------- | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth.spec.ts`              | 8   | Đăng nhập nhanh vắng mặt ở production (HTML + endpoint 404); đăng nhập email → đích; sai mật khẩu hiện alert; chưa đăng nhập → `/login?next=`; đăng ký giữ họ tên và về `?next=`; quên mật khẩu luôn cùng thông điệp; `/reset-password` thiếu token                                                                           |
+| `permissions.spec.ts`       | 15  | Trang công khai 200; khu cần đăng nhập → `/login`; đích theo 4 vai; `?next=` thắng; đăng xuất xoá cookie; khách không thấy "Quản lý sân", khu quản trị 404; nhân viên vào lịch nhưng `/staff` 404; admin thấy duyệt cơ sở + hoá đơn, không vào `/manage/<id>/settings`                                                        |
+| `guest-booking.spec.ts`     | 10  | Trang chủ + tìm; lọc môn giữ trên URL; lưới đủ sân (sân tắt không hiện); ảnh tải được; chưa đăng nhập không hỏi tên/số; đặt → thanh toán QR; chọn ô → đăng nhập → giữ lựa chọn → đặt tiếp; đổi ngày không 404 và không mang ô cũ; mã không tồn tại 404; chưa đăng nhập mở màn thanh toán → `/login`, không lộ thông tin khách |
+| `combined-checkout.spec.ts` | 1   | Hai sân → một màn thanh toán (1 QR, "CS <mã>") → khai chuyển khoản → chủ sân thấy MỘT thẻ 2 lượt → duyệt một lần → khách thấy "Đặt sân thành công"                                                                                                                                                                            |
+| `venue-owner.spec.ts`       | 8   | Thấy 3 cơ sở; lịch sân kèm nút thao tác; hàng chờ tiền (theo nhánh); sân con bật/tắt; bảng giá sửa tại chỗ; bảng quyền KHÔNG có 3 quyền cấm; cài đặt cảnh báo tài khoản nhận tiền; doanh thu nói rõ "tiền đã chốt"                                                                                                            |
 
-Điểm yếu đã biết: bài 5–8 của `khach-dat-san` dùng lưới HÔM NAY (chạy sau ~21:30 giờ VN có thể không
-còn ô trống); `chu-san` bài bảng quyền `return` sớm nếu không có nút "Quyền (" (xanh giả tiềm ẩn);
-`phan-quyen` một số `newContext()` không đóng trong `finally`.
+Điểm yếu cần kiểm lại khi sửa bài: bài dùng lưới HÔM NAY của `guest-booking` (chạy khuya giờ VN có thể không
+còn ô trống); bài bảng quyền của `venue-owner` có nhánh `return` sớm (xanh giả tiềm ẩn); `newContext()` trong
+`permissions` phải đóng trong `finally`.
 
 ---
 
@@ -227,34 +232,41 @@ còn ô trống); `chu-san` bài bảng quyền `return` sớm nếu không có 
 
 `scripts/check-db-constraints.ts` dùng SERVICE THẬT trên `PrismaClient` + `PrismaPg` (nạp `.env`,
 `tsconfig.scripts.json`). Tự tạo cơ sở `kiem-tra-<suffix>` (ACTIVE, 2 sân con, 60.000đ/khung, giờ
-06:00–22:00), đặt cho ngày mai, in `✓/✗` từng dòng, cuối cùng xoá theo thứ tự khoá ngoại
-(`paymentEvent` → `refund` → `payment` → `booking` → `venue`). In "✅ ĐẠT" (exit 0) hoặc "❌ HỎNG" (exit 1).
+06:00–22:00, có tài khoản ngân hàng), đặt cho ngày mai, in `✓/✗` từng dòng. **Dọn trong `finally`**
+(`cleanUp` theo thứ tự khoá ngoại: `review` → `paymentEvent` → `refund` → `payment` → `booking` →
+`platformInvoice` → `venue`; cả cơ sở phụ của kịch bản 19–20 và user kiểm tra) — kịch bản ném giữa chừng
+không còn để lại cơ sở `kiem-tra-*` mở bán; dọn hỏng thì in slug để xoá tay và exit 1. `process.exit` đặt SAU
+`finally`. In "✅ ĐẠT" (exit 0) hoặc "❌ HỎNG" (exit 1). CI chạy trên Postgres 17 sạch (script không cần seed).
 
-| #   | Kịch bản                                                         | Kỳ vọng                                                               |
-| --- | ---------------------------------------------------------------- | --------------------------------------------------------------------- |
-| 0   | 14 ràng buộc viết tay (`pg_indexes` ∪ `pg_constraint`)           | Còn đủ                                                                |
-| 1   | Hai `hold` ĐỒNG THỜI cùng khung                                  | Thắng 1, thua 1 (`SlotTakenError`), DB 1 lượt sống                    |
-| 2   | Khung gối đầu                                                    | Bị chặn                                                               |
-| 3   | Huỷ rồi đặt lại                                                  | Đặt được; huỷ sớm thì `refundable`                                    |
-| 4   | `reschedule` gối lên chính nó                                    | Được                                                                  |
-| 5   | `expireHolds({ now: +60', venueId })` — CHỈ trong cơ sở kiểm tra | Nhả hết                                                               |
-| 6   | Hai `start(BANK_TRANSFER)` đồng thời                             | Một giao dịch sống                                                    |
-| 7   | Đã khai rồi `start(VNPAY)`                                       | Trả về giao dịch đang chờ duyệt                                       |
-| 8   | `transferInstruction`                                            | Có QR, nội dung `CS <mã>`                                             |
-| 9   | `approveManual`                                                  | Lượt đặt CONFIRMED, hết hạn giữ chỗ                                   |
-| 10  | Webhook gửi lại cùng `externalEventId`                           | Lần 2 không xử lý                                                     |
-| 11  | Webhook báo lệch tiền                                            | `PaymentAmountMismatchError`, lượt vẫn HOLDING                        |
-| 12  | `holdCheckout` hai sân                                           | Chung `checkoutCode` = mã lượt đầu                                    |
-| 13  | Hai `holdCheckout` đồng thời tranh chung một dãy                 | Một bên thắng đủ 2 lượt, bên thua KHÔNG để lại nửa lần đặt            |
-| 14  | Chỗ giữ bị sửa thành quá hạn, người sau đặt gối lên              | Đặt được, chỗ cũ EXPIRED                                              |
-| 15  | Đã khai chuyển khoản                                             | Điều kiện cron (chỉ trên lượt đó) không khớp → không bị nhả           |
-| 16  | Nhóm 2 lượt                                                      | QR = tổng, một lần duyệt, `venueId` sân khác → `PaymentNotFoundError` |
+| #   | Kịch bản                                                                                                                                                                                                                                                                                       | Kỳ vọng                                                                                      |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| 0   | 18 tên trong `REQUIRED_CONSTRAINTS` (`pg_indexes` ∪ `pg_constraint` ∪ sequence `pg_class relkind='S'`): 14 ràng buộc viết tay + sequence `platform_invoice_number_seq` + `courts_id_venue_id_key` + khoá ngoại hai cột `bookings_court_id_venue_id_fkey`, `price_rules_court_id_venue_id_fkey` | Còn đủ                                                                                       |
+| 1   | Hai `hold` ĐỒNG THỜI cùng khung                                                                                                                                                                                                                                                                | Thắng 1, thua 1 (`SlotTakenError`), DB 1 lượt sống                                           |
+| 2   | Khung gối đầu                                                                                                                                                                                                                                                                                  | Bị chặn                                                                                      |
+| 3   | Huỷ rồi đặt lại                                                                                                                                                                                                                                                                                | Đặt được; huỷ sớm thì `refundable`                                                           |
+| 4   | `reschedule` gối lên chính nó                                                                                                                                                                                                                                                                  | Được                                                                                         |
+| 5   | `expireHolds({ now: +60', venueId })` — CHỈ trong cơ sở kiểm tra                                                                                                                                                                                                                               | Nhả hết                                                                                      |
+| 6   | Hai `start(BANK_TRANSFER)` đồng thời                                                                                                                                                                                                                                                           | Một giao dịch sống                                                                           |
+| 7   | Đã khai rồi `start(VNPAY)`                                                                                                                                                                                                                                                                     | Không mở thêm giao dịch VNPay                                                                |
+| 8   | `transferInstruction`                                                                                                                                                                                                                                                                          | Có QR, nội dung `CS <mã>`                                                                    |
+| 9   | `approveManual`                                                                                                                                                                                                                                                                                | Lượt đặt CONFIRMED, hết hạn giữ chỗ                                                          |
+| 10  | Webhook gửi lại cùng `externalEventId`                                                                                                                                                                                                                                                         | Lần 2 không xử lý                                                                            |
+| 11  | Webhook báo lệch tiền                                                                                                                                                                                                                                                                          | KHÔNG ném; không xác nhận lượt, giao dịch FAILED kèm lý do, sự kiện đã ghi (một transaction) |
+| 12  | `holdCheckout` hai sân                                                                                                                                                                                                                                                                         | Chung `checkoutCode` = mã lượt đầu                                                           |
+| 13  | Hai `holdCheckout` đồng thời tranh chung một dãy                                                                                                                                                                                                                                               | Một bên thắng đủ 2 lượt, bên thua KHÔNG để lại nửa lần đặt                                   |
+| 14  | Chỗ giữ bị sửa thành quá hạn, người sau đặt gối lên                                                                                                                                                                                                                                            | Đặt được, chỗ cũ EXPIRED                                                                     |
+| 15  | Đã khai chuyển khoản                                                                                                                                                                                                                                                                           | Điều kiện cron (chỉ trên lượt đó) không khớp → không bị nhả                                  |
+| 16  | Nhóm 2 lượt                                                                                                                                                                                                                                                                                    | QR = tổng, một lần duyệt, `venueId` sân khác → `PaymentNotFoundError`                        |
+| 17  | Xin hoàn vượt số còn lại (trừ refund PENDING); hai `settleRefund` đồng thời                                                                                                                                                                                                                    | `RefundAmountError`; không cộng "đã hoàn" hai lần                                            |
+| 18  | Cổng báo tiền về cho lượt đã HẾT HẠN                                                                                                                                                                                                                                                           | Ghi tiền (SUCCEEDED), không xác nhận lượt, có Refund PENDING                                 |
+| 19  | Lượt đặt mang `venue_id` của cơ sở KHÁC với sân con (ghi thẳng)                                                                                                                                                                                                                                | Khoá ngoại hai cột chặn trong database                                                       |
+| 20  | Năm lần đăng ký cơ sở CÙNG LÚC của một người                                                                                                                                                                                                                                                   | Đúng 3 hồ sơ chờ duyệt (trần giữ được nhờ khoá dòng)                                         |
+| 21  | Hai đánh giá CÙNG LÚC cho một cơ sở                                                                                                                                                                                                                                                            | Đếm đủ 2, trung bình 3.5 (khoá `FOR NO KEY UPDATE`)                                          |
 
-Khi thêm ràng buộc viết tay (thêm tên vào `CAN_GIU`) hoặc luồng chạy đua/tiền mới: viết kịch bản
-chạy đồng thời thật (`Promise.allSettled`), báo bằng `bao(nhãn, điều_kiện, chi_tiết)`, KHÔNG gọi thao
-tác toàn cục (database dev đang có người dùng), dữ liệu phải nằm trong phạm vi lệnh xoá cuối.
-Điểm yếu đã biết: phần dọn không nằm trong `try/finally` — ngoại lệ giữa chừng để lại cơ sở
-`kiem-tra-*` ACTIVE hiện ở trang tìm sân (xoá tay theo slug). Không bao giờ trỏ script vào production.
+Tổng 22 kịch bản (0–21). Khi thêm ràng buộc viết tay / sequence (thêm tên vào `REQUIRED_CONSTRAINTS`) hoặc
+luồng chạy đua/tiền mới: viết kịch bản chạy đồng thời thật (`Promise.allSettled`), báo bằng
+`report(nhãn, điều_kiện, chi_tiết)`, KHÔNG gọi thao tác toàn cục (database dev đang có người dùng), dữ liệu phải
+nằm trong phạm vi `cleanUp` (cơ sở phụ đẩy vào `extraVenueIds`). Không bao giờ trỏ script vào production.
 
 ---
 
@@ -281,8 +293,13 @@ tác toàn cục (database dev đang có người dùng), dữ liệu phải n�
   sau khi xong. Dữ liệu thử tự tạo thì tự dọn — kiểm kỹ trước khi xoá (không có lượt đặt/tiền thật).
 - `pnpm db:seed` chạy lại an toàn (`upsert` với `update: {}` hoặc "có rồi thì bỏ qua"). Admin thật từ
   `ADMIN_EMAIL`/`ADMIN_PASSWORD` (thiếu thì bỏ qua); `NODE_ENV=production` bỏ toàn bộ dữ liệu mẫu.
-- **Makefile có lỗi**: `make setup`/`make db-seed-dev` gọi `pnpm db:seed:dev` (không tồn tại) và
-  `pnpm db:migrate` (cấm). Không có target cho e2e/check-conflict/worker. Dùng lệnh `pnpm` trực tiếp.
+- **Đã gỡ script** `db:migrate`, `db:migrate:create`, `db:push`, `db:reset` (xoá ràng buộc viết tay / reset
+  Neon — GOTCHAS #11). Còn: `db:generate`, `db:migrate:diff` (in SQL — đọc, lọc DROP), `db:deploy`, `db:studio`,
+  `db:seed`, `db:seed:prod`, `db:purge`, `db:check-conflict`. CLAUDE.md còn nhắc `pnpm db:migrate` — lệnh đó không
+  còn.
+- **Makefile** (`make help`): `setup` = `pnpm install` + tạo `.env` + `docker compose up -d postgres` +
+  `db:deploy` + `db:seed`; có `e2e`, `check-conflict`, `worker`, `db-migrate-diff`, `db-deploy`, `db-seed-prod`;
+  `vps-*` dùng `SERVICE ?= chotsan`. Không có target migrate dev / push / reset.
 
 ---
 

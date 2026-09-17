@@ -1,10 +1,136 @@
 # Tiến độ ChốtSân
 
-Cập nhật: **04/09/2026**. Kế hoạch đầy đủ ở [KE_HOACH_REFACTOR.md](KE_HOACH_REFACTOR.md); tệp này
+Cập nhật: **17/09/2026**. Kế hoạch đầy đủ ở [KE_HOACH_REFACTOR.md](KE_HOACH_REFACTOR.md); tệp này
 chỉ nói **đã làm được gì, còn gì**, để mở ra là biết đứng ở đâu.
 
-Số liệu hiện tại: **564 unit test / 49 tệp** + **37 bài e2e Playwright** — tất cả xanh, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
-trên database thật.
+Số liệu hiện tại: **1216 unit test / 103 tệp** (`pnpm check` có coverage) — xanh; e2e Playwright
+(`e2e/*.spec.ts`) xanh; `pnpm db:check-conflict` **26/26** trên database dev (Neon). Bảng tổng và
+các mục "GĐ…" bên dưới là ảnh chụp ngày 04/09, giữ để biết lịch sử — trạng thái mới nhất nằm ở mục
+đợt sửa 17/09 ngay dưới.
+
+## Đợt sửa lỗi lớn 17/09/2026
+
+Rà toàn bộ dự án theo 5 nhóm, sửa, rồi gộp vào repo. Migration mới:
+`20260917160000_integrity_invoice_numbering` (đã áp trên database dev). Bẫy mới ghi ở
+[GOTCHAS](GOTCHAS.md) #20–#31.
+
+### 1. Hạ tầng và công cụ
+
+- Next **16.3.1 → 16.3.5** (vá hai lỗ RCE mức critical). Thêm `ioredis` (BullMQ 6 nạp lười — thiếu
+  là worker chết) và `cron-parser`.
+- **Gỡ script** `db:migrate`, `db:migrate:create`, `db:push`, `db:reset` — chúng xoá ràng buộc viết
+  tay hoặc reset database dùng chung. `Makefile` sửa theo (`setup` = `db:deploy` + `db:seed`; thêm
+  `e2e`, `check-conflict`, `worker`).
+- `pnpm check` = typecheck + lint + format:check + **test:coverage**. Husky bật: pre-commit chạy
+  `lint-staged`, pre-push chạy `typecheck` + `test`.
+- CI: Postgres 17 (khớp Neon), job `db:check-conflict`, `audit` đỏ khi có lỗ high, báo cáo HTML của
+  Playwright, build + chạy thử cả 3 image, e2e gửi mail qua mailpit.
+- Dockerfile 9 stage; image realtime/worker chỉ mang `node_modules` tối thiểu. systemd/PM2 đổi tên
+  `nextjs-base*` → `chotsan*`, env ở `/etc/chotsan/env`, mã ở `/var/www/chotsan`.
+- **Lịch job định nghĩa MỘT nơi** (`src/jobs/schedules.ts`), cron theo giờ Việt Nam, ba chế độ
+  (`/api/health` → `features.schedules`): `worker`, `in-process` (`QUEUE_ENABLED=0`, web tự chạy
+  lịch), `off`. Hoá đơn hoa hồng chạy mỗi ngày 02:30 và tự bù 3 tháng đã kết thúc.
+- `/health` của worker và realtime chỉ nghe `127.0.0.1`; realtime validate + giới hạn `ping:user`.
+- e2e đổi sang tên tiếng Anh (`helpers.ts`, `guest-booking`, `venue-owner`, `permissions`), luật
+  ESLint khu quản lý sân nhắm đúng `src/app/(manage)/manage/[venueId]/**`.
+
+### 2. Xác thực và phân quyền
+
+- **Thu hồi phiên thật sự**: web, API và realtime kiểm "mốc bảo mật" (mốc đổi mật khẩu, trạng thái,
+  đã xoá) cache 60 giây. Đổi/đặt lại mật khẩu, khoá, xoá tài khoản → phiên cũ bị cắt.
+- Hàm ghi user/vai trò/thành viên **bắt buộc `actorId`**; chốt `Role.level` không còn bị bỏ qua (ADMIN
+  không tạo/gán/sửa vai trò bậc ≥ 50, chỉ gán được quyền mình đang có).
+- OAuth không liên kết vào email chưa xác thực, và đi qua 2FA nếu tài khoản bật. Đặt lại mật khẩu
+  xác thực luôn email (gỡ passkey/2FA cũ nếu email chưa từng xác thực — chống chiếm trước).
+- Khoá tạm kiểm trước khi so mật khẩu; `safeRedirectPath` chặn `/\evil.com`; JWT bắt buộc `typ`;
+  vé 2FA/passkey dùng một lần; chống phát lại TOTP; rate limit lấy IP theo `TRUSTED_PROXY_HOPS`, web
+  và API chung bucket, 429 có `Retry-After`.
+- `member:manage` không tự sửa/gỡ mình; nhân viên chỉ cấp được quyền mình có. Audit log đủ các
+  đường đăng nhập, đổi mật khẩu, dùng lại refresh token, thu hồi phiên.
+- `/security` có đổi mật khẩu, gửi lại email xác thực, đổi email. Xoá mã chết (`requireAdmin`,
+  `requireApiAdmin`, `canAny`, `canAll`, `venuesWithPermission`…).
+
+### 3. Đặt sân và thanh toán
+
+- Lịch trống: ô **chưa có giá = không bán** (`NOT_FOR_SALE`), ô quá giờ là `PAST` ở mọi ngày, chỉ
+  cơ sở `ACTIVE` mới đặt được.
+- Giữ chỗ kiểm phút tròn, giờ đã qua, tổng tiền > 0, và **khoá dòng sân con** trong transaction (lịch
+  đóng sân không có ràng buộc database). Giữ chỗ xong mở giao dịch luôn; trang thanh toán chỉ đọc.
+- `/bookings/<mã>` bắt đăng nhập, chỉ người đặt hoặc người có `booking:read` ở sân đó xem được.
+- Huỷ bắt buộc nói ai huỷ (`CUSTOMER`/`VENUE`); khách không tự huỷ lượt đang chờ duyệt tiền; tiền hoàn
+  tính trên tiền đã nhận. Webhook lệch tiền → giao dịch `FAILED` (không ném); tiền về cho lượt đã hết
+  hạn → ghi nhận + yêu cầu hoàn `PENDING`.
+- Thứ tự luật giá chốt rõ (`priceForSlot`); trang sân đang bảo trì/tạm ngừng vẫn mở, kèm băng thông
+  báo; lọc theo tỉnh (`?tinh=`).
+- Giao diện: thông báo thành công không mất khi dòng rời danh sách (`ActionNoticeProvider`), xác
+  nhận hai bước (`ConfirmButton`), nút sao chép chạy được qua HTTP LAN, đồng hồ giữ chỗ bù lệch giờ.
+- `db:check-conflict` thêm kịch bản hoàn tiền đồng thời, tiền về lượt hết hạn, khoá ngoại lệch
+  sân, trần 3 hồ sơ đồng thời, hai đánh giá đồng thời; dọn dữ liệu trong `finally`.
+
+### 4. Cơ sở, hoá đơn, đánh giá, schema
+
+- Migration toàn vẹn: `bookings(court_id, venue_id)` và luật giá phải khớp sân con của đúng cơ sở
+  (khoá ngoại hai cột), khoá ngoại còn thiếu cho voucher/đè giá/khiếu nại, `payments.received_by` mặc
+  định `VENUE`, **số hoá đơn từ SEQUENCE viết tay** `platform_invoice_number_seq`
+  (`CS-YYYYMM-000042`) — đã thêm vào danh sách ràng buộc không được mất (GOTCHAS #11).
+- Trạng thái cơ sở đổi theo **đồ thị chuyển trạng thái** (`VenueStatusTransitionError`); điều kiện
+  sẵn sàng gồm giờ mở cửa, sân con, bảng giá **và tài khoản nhận tiền**.
+- Sân con: mọi hàm bắt buộc `venueId`; đóng sân từ chối khi chồng lượt còn sống; luật giá chồng
+  nhau cùng mức ưu tiên bị từ chối; cảnh báo khung mở cửa chưa có giá. Giờ mở cửa chưa khai = đóng.
+- Hoá đơn: `generateMissing` idempotent; `markPaid`/`waive` so-rồi-đổi; số ngày quá hạn theo ngày VN.
+- Đánh giá: điểm nguyên 1–5, khoá dòng cơ sở khi cập nhật điểm trung bình.
+
+### 5. Giao diện
+
+- Header điện thoại **2 hàng** (hàng mục cuộn ngang, dính mép trên) — không menu ba gạch; không tràn
+  ngang từ 320 tới 1920px. Nav quản trị: dải ngang trên điện thoại, cột trái từ `lg`.
+- Nút/ô nhập cao 44px; nút `sm` nhìn 36px nhưng vùng chạm nới bằng `after:`. **Cam chỉ dùng cho giờ
+  vàng**; "Chờ thanh toán" đỏ; "Chờ duyệt" xám viền đứt.
+- Token mới (`--primary-text`, `--danger-text`, `--rating-color`, `--admin-nav`, `--sport-*`…); bỏ
+  bóng thẻ tĩnh, gradient trang trí, màu Tailwind thẳng; xoá hết `@layer components` cũ.
+- Làm lại khu `(auth)`, `/security`, `/sessions`, `/users`, `/roles`, trang lỗi. Favicon/manifest
+  mới. Form giữ dữ liệu sau khi báo lỗi (không bao giờ trả lại mật khẩu/OTP), câu lỗi cụ thể theo ô.
+
+### Luồng đăng ký cơ sở (mới)
+
+1. Nút **"Đăng ký chủ sân"** → `/manage/new` — form ngắn (tên, môn, địa chỉ). Mỗi người tối đa **3 hồ
+   sơ chưa duyệt** (`DRAFT`/`PENDING`, `MAX_UNAPPROVED_VENUES`, lỗi `VenueDraftLimitError`); phép đếm
+   chạy sau khi khoá dòng người tạo.
+2. Tạo xong vào `/manage/<id>/settings`: **checklist** giờ mở cửa · sân con · bảng giá · tài khoản
+   nhận tiền, nút **"Gửi duyệt"** (`submitForReviewAction`, `DRAFT → PENDING`), và lý do nếu hồ sơ
+   từng bị trả.
+3. Quản trị ở `/venue-approvals`: duyệt (`PENDING → ACTIVE`) hoặc **trả hồ sơ** (`PENDING → DRAFT`
+   kèm lý do) — chủ sân sửa rồi gửi lại.
+4. `/manage` có đúng một cơ sở thì vào thẳng cơ sở đó, trừ khi `?all=1`.
+
+### Quyết định đã chốt trong đợt
+
+| Quyết định                                                                               | Vì sao                                                                                                                           |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Từ chối hồ sơ = **trả về `DRAFT` kèm lý do**, không dùng `ADMIN_LOCKED`                  | "Chưa đạt" khác "bị khoá vì vi phạm"; gộp lại thì chủ sân bị từ chối lần đầu trông như bị phạt và không tự sửa rồi gửi lại được  |
+| `ADMIN_LOCKED` chỉ admin gỡ                                                              | Gộp với `SUSPENDED` thì chủ sân tự bấm "Mở bán lại" là hết hình phạt (bài học bản cũ)                                            |
+| **Cam chỉ nói "giờ vàng, giá cao hơn"**; "Chờ thanh toán" đỏ, "Chờ duyệt" xám viền đứt   | Một màu một nghĩa — xem skill `chotsan-thiet-ke`                                                                                 |
+| **Máy dev không có Redis thì không chạy lịch**                                           | Lịch mỗi phút giữ Neon thức 24/7; ở dev không lịch nào bắt buộc (GOTCHAS #24)                                                    |
+| Web tự chạy lịch khi `QUEUE_ENABLED=0`                                                   | Trước đây tắt hàng đợi là không lịch nào chạy, không một dòng log                                                                |
+| Hoá đơn hoa hồng chạy **mỗi ngày**, tự bù tháng còn thiếu, thay cho "một lần mùng 1"     | Lần chạy mùng 1 hỏng (database chập chờn, worker đang deploy) là mất hẳn hoá đơn tháng đó; chạy lại không xuất trùng             |
+| Ô chưa có luật giá = **không bán** (`NOT_FOR_SALE`)                                      | Không luật giá nào phủ = giá 0đ = chủ sân chưa mở bán giờ đó                                                                     |
+| Đè giá gối giờ **cùng phạm vi** bị từ chối; khác phạm vi được phép (riêng sân con thắng) | Đè giá không có priority — cùng phạm vi gối nhau thì không ai biết khách trả giá nào; khác phạm vi là cách làm ngày lễ + sân VIP |
+| Webhook lệch tiền → giao dịch `FAILED`, service **không ném lỗi**                        | Lỗi sau khi đã ghi sự kiện làm cổng gửi lại và lần sau bị coi là trùng; ghi `FAILED` để người xem thấy trên giao dịch            |
+| Đổi email **không** cắt cookie web (chỉ thu hồi refresh token)                           | Giữ như hiện tại; đổi/đặt lại mật khẩu, khoá, xoá mới cắt phiên                                                                  |
+| `SESSION_STRICT_REVOCATION=0` chỉ tắt so mốc đổi mật khẩu                                | Khoá/xoá mềm LUÔN cắt phiên — quyết định hành chính, không cờ nào tắt được                                                       |
+
+### Tính năng còn mở (không phải lỗi)
+
+- REST API mobile cho sân, đặt sân, thanh toán; route webhook cổng thanh toán tự động; OAuth cho
+  mobile.
+- Đặt tại quầy, thanh toán tiền mặt, giao diện hoàn tiền, voucher, khiếu nại, yêu thích, cấu hình
+  `Setting`.
+- Luồng lời mời nhân viên (`INVITED`); quản lý liên kết OAuth trên web; OTP số điện thoại trên web;
+  nhà cung cấp SMS; adapter S3.
+- Tự ghi `COMPLETED`/`NO_SHOW`; ẩn đánh giá; tự khoá sân khi hoá đơn quá hạn.
+- Webhook báo thành công cho giao dịch đã `CANCELLED`/`FAILED` mới chỉ dừng, chưa tạo yêu cầu hoàn.
+- Câu hỏi thiết kế chưa chốt: `--text-subtle` tương phản thấp (~2,6:1); chữ trắng trên nút xanh
+  (~2,5:1) — xem skill `chotsan-thiet-ke`.
 
 ## Bảng tổng
 
@@ -23,14 +149,14 @@ trên database thật.
 
 ### Nền móng (GĐ1–2)
 
-| Thứ                                   | Tệp                                  | Test    |
-| ------------------------------------- | ------------------------------------ | ------- |
-| 21 bảng nghiệp vụ + model auth        | `prisma/schema.prisma`               | —       |
-| `EXCLUDE USING gist` chống trùng chỗ  | migration `chong_trung_booking`      | DB thật |
-| 36 quyền, 3 vai trò nền tảng          | `src/lib/permissions.ts`             | ✅      |
-| `canOnVenue` / `venuesWithPermission` | `src/services/permission.service.ts` | ✅      |
-| `defineVenueAction`                   | `src/lib/define-action.ts`           | ✅      |
-| `requireVenuePermission` (trả 404)    | `src/lib/api/auth.ts`                | ✅      |
+| Thứ                                  | Tệp                                  | Test    |
+| ------------------------------------ | ------------------------------------ | ------- |
+| 38 model (≈22 bảng nghiệp vụ) + auth | `prisma/schema.prisma`               | —       |
+| `EXCLUDE USING gist` chống trùng chỗ | migration `chong_trung_booking`      | DB thật |
+| 38 quyền, 3 vai trò nền tảng         | `src/lib/permissions.ts`             | ✅      |
+| `canOnVenue` / `venuePermissions`    | `src/services/permission.service.ts` | ✅      |
+| `defineVenueAction`                  | `src/lib/define-action.ts`           | ✅      |
+| `requireVenuePermission` (trả 404)   | `src/lib/api/auth.ts`                | ✅      |
 
 ### Nghiệp vụ (GĐ4)
 
@@ -212,7 +338,8 @@ sân B là **duyệt được tiền, huỷ được lượt, tắt được sâ
 sở khác. Lệch sân thì báo **không tìm thấy**.
 
 **Đã làm xong**: bảng `PlatformInvoice` (`@@unique([venueId, periodStart])` chống xuất trùng),
-`InvoiceService`, cron xuất hoá đơn 02:00 mùng 1 hằng tháng và đánh dấu quá hạn 04:00 mỗi ngày,
+`InvoiceService`, cron xuất hoá đơn (từ 17/09: mỗi ngày 02:30, tự bù 3 tháng đã kết thúc) và đánh
+dấu quá hạn 04:00 mỗi ngày,
 màn đối soát `/invoices`, màn doanh thu của chủ sân.
 
 Quyền `invoice:manage` TÁCH RIÊNG khỏi `payout:approve`: một bên là tiền THU VÀO từ chủ sân, một

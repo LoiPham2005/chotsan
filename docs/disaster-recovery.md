@@ -2,7 +2,12 @@
 
 Quy trình thực tế để khôi phục `chotsan` sau khi mất dữ liệu, deploy lỗi, hoặc VPS gặp
 sự cố. Lệnh dưới giả định bạn đang SSH vào VPS, đứng tại `$APP_DIR` (mặc định
-`/var/www/nextjs-base`, xem [`scripts/deploy-vps.sh`](../scripts/deploy-vps.sh)).
+`/var/www/chotsan`, xem [`scripts/deploy-vps.sh`](../scripts/deploy-vps.sh)).
+
+Tên dùng trong runbook (khớp `deploy/` và `ecosystem.config.cjs`): unit systemd `chotsan`,
+`chotsan-realtime`, `chotsan-worker` (+ `chotsan-purge.timer` tuỳ chọn); app PM2 cùng ba tên đó; file
+môi trường `/etc/chotsan/env`. Máy từng deploy bằng tên cũ `nextjs-base*` thì tắt chúng trước (xem
+[`DEPLOY_VPS.md`](./DEPLOY_VPS.md)).
 
 ⚠️ **Khoảng trống lớn nhất hiện tại: chưa có backup tự động.** `docker-compose.yml` chưa có
 service `backup` nào — Postgres tự host chỉ có dữ liệu trong volume `postgres_data`, VPS chết là
@@ -28,7 +33,7 @@ Dùng khi database bị hỏng, migration lỗi xoá nhầm dữ liệu, hoặc 
 
 ```sh
 cd $APP_DIR
-docker compose stop web migrate realtime   # giữ postgres sống để psql vào được
+docker compose stop web migrate realtime worker   # giữ postgres sống để psql vào được
 ```
 
 Khôi phục từ file dump đã có (`.sql.gz`, tự tải về từ nơi bạn lưu — R2/S3 nếu đã cấu hình theo
@@ -56,26 +61,34 @@ curl -i http://127.0.0.1:3000/api/health
 ### 1.2 Nếu chạy bare-metal (systemd, theo `scripts/deploy-vps.sh`)
 
 Postgres ở đây thường vẫn chạy qua Docker riêng (`docker compose up -d postgres`) dù app chạy
-bare-metal — kiểm tra `DATABASE_URL` trong `/etc/nextjs-base/env` để biết chắc. Dừng app trước khi
-restore:
+bare-metal — kiểm tra `DATABASE_URL` trong `/etc/chotsan/env` để biết chắc. Dừng CẢ BA tiến trình
+trước khi restore (worker ghi database theo lịch mỗi phút, realtime đọc database lúc bắt tay):
 
 ```sh
-sudo systemctl stop nextjs-base
+sudo systemctl stop chotsan chotsan-realtime chotsan-worker
 zcat backup.sql.gz | docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
-sudo systemctl start nextjs-base
+sudo systemctl start chotsan chotsan-realtime chotsan-worker   # bỏ unit đã tắt bằng cờ = 0
 curl -i http://127.0.0.1:3000/api/health
 ```
+
+Chạy bằng PM2 thì thay bằng `pm2 stop ecosystem.config.cjs` / `pm2 start ecosystem.config.cjs --env production`.
 
 ### 1.3 Sau khi restore
 
 Nếu bản dump cũ hơn migration đang chạy trên code hiện tại, áp migration còn thiếu:
 
 ```sh
+set -a && . /etc/chotsan/env && set +a   # bare-metal: nạp DATABASE_URL
 pnpm db:deploy   # = prisma migrate deploy, chỉ áp migration đã commit
 ```
 
-`/api/health` phải trả `200`. Nếu không, xem log (`docker compose logs web` hoặc
-`journalctl -u nextjs-base -f`) và kiểm tra schema có khớp code đang chạy không.
+KHÔNG dùng `migrate dev`, `db push` hay `migrate reset` — các script đó đã bị gỡ khỏi `package.json` vì
+chúng xoá ràng buộc viết tay (chống trùng chỗ, chống trùng tiền, sequence số hoá đơn). Sau khi restore
+nên chạy `pnpm db:check-conflict` trên một bản sao (KHÔNG trên production) nếu nghi bản dump mất ràng buộc.
+
+`/api/health` phải trả `200` và `features.schedules` là `worker` hoặc `in-process`. Nếu không, xem log
+(`docker compose logs web worker` hoặc `journalctl -u chotsan -u chotsan-worker -f`) và kiểm tra schema
+có khớp code đang chạy không.
 
 ---
 
@@ -92,11 +105,17 @@ Không dựa vào image tag (không dùng Docker cho app ở path này) — dự
 cd $APP_DIR
 git log --oneline -10        # tìm commit tốt gần nhất trước khi lỗi
 git checkout <commit-tot>    # hoặc git reset --hard <commit-tot> nếu chắc chắn không mất gì
+set -a && . /etc/chotsan/env && set +a   # build cần DATABASE_URL
 pnpm install --frozen-lockfile
 pnpm build
-sudo systemctl restart nextjs-base
+pnpm realtime:build
+pnpm worker:build
+sudo systemctl restart chotsan chotsan-realtime chotsan-worker   # bỏ unit đã tắt bằng cờ = 0
 curl -i http://127.0.0.1:3000/api/health
 ```
+
+Đừng gọi `./scripts/deploy-vps.sh` khi đang ở commit tách rời: bước `git pull --ff-only` sẽ báo lỗi.
+Chạy bằng PM2 thì sau bước build dùng `pm2 reload ecosystem.config.cjs --env production`.
 
 Sau khi ổn định, nhớ xử lý dứt điểm trên `main` (revert commit lỗi) để lần deploy kế tiếp không
 kéo lại đúng bug đó.
@@ -106,7 +125,7 @@ kéo lại đúng bug đó.
 ```sh
 cd $APP_DIR
 git checkout <commit-tot>
-docker compose build web migrate
+docker compose build migrate web realtime worker
 docker compose up -d
 curl -i http://127.0.0.1:3000/api/health
 ```
@@ -135,12 +154,16 @@ bị đăng xuất, phải đăng nhập lại).
 openssl rand -base64 48
 ```
 
-Cập nhật `SESSION_SECRET` trong `/etc/nextjs-base/env` (bare-metal) hoặc `.env` (Docker), rồi:
+Cập nhật `SESSION_SECRET` trong `/etc/chotsan/env` (bare-metal; PM2 thì chép lại sang `.env` ở gốc
+dự án) hoặc `.env` (Docker), rồi khởi động lại CẢ BA tiến trình — realtime verify JWT này, worker cũng
+nạp schema env của app:
 
 ```sh
-sudo systemctl restart nextjs-base        # bare-metal
+sudo systemctl restart chotsan chotsan-realtime chotsan-worker        # systemd
 # hoặc
-docker compose up -d --force-recreate web realtime   # Docker — realtime cũng verify JWT này
+pm2 reload ecosystem.config.cjs --env production --update-env         # PM2
+# hoặc
+docker compose up -d --force-recreate web realtime worker             # Docker
 ```
 
 ### 3.2 Mật khẩu Postgres
@@ -150,7 +173,8 @@ docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c \
   "ALTER USER $POSTGRES_USER WITH PASSWORD 'gia-tri-moi';"
 ```
 
-Cập nhật `POSTGRES_PASSWORD`/`DATABASE_URL` trong env file, rồi restart `web`/`migrate`/app.
+Cập nhật `POSTGRES_PASSWORD`/`DATABASE_URL` trong env file, rồi restart mọi tiến trình dùng database:
+`web`, `realtime`, `worker` (và `migrate`/`tools` lần chạy sau tự đọc giá trị mới).
 
 ### 3.3 OAuth client secret (Google/Github/Facebook/Apple)
 
@@ -168,7 +192,7 @@ bình thường hoặc cập nhật trực tiếp qua `userService`/API đã đ�
 ### 3.5 SSH key cho deploy
 
 ```sh
-ssh-keygen -t ed25519 -f ~/.ssh/nextjs-base-deploy
+ssh-keygen -t ed25519 -f ~/.ssh/chotsan-deploy
 ```
 
 Thêm public key mới vào `authorized_keys` trên VPS, cập nhật secret trên CI (nếu deploy tự động
@@ -182,8 +206,8 @@ VPS mất hẳn (ổ cứng hỏng, tài khoản bị khoá, `rm -rf` nhầm). D
 
 1. **Tạo VPS mới** — xem [`HUONG_DAN_CHON_CONG_NGHE_HA_TANG.md`](./HUONG_DAN_CHON_CONG_NGHE_HA_TANG.md)
    để chọn lại nhà cung cấp.
-2. **Clone repo**, khôi phục `.env`/`/etc/nextjs-base/env` từ nơi lưu secret riêng (KHÔNG lưu
-   trong git — password manager hoặc vault riêng).
+2. **Clone repo** vào `/var/www/chotsan`, khôi phục `.env`/`/etc/chotsan/env` từ nơi lưu secret
+   riêng (KHÔNG lưu trong git — password manager hoặc vault riêng).
 3. **Cập nhật DNS** trỏ domain sang IP VPS mới, đợi propagate.
 4. **Dựng hạ tầng**:
 
@@ -195,12 +219,22 @@ VPS mất hẳn (ổ cứng hỏng, tài khoản bị khoá, `rm -rf` nhầm). D
 6. **Áp migration + khởi động app**:
 
    ```sh
+   # Bare-metal (systemd) — xem deploy/chotsan*.service và DEPLOY_VPS.md mục 5
+   set -a && . /etc/chotsan/env && set +a
+   pnpm install --frozen-lockfile
    pnpm db:deploy
+   pnpm build && pnpm realtime:build && pnpm worker:build
+   sudo cp deploy/chotsan.service deploy/chotsan-realtime.service deploy/chotsan-worker.service /etc/systemd/system/
    sudo systemctl daemon-reload
-   sudo systemctl enable --now nextjs-base   # bare-metal — xem deploy/nextjs-base.service
-   # hoặc: docker compose up -d              # Docker
-   curl -i http://127.0.0.1:3000/api/health
+   sudo systemctl enable --now chotsan chotsan-realtime chotsan-worker
+   # hoặc PM2: ./scripts/deploy-pm2.sh
+   # hoặc Docker: docker compose up -d   (migrate chạy trước web)
+   curl -i http://127.0.0.1:3000/api/health   # features.schedules phải là worker hoặc in-process
    ```
+
+   Worker là tiến trình thứ ba: thiếu nó (khi `QUEUE_ENABLED=1`) thì email nằm trong hàng đợi và không
+   job theo lịch nào chạy (nhả giao dịch quá hạn, xuất hoá đơn). Không dùng hàng đợi thì đặt
+   `QUEUE_ENABLED=0` và đừng bật `chotsan-worker` — web tự chạy lịch.
 
 7. **Cấu hình lại Caddy** (`deploy/Caddyfile`, đổi domain) hoặc reverse proxy đang dùng, cấp lại
    SSL.
