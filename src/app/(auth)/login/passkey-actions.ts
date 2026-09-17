@@ -6,6 +6,7 @@ import { createSession } from "@/lib/auth";
 import { DomainError } from "@/lib/errors";
 import { logger } from "@/lib/logger";
 import { RATE_LIMITS, rateLimit } from "@/lib/rate-limit";
+import { landingPathFor } from "@/lib/landing";
 import { safeRedirectPath } from "@/lib/safe-redirect";
 import { issueWebAuthnTicket, verifyTicket } from "@/lib/tickets";
 import { AUDIT_ACTIONS } from "@/schemas/audit.schema";
@@ -91,7 +92,9 @@ export async function verifyPasskeyLogin(
       userAgent: headerList.get("user-agent"),
     });
 
-    return { ok: true, next: safeRedirectPath(next, "/users") };
+    // Không có `next` thì về màn của vai — mặc định cũ `/users` là 404 với
+    // mọi người không phải quản trị.
+    return { ok: true, next: safeRedirectPath(next || (await landingPathFor(user.id)), "/") };
   } catch (error) {
     if (error instanceof DomainError) return { ok: false, error: error.message };
     logger.error("Đăng nhập passkey thất bại", error);

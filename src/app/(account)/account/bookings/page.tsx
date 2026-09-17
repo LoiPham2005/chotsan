@@ -21,6 +21,7 @@ export default async function MyBookingsPage() {
   const toCard = (booking: (typeof upcoming)[number]): MyBooking => ({
     id: booking.id,
     code: booking.code,
+    checkoutCode: booking.checkoutCode,
     status: booking.status,
     // `Date` không đi qua ranh giới Server → Client được.
     startAt: booking.startAt.toISOString(),

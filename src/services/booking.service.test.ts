@@ -104,8 +104,13 @@ function createDb(options: Options = {}) {
         if (options.updateError) return Promise.reject(options.updateError);
         return Promise.resolve({ ...BOOKING, ...options.booking, ...data, id: where.id });
       }),
-      updateMany: vi.fn().mockResolvedValue({ count: 3 }),
-      findMany: vi.fn().mockResolvedValue(options.list ?? []),
+      updateMany: vi.fn(
+        (_args: { where: Record<string, unknown>; data: Record<string, unknown> }) =>
+          Promise.resolve({ count: 3 }),
+      ),
+      findMany: vi.fn((_args: { where: Record<string, unknown> }) =>
+        Promise.resolve(options.list ?? []),
+      ),
     },
     // `tx` chính là db mock, nên mọi lời gọi trong transaction vẫn đếm được.
     $transaction: vi.fn((fn: (tx: unknown) => unknown) => Promise.resolve(fn(db))),
@@ -114,9 +119,29 @@ function createDb(options: Options = {}) {
   return { db: db as unknown as PrismaClient, mock: db, created };
 }
 
-function createAvailability(quote: unknown = { slotCount: 4, total: 360_000, slots: [] }) {
+function createAvailability(
+  quote: { slotCount: number; total: number; slots: unknown[] } | null = {
+    slotCount: 4,
+    total: 360_000,
+    slots: [],
+  },
+) {
   return {
     quote: vi.fn().mockResolvedValue(quote),
+    // `holdCheckout` báo giá mọi dãy bằng MỘT lần đọc lịch. Mặc định mỗi dãy
+    // nhận cùng báo giá `quote`; tên sân theo thứ tự "Sân 1", "Sân 2"…
+    quoteMany: vi.fn(
+      ({ ranges }: { ranges: { courtId: string; startMinute: number; endMinute: number }[] }) =>
+        Promise.resolve(
+          ranges.map((range, index) => ({
+            ...range,
+            courtName: `Sân ${index + 1}`,
+            available: quote !== null,
+            slotCount: quote?.slotCount ?? 0,
+            total: quote?.total ?? 0,
+          })),
+        ),
+    ),
   } as unknown as AvailabilityService;
 }
 
@@ -198,7 +223,7 @@ describe("hold — giữ chỗ", () => {
     }
   });
 
-  it("từ chối khi báo giá trả null — khung đã có người hoặc ngoài giờ mở cửa", async () => {
+  it("báo giá không đặt được thì từ chối — khung đã có người hoặc ngoài giờ mở cửa", async () => {
     const { db, mock } = createDb();
     const service = new BookingService(db, createAvailability(null));
 
@@ -259,6 +284,232 @@ describe("hold — giữ chỗ", () => {
       "Can't reach database server",
     );
     expect(mock.booking.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("holdCheckout — một lần đặt nhiều lượt", () => {
+  const ranges = [
+    { courtId: "c1", startMinute: 19 * 60, endMinute: 20 * 60 },
+    { courtId: "c2", startMinute: 21 * 60, endMinute: 21 * 60 + 30 },
+  ];
+
+  function checkoutInput(overrides: Record<string, unknown> = {}) {
+    const { courtId: _c, startMinute: _s, endMinute: _e, ...rest } = holdInput();
+    return { ...rest, ranges, ...overrides };
+  }
+
+  it("mọi lượt mang chung checkoutCode = mã của lượt đầu", async () => {
+    // Để khách chuyển khoản MỘT lần và chủ sân duyệt MỘT lần cho cả nhóm.
+    const { db, created } = createDb();
+    const bookings = await new BookingService(db, createAvailability()).holdCheckout(
+      checkoutInput(),
+    );
+
+    expect(bookings).toHaveLength(2);
+    expect(created[0]!.checkoutCode).toBe(created[0]!.code);
+    expect(created[1]!.checkoutCode).toBe(created[0]!.code);
+    expect(created[1]!.code).not.toBe(created[0]!.code);
+  });
+
+  it("đặt MỘT lượt thì checkoutCode để trống — không có nhóm nào để nối", async () => {
+    const { db, created } = createDb();
+    await new BookingService(db, createAvailability()).hold(holdInput());
+
+    expect(created[0]!.checkoutCode).toBeNull();
+  });
+
+  it("giữ mọi lượt trong MỘT transaction — tất cả hoặc không gì", async () => {
+    const { db, mock } = createDb();
+    await new BookingService(db, createAvailability()).holdCheckout(checkoutInput());
+
+    expect(mock.$transaction).toHaveBeenCalledTimes(1);
+    expect(mock.booking.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("lượt thứ hai bị cướp mất thì báo ĐÚNG sân + giờ của lượt đó", async () => {
+    // Transaction ném ra là Postgres cuộn lại cả lượt đầu — không còn dòng
+    // CANCELLED rác nào phải dọn như cách cũ.
+    const { db } = createDb({ createErrors: [null, exclusionViolation()] });
+
+    await expect(
+      new BookingService(db, createAvailability()).holdCheckout(checkoutInput()),
+    ).rejects.toThrow(
+      new SlotTakenError("Sân 2 21:00–21:30 vừa có người đặt mất. Chọn giờ khác giúp bạn nhé."),
+    );
+  });
+
+  it("một dãy không đặt được thì dừng TRƯỚC khi ghi gì, và nêu đúng dãy đó", async () => {
+    const { db, mock } = createDb();
+    const availability = createAvailability();
+    vi.mocked(availability.quoteMany).mockResolvedValueOnce([
+      { ...ranges[0]!, courtName: "Sân 1", available: true, slotCount: 2, total: 140_000 },
+      { ...ranges[1]!, courtName: "Sân 8", available: false, slotCount: 0, total: 0 },
+    ]);
+
+    const error = await new BookingService(db, availability)
+      .holdCheckout(checkoutInput())
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SlotUnavailableError);
+    expect((error as Error).message).toContain("Sân 8 21:00–21:30");
+    expect(mock.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("đọc lịch MỘT lần cho mọi dãy, không phải mỗi dãy một lần", async () => {
+    const { db } = createDb();
+    const availability = createAvailability();
+    await new BookingService(db, availability).holdCheckout(checkoutInput());
+
+    expect(availability.quoteMany).toHaveBeenCalledTimes(1);
+    expect(availability.quote).not.toHaveBeenCalled();
+  });
+
+  it("trùng mã thì cuộn lại rồi thử CẢ transaction với bộ mã mới", async () => {
+    // Không thử lại ngay trong transaction được: INSERT hỏng làm Postgres huỷ cả
+    // transaction, mọi câu lệnh sau đó đều bị từ chối.
+    const { db, mock } = createDb({ createErrors: [null, uniqueViolation("code"), null, null] });
+    const bookings = await new BookingService(db, createAvailability()).holdCheckout(
+      checkoutInput(),
+    );
+
+    expect(mock.$transaction).toHaveBeenCalledTimes(2);
+    expect(bookings).toHaveLength(2);
+  });
+
+  /**
+   * Lịch coi chỗ giữ quá hạn là trống, nhưng ràng buộc EXCLUDE ở database vẫn
+   * tính nó. Không nhả trước thì khách thấy ô trống, bấm đặt, rồi nhận "vừa có
+   * người đặt mất" từ một người đã bỏ đi từ lâu.
+   */
+  it("nhả chỗ giữ QUÁ HẠN gối lên khung đó TRƯỚC khi tạo lượt mới", async () => {
+    const { db, mock } = createDb();
+    await new BookingService(db, createAvailability()).hold(holdInput());
+
+    expect(mock.booking.updateMany).toHaveBeenCalledWith({
+      where: {
+        courtId: "c1",
+        status: "HOLDING",
+        holdExpiresAt: { lte: NOW },
+        startAt: { lt: at(21 * 60) },
+        endAt: { gt: at(19 * 60) },
+      },
+      data: { status: "EXPIRED", holdExpiresAt: null },
+    });
+    expect(mock.booking.updateMany.mock.invocationCallOrder[0]!).toBeLessThan(
+      mock.booking.create.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("không có dãy nào thì từ chối", async () => {
+    const { db } = createDb();
+    await expect(
+      new BookingService(db, createAvailability()).holdCheckout(checkoutInput({ ranges: [] })),
+    ).rejects.toBeInstanceOf(SlotUnavailableError);
+  });
+});
+
+describe("findCheckout — màn thanh toán của một lần đặt", () => {
+  const VENUE = {
+    id: "v1",
+    slug: "san-a",
+    name: "Sân A",
+    address: "1 Phố",
+    ward: "Phường",
+    province: "Hà Nội",
+    phone: "0900000000",
+  };
+
+  function row(overrides: Record<string, unknown>) {
+    return {
+      id: "b1",
+      code: "DXWQE3",
+      status: "HOLDING",
+      courtId: "c1",
+      startAt: at(19 * 60),
+      endAt: at(20 * 60),
+      slotCount: 2,
+      total: 140_000,
+      holdExpiresAt: new Date(NOW.getTime() + 10 * 60_000),
+      customerName: "Nguyễn Văn A",
+      customerPhone: "0900000000",
+      court: { name: "Sân 1" },
+      venue: VENUE,
+      payments: [],
+      ...overrides,
+    };
+  }
+
+  it("tra bằng mã lượt CON vẫn ra cả lần đặt, và mã lần đặt là checkoutCode", async () => {
+    const { db, mock } = createDb({
+      booking: { id: "b2", code: "QPMV9H", checkoutCode: "DXWQE3" } as never,
+      list: [
+        row({}),
+        row({ id: "b2", code: "QPMV9H", courtId: "c2", total: 70_000, court: { name: "Sân 2" } }),
+      ],
+    });
+
+    const checkout = await new BookingService(db, createAvailability()).findCheckout("qpmv9h", {
+      now: NOW,
+    });
+
+    expect(mock.booking.findMany.mock.calls[0]![0].where).toEqual({ checkoutCode: "DXWQE3" });
+    expect(checkout?.code).toBe("DXWQE3");
+    expect(checkout?.bookings).toHaveLength(2);
+    expect(checkout?.holdingTotal).toBe(210_000);
+  });
+
+  it("lượt đứng riêng thì lần đặt chỉ có chính nó", async () => {
+    const { db, mock } = createDb({ list: [row({ code: "8F3K2M" })] });
+    const checkout = await new BookingService(db, createAvailability()).findCheckout("8F3K2M");
+
+    expect(mock.booking.findMany.mock.calls[0]![0].where).toEqual({ code: "8F3K2M" });
+    expect(checkout?.code).toBe("8F3K2M");
+  });
+
+  it("tổng cần trả chỉ tính lượt CÒN chờ thanh toán", async () => {
+    // Khách tự huỷ một lượt trước khi chuyển tiền thì QR phải ra số đã trừ lượt đó.
+    const { db } = createDb({
+      list: [row({}), row({ id: "b2", code: "QPMV9H", status: "CANCELLED", total: 70_000 })],
+    });
+    const checkout = await new BookingService(db, createAvailability()).findCheckout("DXWQE3", {
+      now: NOW,
+    });
+
+    expect(checkout?.holding).toHaveLength(1);
+    expect(checkout?.holdingTotal).toBe(140_000);
+  });
+
+  it("hạn của lần đặt là hạn SỚM NHẤT, và biết đã quá hạn hay chưa", async () => {
+    const som = new Date(NOW.getTime() + 60_000);
+    const { db } = createDb({
+      list: [
+        row({ holdExpiresAt: new Date(NOW.getTime() + 600_000) }),
+        row({ id: "b2", holdExpiresAt: som }),
+      ],
+    });
+    const service = new BookingService(db, createAvailability());
+
+    const truoc = await service.findCheckout("DXWQE3", { now: NOW });
+    expect(truoc?.holdExpiresAt).toEqual(som);
+    expect(truoc?.holdExpired).toBe(false);
+
+    const sau = await service.findCheckout("DXWQE3", { now: new Date(som.getTime() + 1) });
+    expect(sau?.holdExpired).toBe(true);
+  });
+
+  it("đã báo chuyển khoản (hạn bị xoá) thì cả lần đặt KHÔNG hết hạn", async () => {
+    const { db } = createDb({ list: [row({ holdExpiresAt: null })] });
+    const checkout = await new BookingService(db, createAvailability()).findCheckout("DXWQE3", {
+      now: new Date(NOW.getTime() + 24 * 3_600_000),
+    });
+
+    expect(checkout?.holdExpiresAt).toBeNull();
+    expect(checkout?.holdExpired).toBe(false);
+  });
+
+  it("không có mã thì null", async () => {
+    const { db } = createDb({ booking: null });
+    expect(await new BookingService(db, createAvailability()).findCheckout("KHONGCO")).toBeNull();
   });
 });
 
@@ -326,9 +577,39 @@ describe("checkIn — khách tới sân", () => {
 
     expect(mock.booking.update).not.toHaveBeenCalled();
   });
+
+  /**
+   * Lỗ hổng thật trước đây: quyền được kiểm trên `venueId` của URL, còn id lượt
+   * đặt lấy từ form. Nhân viên sân A gửi id lượt đặt của sân B là thao tác được
+   * trên sân B.
+   */
+  it("lượt đặt của SÂN KHÁC thì coi như không tồn tại", async () => {
+    const { db, mock } = createDb({ booking: { id: "b1", status: "CONFIRMED" } });
+
+    await expect(
+      new BookingService(db, createAvailability()).checkIn("b1", { venueId: "san-khac" }),
+    ).rejects.toBeInstanceOf(BookingNotFoundError);
+    expect(mock.booking.update).not.toHaveBeenCalled();
+  });
 });
 
 describe("cancel — huỷ", () => {
+  it("nhân viên sân khác KHÔNG huỷ được lượt của sân này", async () => {
+    const { db, mock } = createDb();
+
+    await expect(
+      new BookingService(db, createAvailability()).cancel("b1", { venueId: "san-khac", now: NOW }),
+    ).rejects.toBeInstanceOf(BookingNotFoundError);
+    expect(mock.booking.update).not.toHaveBeenCalled();
+  });
+
+  it("đúng sân thì huỷ bình thường", async () => {
+    const { db, mock } = createDb();
+    await new BookingService(db, createAvailability()).cancel("b1", { venueId: "v1", now: NOW });
+
+    expect(mock.booking.update.mock.calls[0]![0].data).toMatchObject({ status: "CANCELLED" });
+  });
+
   it("ghi lý do và người huỷ, xoá hạn giữ chỗ", async () => {
     const { db, mock } = createDb();
     await new BookingService(db, createAvailability()).cancel("b1", {
@@ -590,6 +871,17 @@ describe("expireHolds — cron nhả chỗ hết hạn", () => {
     expect(mock.booking.updateMany).toHaveBeenCalledWith({
       where: { status: "HOLDING", holdExpiresAt: { lte: NOW } },
       data: { status: "EXPIRED", holdExpiresAt: null },
+    });
+  });
+
+  it("giới hạn trong một sân khi được yêu cầu — không đụng chỗ giữ của sân khác", async () => {
+    const { db, mock } = createDb();
+    await new BookingService(db, createAvailability()).expireHolds({ now: NOW, venueId: "v1" });
+
+    expect(mock.booking.updateMany.mock.calls[0]![0].where).toEqual({
+      status: "HOLDING",
+      holdExpiresAt: { lte: NOW },
+      venueId: "v1",
     });
   });
 });

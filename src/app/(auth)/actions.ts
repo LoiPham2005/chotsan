@@ -266,7 +266,16 @@ export async function registerAction(
   });
   logger.info("User registered", { userId: user.id });
 
-  redirect("/users");
+  /*
+   * Trước đây là `redirect("/users")` — trang CHỈ quản trị mới xem được, nên
+   * MỌI người vừa đăng ký đều nhận ngay một trang 404. Giờ theo đúng luật của
+   * đăng nhập: `?next=` thắng (khách đang đặt sân dở thì về lại đó), không có
+   * thì về màn của vai — với tài khoản mới là trang chủ.
+   */
+  const next = formData.get("next");
+  const dich = typeof next === "string" && next ? next : await landingPathFor(user.id);
+
+  redirect(safeRedirectPath(dich, "/"));
 }
 
 export async function logoutAction(): Promise<void> {

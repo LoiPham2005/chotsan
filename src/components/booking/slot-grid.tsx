@@ -1,49 +1,81 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/cn";
 import { formatHhMm, formatVndShort, SLOT_MINUTES } from "@/lib/slots";
 import type { DayAvailability, SlotStatus } from "@/services/availability.service";
 
 /**
- * Lưới SÂN × KHUNG 30 PHÚT — thành phần đắt nhất của sản phẩm.
+ * Lưới đặt sân — SÂN × KHUNG 30 PHÚT.
  *
  * ---
- * VÌ SAO LÀ LƯỚI, KHÔNG PHẢI CHỌN TỪNG SÂN RỒI XEM GIỜ
+ * KHÔNG CÓ ĐƯỜNG KẺ
  *
- * Người ta hỏi *"19h còn sân nào?"*, không hỏi *"sân 7 có rảnh không?"*. Cơ sở
- * 10 sân mà bắt bấm từng cái để dò thì mất 10 lần bấm chỉ để biết một điều.
- *
- * ---
- * BA KHỔ MÀN, MỘT COMPONENT
- *
- * Không phóng to thu nhỏ: mỗi khổ đổi số giờ hiển thị cùng lúc, còn cột tên sân
- * thì luôn đứng yên và phần giờ cuộn ngang. Xem `.claude/skills/chotsan-thiet-ke`.
+ * Bản trước kẻ một vạch dọc giữa MỌI ô — 35 cột là 35 đường kẻ, cả lưới
+ * trông như tờ giấy ô li. Ở đây các ô là những khối bo tròn tách nhau bằng
+ * KHOẢNG TRẮNG; nhịp thời gian đến từ thước giờ phía trên, không đến từ vạch.
  *
  * ---
- * GIÁ NẰM Ở TIÊU ĐỀ CỘT GIỜ, KHÔNG NHỒI VÀO Ô
+ * GIỜ NẰM Ở RANH GIỚI GIỮA HAI Ô, KHÔNG NẰM GIỮA Ô
  *
- * Ô 30 phút rộng khoảng 33px trên desktop — nhét "90k" vào là chữ nhỏ tới mức
- * không ai đọc. Mà giá vốn tính theo giờ, ghi hai lần cho hai nửa là thừa.
+ * Ô nằm giữa nhãn 17:00 và nhãn 17:30 là khung 17:00–17:30 — nhìn là thấy
+ * cả hai đầu. Mọi nhãn cùng cỡ chữ; nhãn to nhãn nhỏ xen kẽ làm thước lổn nhổn.
+ *
+ * ---
+ * KHUNG ĐÃ QUA BỊ ẨN, KHÔNG BÀY RA
+ *
+ * Mở lúc 10 giờ sáng thì 9 cột đầu toàn "Đã qua" × số sân — một bức tường chữ
+ * lặp lại không ai cần đọc. Ẩn chúng đi và ghi một dòng "đã ẩn N khung".
+ *
+ * ---
+ * CUỘN, KHÔNG CHIA TRANG
+ *
+ * Chia trang buộc người dùng bấm "Muộn hơn" rồi mất dấu thứ vừa chọn.
  */
 
-export type SlotSelection = { courtId: string; startMinute: number; endMinute: number };
+export type GridAxis = "court-rows" | "time-rows";
+
+/** Khoá của một ô đã chọn. */
+export const slotKey = (courtId: string, minute: number) => `${courtId}__${minute}`;
+
+export type PickedSlot = { courtId: string; minute: number; price: number };
+
+/**
+ * Chỉ giữ những ô CÒN TRỐNG trong lịch đang có, kèm giá của ô.
+ *
+ * Dùng cho cả hai đường vào một lựa chọn: bấm ô, và lựa chọn mang về từ trang
+ * đăng nhập. Đường thứ hai mới là lý do hàm này tồn tại — trong mấy chục giây
+ * khách đăng nhập, người khác có thể đã đặt mất một ô. Ô đó phải rơi khỏi lựa
+ * chọn, không được âm thầm nằm lại rồi làm hỏng cả lần đặt.
+ */
+export function keepFreeSlots(
+  day: DayAvailability,
+  slots: readonly { courtId: string; minute: number }[],
+): Record<string, PickedSlot> {
+  const picked: Record<string, PickedSlot> = {};
+
+  for (const { courtId, minute } of slots) {
+    const slot = day.courts
+      .find((court) => court.courtId === courtId)
+      ?.slots.find((item) => item.minute === minute);
+
+    if (slot?.status === "FREE") {
+      picked[slotKey(courtId, minute)] = { courtId, minute, price: slot.price };
+    }
+  }
+
+  return picked;
+}
 
 type Props = {
   day: DayAvailability;
+  /** Tập khoá `slotKey()` đang chọn. */
+  selected: ReadonlySet<string>;
   /** Bỏ trống = chỉ xem, không chọn được. */
-  onSelect?: (selection: SlotSelection | null) => void;
-  /** Số giờ hiện cùng lúc. Mặc định theo khổ màn qua CSS, đây là trần trên desktop. */
-  hoursPerPage?: number;
+  onToggle?: (courtId: string, minute: number) => void;
+  axis: GridAxis;
+  onAxisChange: (next: GridAxis) => void;
   className?: string;
-};
-
-const STATUS_CLASS: Record<SlotStatus, string> = {
-  FREE: "border-brand-line bg-brand-tint hover:bg-emerald-100 hover:shadow-nang-1",
-  TAKEN: "border-taken-line bg-taken cursor-not-allowed",
-  CLOSED:
-    "border-line bg-[repeating-linear-gradient(45deg,#f8fafc,#f8fafc_4px,#e9eef4_4px,#e9eef4_8px)] cursor-not-allowed",
-  PAST: "border-line bg-taken opacity-60 cursor-not-allowed",
 };
 
 const STATUS_LABEL: Record<SlotStatus, string> = {
@@ -53,431 +85,437 @@ const STATUS_LABEL: Record<SlotStatus, string> = {
   PAST: "đã qua giờ",
 };
 
-export function SlotGrid({ day, onSelect, hoursPerPage = 7, className }: Props) {
-  const [anchor, setAnchor] = useState<SlotSelection | null>(null);
-
-  /** Gom các khung thành nhóm theo GIỜ để mắt đọc theo giờ, không loạn 32 cột. */
-  const hours = useMemo(() => {
-    const grouped = new Map<number, number[]>();
-
-    for (const minute of day.minutes) {
-      const hour = Math.floor(minute / 60);
-      grouped.set(hour, [...(grouped.get(hour) ?? []), minute]);
-    }
-
-    return [...grouped.entries()].map(([hour, minutes]) => ({ hour, minutes }));
-  }, [day.minutes]);
-
-  /*
-   * MỞ Ở GIỜ CÒN ĐẶT ĐƯỢC, KHÔNG PHẢI Ở GIỜ MỞ CỬA.
-   *
-   * Sân mở 05:30 nhưng người mở trang lúc 3 giờ chiều thì trang đầu tiên toàn
-   * ô xám của những khung đã trôi qua — họ phải bấm "Muộn hơn" hai lần mới
-   * thấy thứ mua được. Nhảy thẳng tới giờ đầu tiên còn bán được.
-   *
-   * `day` do máy chủ dựng và ĐÃ đánh dấu `PAST` theo giờ Việt Nam, nên chỗ này
-   * không đọc `Date.now()` — làm vậy là máy chủ và trình duyệt tính ra hai
-   * trang khác nhau, và React báo lỗi hydration.
-   */
-  const firstBookablePage = useMemo(() => {
-    const conBan = hours.findIndex((group) =>
-      group.minutes.some((minute) =>
-        day.courts.some(
-          (court) => court.slots.find((slot) => slot.minute === minute)?.status === "FREE",
-        ),
-      ),
+/**
+ * Phút của khung ĐẦU TIÊN còn đặt được trên bất kỳ sân nào — đích cuộn lúc mở.
+ * Trả `null` khi cả ngày không còn ô nào.
+ */
+export function firstBookableMinute(day: DayAvailability): number | null {
+  for (const minute of day.minutes) {
+    const free = day.courts.some(
+      (court) => court.slots.find((slot) => slot.minute === minute)?.status === "FREE",
     );
+    if (free) return minute;
+  }
+  return null;
+}
 
-    if (conBan <= 0) return 0;
-    // Lùi lại một giờ để còn thấy bối cảnh liền trước, nhưng không vượt cuối dải.
-    return Math.min(Math.max(0, conBan - 1), Math.max(0, hours.length - hoursPerPage));
-  }, [hours, day.courts, hoursPerPage]);
+/**
+ * Bỏ các cột ĐẦU NGÀY mà mọi sân đều đã qua giờ.
+ *
+ * Chỉ cắt phần đầu, không cắt giữa: "đã qua" là theo đồng hồ nên luôn là một
+ * dải liền từ giờ mở cửa tới bây giờ. Cắt lỗ chỗ giữa ngày sẽ làm thước giờ
+ * nhảy cóc mà người dùng không nhận ra.
+ */
+export function visibleMinutes(day: DayAvailability): { minutes: number[]; hidden: number } {
+  let hidden = 0;
 
-  const [pageStart, setPageStart] = useState(firstBookablePage);
-
-  /*
-   * Còn cuộn được sang trái/phải bao nhiêu.
-   *
-   * Không suy ra từ số cột: khung chứa co giãn theo màn hình và theo cả thanh
-   * bên cạnh, nên chỉ có chính phần tử DOM mới biết nó có tràn hay không.
-   */
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const [canScroll, setCanScroll] = useState({ left: false, right: false });
-
-  function refreshScrollState() {
-    const el = scrollRef.current;
-    if (!el) return;
-
-    const next = {
-      left: el.scrollLeft > 4,
-      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4,
-    };
-
-    // So trước khi ghi: `onScroll` bắn liên tục lúc cuộn, mà gần như lần nào
-    // hai giá trị này cũng không đổi. Ghi vô điều kiện là dựng lại cả lưới 320
-    // ô mỗi khung hình chỉ để đặt lại đúng thứ đang có.
-    setCanScroll((prev) => (prev.left === next.left && prev.right === next.right ? prev : next));
+  for (const minute of day.minutes) {
+    const allPast = day.courts.every(
+      (court) => court.slots.find((slot) => slot.minute === minute)?.status === "PAST",
+    );
+    if (!allPast) break;
+    hidden += 1;
   }
 
+  return { minutes: day.minutes.slice(hidden), hidden };
+}
+
+export function SlotGrid({ day, selected, onToggle, axis, onAxisChange, className }: Props) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const cellOf = useMemo(() => {
+    const map = new Map<string, DayAvailability["courts"][number]["slots"][number]>();
+    for (const court of day.courts) {
+      for (const slot of court.slots) map.set(slotKey(court.courtId, slot.minute), slot);
+    }
+    return map;
+  }, [day.courts]);
+
+  const peakMinutes = useMemo(() => {
+    const set = new Set<number>();
+    for (const court of day.courts) {
+      for (const slot of court.slots) if (slot.isPeak) set.add(slot.minute);
+    }
+    return set;
+  }, [day.courts]);
+
+  const { minutes, hidden } = useMemo(() => visibleMinutes(day), [day]);
+  const target = useMemo(() => firstBookableMinute(day), [day]);
+
+  /*
+   * Cuộn tới khung đầu tiên còn đặt được. Đặt `scrollLeft` thẳng trên phần tử,
+   * KHÔNG qua `setState` — không có gì cần dựng lại.
+   */
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
+    const box = scrollRef.current;
+    if (!box || target === null) return;
+
+    const cell = box.querySelector<HTMLElement>(`[data-minute="${target}"]`);
+    if (!cell) return;
 
     /*
-     * KHÔNG đo ngay trong thân effect.
-     *
-     * Gọi `setState` đồng bộ ở đây khiến React dựng lại trước khi trình duyệt
-     * kịp vẽ — render dây chuyền, và với lưới 320 ô thì thấy được bằng mắt.
-     * `ResizeObserver` tự bắn một lần ngay khi `observe()`, nên phép đo đầu
-     * tiên vẫn có, chỉ là ở nhịp sau.
+     * Đo bằng `getBoundingClientRect`, KHÔNG dùng `offsetLeft`: `offsetParent`
+     * của nút là ô `td`, nên `offsetLeft` chỉ ra vài pixel — lưới cuộn sai chỗ.
+     * Trừ bề rộng cột dính (tên sân / nhãn giờ) để ô đích không chui xuống dưới
+     * nó, nhất là trên điện thoại nơi cột đó chiếm gần một phần tư màn hình.
      */
-    if (typeof ResizeObserver === "undefined") {
-      const id = requestAnimationFrame(refreshScrollState);
-      return () => cancelAnimationFrame(id);
+    const boxRect = box.getBoundingClientRect();
+    const cellRect = cell.getBoundingClientRect();
+    const sticky = box.querySelector("tbody th")?.getBoundingClientRect() ?? null;
+
+    if (axis === "court-rows") {
+      const delta = cellRect.left - boxRect.left - (sticky?.width ?? 0) - 40;
+      // Lệch vài pixel thì thôi: cuộn 3px chỉ đủ để che mất nửa nhãn giờ đầu.
+      if (delta > 24) box.scrollLeft += delta;
+    } else {
+      const header = box.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+      const delta = cellRect.top - boxRect.top - header - 20;
+      if (delta > 24) box.scrollTop += delta;
     }
+  }, [target, axis, day.date]);
 
-    // Đổi khổ cửa sổ hoặc đổi trang giờ đều làm thay đổi độ tràn.
-    const observer = new ResizeObserver(refreshScrollState);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [pageStart, day.courts.length]);
-
-  const visible = hours.slice(pageStart, pageStart + hoursPerPage);
-  const canPrev = pageStart > 0;
-  const canNext = pageStart + hoursPerPage < hours.length;
-
-  if (day.isClosed) {
+  if (day.isClosed || day.courts.length === 0) {
     return (
-      <div
-        className={cn("rounded-token-md border border-line bg-surface p-8 text-center", className)}
-      >
-        <p className="text-base font-semibold text-content">Sân đóng cửa hôm nay</p>
-        <p className="mt-1 text-sm text-muted">Chọn ngày khác để xem khung giờ còn trống.</p>
-      </div>
+      <EmptyState
+        className={className}
+        title="Sân không mở cửa ngày này"
+        hint="Chọn ngày khác để xem khung giờ còn trống."
+      />
     );
   }
 
-  function handleClick(courtId: string, minute: number, status: SlotStatus) {
-    if (!onSelect || status !== "FREE") return;
-
-    // Bấm lần hai trên CÙNG sân, sau khung đầu → chọn cả dãy. Đây là cách nối
-    // nhiều khung mà không cần kéo thả — kéo thả không dùng được trên điện thoại.
-    if (anchor && anchor.courtId === courtId && minute > anchor.startMinute) {
-      const next = { courtId, startMinute: anchor.startMinute, endMinute: minute + SLOT_MINUTES };
-      setAnchor(next);
-      onSelect(next);
-      return;
-    }
-
-    if (anchor && anchor.courtId === courtId && anchor.startMinute === minute) {
-      setAnchor(null);
-      onSelect(null);
-      return;
-    }
-
-    const next = { courtId, startMinute: minute, endMinute: minute + SLOT_MINUTES };
-    setAnchor(next);
-    onSelect(next);
+  if (minutes.length === 0) {
+    return (
+      <EmptyState
+        className={className}
+        title="Hôm nay đã hết giờ đặt"
+        hint="Mọi khung trong ngày đã qua. Chọn ngày mai hoặc ngày khác nhé."
+      />
+    );
   }
 
-  const isSelected = (courtId: string, minute: number) =>
-    anchor?.courtId === courtId && minute >= anchor.startMinute && minute < anchor.endMinute;
+  const renderCell = (courtId: string, courtName: string, minute: number) => {
+    const key = slotKey(courtId, minute);
+    const slot = cellOf.get(key);
+    const isSelected = selected.has(key);
+
+    if (!slot) {
+      return <span className="block h-11 rounded-xl bg-elevated/50" aria-hidden />;
+    }
+
+    const clickable = Boolean(onToggle) && slot.status === "FREE";
+    const range = `${formatHhMm(minute)}–${formatHhMm(minute + SLOT_MINUTES)}`;
+
+    let content: React.ReactNode;
+    let tone: string;
+
+    if (isSelected) {
+      content = <CheckIcon />;
+      tone = "bg-brand text-white shadow-chon hover:bg-brand-hover";
+    } else if (slot.status === "TAKEN") {
+      content = <span className="text-[11px] font-medium">Đã đặt</span>;
+      tone = "cursor-not-allowed bg-taken text-subtle";
+    } else if (slot.status === "CLOSED") {
+      content = <span className="text-[11px] font-medium">Bảo trì</span>;
+      tone =
+        "cursor-not-allowed text-subtle bg-[repeating-linear-gradient(135deg,var(--taken-bg)_0_5px,transparent_5px_10px)]";
+    } else if (slot.status === "PAST") {
+      content = null;
+      tone = "cursor-not-allowed bg-elevated/40";
+    } else if (slot.isPeak) {
+      content = slot.price > 0 ? formatVndShort(slot.price) : "—";
+      tone =
+        "bg-peak-tint text-peak-text ring-1 ring-inset ring-peak-line/80 hover:ring-2 hover:ring-peak-text/60";
+    } else {
+      content = slot.price > 0 ? formatVndShort(slot.price) : "—";
+      tone =
+        "bg-surface text-content ring-1 ring-inset ring-line hover:bg-brand-tint hover:text-brand-hover hover:ring-2 hover:ring-brand/50";
+    }
+
+    return (
+      <button
+        type="button"
+        data-minute={minute}
+        disabled={!clickable && !isSelected}
+        onClick={() => onToggle?.(courtId, minute)}
+        aria-pressed={isSelected}
+        aria-label={`${courtName} ${range} — ${isSelected ? "đang chọn" : STATUS_LABEL[slot.status]}${
+          slot.status === "FREE" ? `, ${formatVndShort(slot.price)}` : ""
+        }`}
+        className={cn(
+          // 44px: ngưỡng chạm tối thiểu trên điện thoại và máy tính bảng.
+          "flex h-11 w-full items-center justify-center rounded-xl text-[13px] font-semibold tabular-nums transition-all duration-150 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
+          clickable && "active:scale-95",
+          tone,
+        )}
+      >
+        {content}
+      </button>
+    );
+  };
 
   return (
-    /*
-     * `min-w-0` KHÔNG PHẢI THỪA.
-     *
-     * Phần tử con của flex/grid mặc định là `min-width: auto`, nghĩa là nó nở
-     * ra vừa nội dung thay vì chịu bó theo cha. Thiếu một chữ này thì cái
-     * `overflow-x-auto` bên dưới hoàn toàn vô hiệu: lưới không cuộn trong khung
-     * của nó mà đẩy RỘNG CẢ TRANG — trên điện thoại là header bị cắt, chữ tràn
-     * ra ngoài mép, và người dùng phải cuộn ngang toàn trang để đọc.
-     */
-    <div className={cn("flex min-w-0 flex-col gap-3", className)}>
-      {/* Điều hướng theo buổi — 32 cột không vừa màn nào, kể cả desktop */}
-      <div className="flex items-center justify-between gap-2">
-        <button
-          type="button"
-          onClick={() => setPageStart((value) => Math.max(0, value - hoursPerPage))}
-          disabled={!canPrev}
-          className="inline-flex h-10 items-center gap-1.5 rounded-token-md border border-line bg-surface px-3 text-sm font-semibold text-content shadow-nang-1 transition-all hover:border-brand-line hover:text-brand disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none"
-        >
-          <span aria-hidden>←</span> Sớm hơn
-        </button>
-
-        <p className="rounded-full bg-elevated px-3 py-1 text-sm font-bold tabular-nums text-content">
-          {visible.length > 0
-            ? `${formatHhMm(visible[0]!.minutes[0]!)} – ${formatHhMm(
-                visible.at(-1)!.minutes.at(-1)! + SLOT_MINUTES,
-              )}`
-            : ""}
+    <div
+      className={cn(
+        "min-w-0 overflow-hidden rounded-2xl bg-surface shadow-nang-1 ring-1 ring-line",
+        className,
+      )}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 pb-2 pt-3.5">
+        <p className="text-xs text-muted">
+          {hidden > 0 ? (
+            <>
+              Đã ẩn <span className="font-semibold text-content">{hidden}</span> khung đã qua giờ
+            </>
+          ) : (
+            "Bấm vào ô để chọn · chọn được nhiều ô"
+          )}
         </p>
 
-        <button
-          type="button"
-          onClick={() =>
-            setPageStart((value) => Math.min(hours.length - hoursPerPage, value + hoursPerPage))
-          }
-          disabled={!canNext}
-          className="inline-flex h-10 items-center gap-1.5 rounded-token-md border border-line bg-surface px-3 text-sm font-semibold text-content shadow-nang-1 transition-all hover:border-brand-line hover:text-brand disabled:pointer-events-none disabled:opacity-40 disabled:shadow-none"
+        {/* Nút chuyển kiểu xem dạng "viên thuốc" — hai lựa chọn nhìn thấy cùng lúc. */}
+        <div
+          role="group"
+          aria-label="Kiểu xem"
+          className="inline-flex rounded-full bg-elevated p-1"
         >
-          Muộn hơn <span aria-hidden>→</span>
-        </button>
+          {(
+            [
+              ["court-rows", "Theo sân"],
+              ["time-rows", "Theo giờ"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={axis === value}
+              onClick={() => onAxisChange(value)}
+              className={cn(
+                "rounded-full px-3 py-1 text-xs font-semibold transition-all",
+                axis === value
+                  ? "bg-surface text-content shadow-nang-1"
+                  : "text-muted hover:text-content",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/*
-        Lưới rộng hơn khung là chuyện bình thường (7 giờ × 2 ô = 856px). Nhưng
-        một mép bị cắt phẳng lì trông y hệt lỗi hiển thị — người dùng không biết
-        bên phải còn gì, nên không nghĩ tới việc cuộn. Vệt mờ ở mép nói điều đó
-        mà không tốn một dòng chữ hướng dẫn nào.
+        `min-w-0` + `overflow-auto`: thiếu `min-w-0` thì bảng đẩy rộng CẢ TRANG
+        thay vì tự cuộn trong khung của nó. Xem SKILL.md.
       */}
-      <div className="relative min-w-0">
-        <div ref={scrollRef} onScroll={refreshScrollState} className="min-w-0 overflow-x-auto">
-          <div className="min-w-max">
-            {/* Tiêu đề: giờ + giá. Giá ở đây chứ không ở trong ô. */}
-            <div className="mb-1.5 flex gap-2">
-              <div className="w-[72px] shrink-0" aria-hidden />
-              {visible.map(({ hour, minutes }) => {
-                const peak = minutes.some((minute) =>
-                  day.courts.some(
-                    (court) => court.slots.find((slot) => slot.minute === minute)?.isPeak,
-                  ),
-                );
-                const price = day.courts[0]?.slots.find(
-                  (slot) => slot.minute === minutes[0],
-                )?.price;
-
-                return (
-                  <div key={hour} className="w-[104px] shrink-0 text-center">
-                    <div
-                      className={cn(
-                        "text-[13px] font-extrabold tabular-nums",
-                        peak ? "text-peak-text" : "text-content",
+      <div
+        ref={scrollRef}
+        className={cn(
+          "scrollbar-thin min-w-0 overflow-auto px-2 pb-3",
+          axis === "time-rows" && "max-h-[68vh]",
+        )}
+      >
+        {axis === "court-rows" ? (
+          <table className="border-separate" style={{ borderSpacing: 0 }}>
+            <thead>
+              <tr>
+                <th className="sticky left-0 top-0 z-30 min-w-[92px] bg-surface" />
+                {/* Cột đệm: chừa chỗ cho nửa trái của nhãn giờ đầu tiên. */}
+                <th aria-hidden className="sticky top-0 z-10 w-7 min-w-7 bg-surface" />
+                {minutes.map((minute, index) => (
+                  <th key={minute} className="sticky top-0 z-10 min-w-[66px] bg-surface p-0">
+                    <div className="relative h-8">
+                      <RulerLabel minute={minute} peak={peakMinutes.has(minute)} />
+                      {index === minutes.length - 1 && (
+                        <RulerLabel
+                          minute={minute + SLOT_MINUTES}
+                          peak={peakMinutes.has(minute)}
+                          atEnd
+                        />
                       )}
-                    >
-                      {formatHhMm(hour * 60)}
                     </div>
-                    {price !== undefined && price > 0 && (
-                      <div
-                        className={cn(
-                          "mx-auto mt-0.5 inline-block rounded-full px-1.5 py-px text-[10px] font-bold tabular-nums",
-                          peak
-                            ? "bg-peak-tint text-peak-text ring-1 ring-peak-line"
-                            : "bg-brand-tint text-brand-hover ring-1 ring-brand-line",
-                        )}
-                      >
-                        {formatVndShort(price)}/30p
-                      </div>
-                    )}
-
-                    {/*
-                      Giờ CHÍNH XÁC của từng ô, ngay dưới tiêu đề giờ.
-
-                      Một tiêu đề "17:00" trải trên hai ô 30 phút thì không ai
-                      biết ô nào là 17:00, ô nào là 17:30 — phải đếm nhẩm từ mép
-                      trái. Hai tầng nhãn cho hai kiểu đọc: liếc theo giờ, và
-                      chỉ đúng vào ô muốn đặt.
-                    */}
-                    <div className="mt-1 grid grid-cols-2 gap-[3px]">
-                      {minutes.map((minute) => (
-                        <span
-                          key={minute}
-                          className={cn(
-                            "text-[10px] font-semibold leading-none tabular-nums",
-                            peak ? "text-peak-text/70" : "text-subtle",
-                          )}
-                        >
-                          {formatHhMm(minute)}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {day.courts.map((court) => (
-              <div key={court.courtId} className="mb-1.5 flex gap-2">
-                <div className="flex w-[72px] shrink-0 items-center justify-end pr-1 text-[13px] font-semibold text-muted">
-                  {court.courtName}
-                </div>
-
-                {visible.map(({ hour, minutes }) => (
-                  <div key={hour} className="grid w-[104px] shrink-0 grid-cols-2 gap-[3px]">
-                    {minutes.map((minute) => {
-                      const slot = court.slots.find((item) => item.minute === minute);
-                      if (!slot) return <div key={minute} />;
-
-                      const selected = isSelected(court.courtId, minute);
-                      const clickable = Boolean(onSelect) && slot.status === "FREE";
-
-                      return (
-                        <button
-                          key={minute}
-                          type="button"
-                          disabled={!clickable}
-                          onClick={() => handleClick(court.courtId, minute, slot.status)}
-                          /* 44px là ngưỡng chạm, không phải gợi ý — chủ sân bấm
-                           trên máy tính bảng, một tay còn cầm điện thoại. */
-                          className={cn(
-                            "h-11 rounded-token-md border-[1.5px] transition-all duration-150",
-                            clickable && "hover:scale-[1.06] active:scale-95",
-                            selected
-                              ? "scale-[1.06] border-brand bg-gradient-to-br from-brand to-emerald-600 shadow-selection"
-                              : slot.isPeak && slot.status === "FREE"
-                                ? "border-peak-line bg-peak-tint hover:bg-orange-100 hover:shadow-nang-1"
-                                : STATUS_CLASS[slot.status],
-                          )}
-                          aria-label={`${court.courtName} ${formatHhMm(minute)} — ${
-                            selected ? "đang chọn" : STATUS_LABEL[slot.status]
-                          }`}
-                          aria-pressed={selected}
-                        >
-                          {selected && (
-                            <svg
-                              viewBox="0 0 24 24"
-                              className="mx-auto h-3.5 w-3.5"
-                              fill="none"
-                              stroke="#fff"
-                              strokeWidth={3.4}
-                            >
-                              <path d="M20 6L9 17l-5-5" />
-                            </svg>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  </th>
                 ))}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Vệt mờ ở mép: chỉ hiện khi thật sự còn nội dung ở phía đó. */}
-        <div
-          aria-hidden
-          className={cn(
-            "pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-canvas to-transparent transition-opacity",
-            canScroll.left ? "opacity-100" : "opacity-0",
-          )}
-        />
-        <div
-          aria-hidden
-          className={cn(
-            "pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-canvas to-transparent transition-opacity",
-            canScroll.right ? "opacity-100" : "opacity-0",
-          )}
-        />
+              </tr>
+            </thead>
+            <tbody>
+              {day.courts.map((court) => (
+                <tr key={court.courtId} className="group">
+                  <th
+                    scope="row"
+                    className="sticky left-0 z-20 bg-surface pl-2 pr-3 text-left shadow-[8px_0_12px_-10px_rgba(15,23,42,0.25)]"
+                  >
+                    <span className="whitespace-nowrap text-sm font-semibold text-content">
+                      {court.courtName}
+                    </span>
+                  </th>
+                  <td aria-hidden className="w-7 min-w-7 p-0" />
+                  {minutes.map((minute) => (
+                    <td key={minute} className="p-[3px]">
+                      {renderCell(court.courtId, court.courtName, minute)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <table className="border-separate" style={{ borderSpacing: 0 }}>
+            <thead>
+              <tr>
+                <th className="sticky left-0 top-0 z-30 min-w-[60px] bg-surface" />
+                {day.courts.map((court) => (
+                  <th
+                    key={court.courtId}
+                    className="sticky top-0 z-10 min-w-[84px] bg-surface px-[3px] pb-2"
+                  >
+                    <span className="block whitespace-nowrap rounded-lg bg-elevated px-2 py-1.5 text-center text-sm font-semibold text-content">
+                      {court.courtName}
+                    </span>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {/* Hàng đệm: chừa chỗ cho nửa trên của nhãn giờ đầu tiên. */}
+              <tr aria-hidden>
+                <td className="h-2 p-0" colSpan={day.courts.length + 1} />
+              </tr>
+              {minutes.map((minute, index) => (
+                <tr key={minute}>
+                  <th scope="row" className="sticky left-0 z-10 bg-surface p-0 align-top">
+                    <div className="relative h-[50px]">
+                      <RulerLabelVertical minute={minute} peak={peakMinutes.has(minute)} />
+                      {index === minutes.length - 1 && (
+                        <RulerLabelVertical
+                          minute={minute + SLOT_MINUTES}
+                          peak={peakMinutes.has(minute)}
+                          atEnd
+                        />
+                      )}
+                    </div>
+                  </th>
+                  {day.courts.map((court) => (
+                    <td key={court.courtId} className="p-[3px]">
+                      {renderCell(court.courtId, court.courtName, minute)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
-      {/* Chú giải: mỗi trạng thái khác nhau ở CẢ màu LẪN chữ — in đen trắng vẫn đọc được */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-2 text-xs text-muted">
-        <Legend className="border-brand-line bg-brand-tint" label="Còn trống" />
-        <Legend className="border-peak-line bg-peak-tint" label="Giờ vàng · giá cao hơn" />
-        <Legend className="border-taken-line bg-taken" label="Đã có người" />
-        <Legend
-          className="border-line bg-[repeating-linear-gradient(45deg,#f8fafc,#f8fafc_4px,#e9eef4_4px,#e9eef4_8px)]"
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 bg-elevated/50 px-4 py-2.5 text-xs text-muted">
+        <Swatch className="bg-surface ring-1 ring-inset ring-line" label="Còn trống" />
+        <Swatch className="bg-peak-tint ring-1 ring-inset ring-peak-line" label="Giờ vàng" />
+        <Swatch className="bg-brand" label="Đang chọn" />
+        <Swatch className="bg-taken" label="Đã đặt" />
+        <Swatch
+          className="bg-[repeating-linear-gradient(135deg,var(--border-strong)_0_2px,transparent_2px_5px)]"
           label="Bảo trì"
         />
-        {onSelect && (
-          <span className="ml-auto font-semibold">Bấm ô đầu rồi bấm ô cuối để đặt liền mạch</span>
-        )}
       </div>
     </div>
   );
 }
 
-function Legend({ className, label }: { className: string; label: string }) {
+/**
+ * Nhãn giờ trên thước NẰM NGANG — căn giữa đúng mép trái của cột, tức đúng
+ * ranh giới giữa hai ô. Một chấm nhỏ đánh dấu ranh giới thay cho vạch kẻ.
+ *
+ * Mọi nhãn cùng cỡ, cùng độ đậm: nhãn to nhãn nhỏ xen kẽ làm thước lổn nhổn.
+ */
+function RulerLabel({ minute, peak, atEnd }: { minute: number; peak: boolean; atEnd?: boolean }) {
   return (
-    <span className="flex items-center gap-1.5">
-      <span className={cn("h-3 w-3 rounded-[3px] border-[1.5px]", className)} aria-hidden />
+    <>
+      <span
+        className={cn(
+          "absolute top-1.5 whitespace-nowrap text-xs font-semibold tabular-nums leading-none",
+          atEnd ? "right-0 translate-x-1/2" : "left-0 -translate-x-1/2",
+          peak ? "text-peak-text" : "text-muted",
+        )}
+      >
+        {formatHhMm(minute)}
+      </span>
+      <span
+        aria-hidden
+        className={cn(
+          "absolute bottom-1 h-1 w-1 rounded-full",
+          atEnd ? "right-0 translate-x-1/2" : "left-0 -translate-x-1/2",
+          peak ? "bg-peak-line" : "bg-line-strong",
+        )}
+      />
+    </>
+  );
+}
+
+/** Bản DỌC — căn giữa đúng mép trên của hàng. */
+function RulerLabelVertical({
+  minute,
+  peak,
+  atEnd,
+}: {
+  minute: number;
+  peak: boolean;
+  atEnd?: boolean;
+}) {
+  return (
+    <span
+      className={cn(
+        "absolute right-3 whitespace-nowrap text-xs font-semibold tabular-nums leading-none",
+        atEnd ? "bottom-0 translate-y-1/2" : "top-0 -translate-y-1/2",
+        peak ? "text-peak-text" : "text-muted",
+      )}
+    >
+      {formatHhMm(minute)}
+    </span>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={3}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-4 w-4"
+      aria-hidden
+    >
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+function Swatch({ className, label }: { className: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={cn("h-3.5 w-3.5 rounded-[5px]", className)} aria-hidden />
       {label}
     </span>
   );
 }
 
-/**
- * Dải tổng quan cả ngày — số sân trống theo từng khung 30 phút.
- *
- * Liếc một cái là biết nên đặt giờ nào, chưa cần đọc lưới. Đây là thứ trả lời
- * câu hỏi thật của người dùng: *"tối nay còn chỗ không?"*
- */
-export function DaySummaryStrip({
-  day,
+function EmptyState({
   className,
-  onPick,
+  title,
+  hint,
 }: {
-  day: DayAvailability;
   className?: string;
-  onPick?: (minute: number) => void;
+  title: string;
+  hint: string;
 }) {
-  if (day.isClosed) return null;
-
-  const max = Math.max(1, ...day.summary);
-
   return (
     <div
-      className={cn("rounded-token-lg border border-line bg-surface p-3 shadow-nang-1", className)}
+      className={cn(
+        "rounded-2xl bg-surface p-10 text-center shadow-nang-1 ring-1 ring-line",
+        className,
+      )}
     >
-      <div className="mb-2 flex items-baseline justify-between">
-        <p className="text-xs font-bold text-muted">Cả ngày · số sân trống mỗi 30 phút</p>
-        <p className="text-[11px] text-subtle">
-          {formatHhMm(day.minutes[0] ?? 0)} → {formatHhMm((day.minutes.at(-1) ?? 0) + SLOT_MINUTES)}
-        </p>
-      </div>
-
-      <div className="flex gap-[2px]">
-        {day.minutes.map((minute, index) => {
-          const free = day.summary[index] ?? 0;
-          const ratio = free / max;
-
-          return (
-            <button
-              key={minute}
-              type="button"
-              onClick={() => onPick?.(minute)}
-              disabled={!onPick}
-              title={`${formatHhMm(minute)} — còn ${free} sân`}
-              aria-label={`${formatHhMm(minute)}, còn ${free} sân trống`}
-              className={cn(
-                /*
-                 * `min-w-0` cho phép ô co lại thật sự.
-                 *
-                 * `flex-1` một mình KHÔNG đủ: phần tử flex mặc định
-                 * `min-width: auto`, tức không co nhỏ hơn nội dung của nó. Với
-                 * 35 ô mang chữ số, ở màn 320px cả dải đòi ~348px và đẩy tràn
-                 * ngang cả trang.
-                 *
-                 * Chữ số ẩn đi ở khổ hẹp nhất — dải này bán MÀU trước, con số
-                 * chỉ là phần thêm, mà một dải màu đọc được vẫn hơn một trang
-                 * phải cuộn ngang.
-                 */
-                "h-7 min-w-0 flex-1 overflow-hidden rounded-[3px] text-[10px] font-extrabold text-white",
-                free === 0
-                  ? "bg-slate-300 text-slate-500"
-                  : ratio <= 0.15
-                    ? "bg-red-300 text-red-900"
-                    : ratio <= 0.35
-                      ? "bg-peak text-white"
-                      : ratio <= 0.6
-                        ? "bg-emerald-300 text-emerald-900"
-                        : "bg-brand",
-              )}
-            >
-              <span className="max-[380px]:hidden">{free}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="mt-1 flex justify-between text-[9px] text-subtle">
-        {day.minutes
-          .filter((minute) => minute % 120 === 0)
-          .map((minute) => (
-            <span key={minute}>{formatHhMm(minute)}</span>
-          ))}
-      </div>
+      <p className="text-base font-semibold text-content">{title}</p>
+      <p className="mt-1 text-sm text-muted">{hint}</p>
     </div>
   );
 }

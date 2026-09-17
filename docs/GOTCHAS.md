@@ -322,6 +322,115 @@ giữ phiên bằng gì?
 ⚠️ **Đây là lỗi im lặng với người dùng đã đăng nhập** — họ tưởng đã thoát, nhất là trên máy dùng
 chung. Bộ e2e giờ có bài chặn nó tái diễn (`phan-quyen.spec.ts` → "Đăng xuất").
 
+## 15. Mở bản dev qua IP LAN: trang hiện ra nhưng KHÔNG nút nào bấm được
+
+Mở `http://192.168.1.119:3000` từ trình duyệt (hoặc điện thoại) thì trang dựng đầy đủ từ máy chủ,
+nhìn hoàn toàn bình thường — nhưng bấm ô lưới không chọn được, nút đặt sân không phản hồi. Log
+của `next dev`:
+
+```
+⚠ Blocked cross-origin request to Next.js dev resource /_next/static/chunks/... from "192.168.1.119".
+```
+
+Next 16 chặn tải tài nguyên dev (JavaScript) từ host không phải `localhost`. HTML vẫn tới, JS thì
+không, nên React không bao giờ gắn vào trang. **Không phải lỗi ứng dụng.**
+
+Đã sửa bằng `allowedDevOrigins` trong `next.config.mjs` (dải LAN, chỉ có tác dụng ở dev).
+**Phải khởi động lại `pnpm dev`** — đổi `next.config.mjs` không tự nạp lại.
+
+## 16. Route handler redirect bằng URL TUYỆT ĐỐI: bấm nút "không có hành động gì"
+
+Triệu chứng người dùng gặp: ở `http://192.168.1.119:3000/login?next=…` bấm "Khách" (đăng nhập
+nhanh) thì **không có gì xảy ra** — dù máy chủ đã đặt cookie phiên xong.
+
+Nguyên nhân là ba thứ đúng riêng lẻ cộng lại:
+
+1. Nút là `<form method="POST" action="/api/dev/quick-login">` thường, trả `303` kèm `Location`.
+2. `Location` dựng bằng `new URL(path, request.url)` — mà ở `next dev`, `request.url` của route
+   handler là **`localhost:3000`**, không phải host trình duyệt đang mở.
+3. CSP có `form-action 'self'`, và trình duyệt áp nó cho CẢ chuyển hướng sau khi gửi form.
+   `localhost` ≠ `192.168.1.119` → chặn, im lặng, không có gì hiện ra.
+
+Sửa: `redirectRelative()` trong `src/lib/api/redirect.ts` — `Location` là đường dẫn tương đối,
+trình duyệt tự ghép vào đúng host nó đang đứng. Đã áp cho đăng nhập nhanh và OAuth start/callback.
+
+⚠️ Mở bằng `localhost` thì lỗi này **không bao giờ lộ** — hai host trùng nhau. Route handler nào
+chuyển hướng người dùng, dùng `redirectRelative`, đừng dựng URL từ `request.url`.
+
+## 17. Log e2e đầy `The destination stream closed early` — KHÔNG phải lỗi ứng dụng
+
+Chạy `pnpm exec playwright test` thấy hàng chục dòng:
+
+```
+[WebServer] ⨯ Error: The destination stream closed early.
+[WebServer]   digest: '2218290539'
+```
+
+Đã dựng lại để chắc: đây là máy chủ báo **trình duyệt huỷ ngang một request prefetch** đang stream.
+Ở production, `<Link>` trong khung nhìn tự prefetch trang đích; test gọi `page.goto` sang trang khác
+ngay sau đó thì các request ấy bị huỷ giữa chừng. Mở trang rồi chờ prefetch xong → 0 dòng; mở
+trang rồi `goto` ngay → có dòng. Người dùng thật hiếm khi gây ra, và không có gì hỏng.
+
+Đừng mất công "sửa" nó. Lỗi render thật có stack trace trỏ vào mã của mình và làm test đỏ.
+
+## 18. Vừa đổi `schema.prisma`: `pnpm dev` đang chạy báo `Unknown argument` — phải khởi động lại
+
+```
+Invalid `prisma.booking.create()` invocation:
+  checkoutCode: null,
+  ~~~~~~~~~~~~
+Unknown argument `checkoutCode`. Available options are marked with ?.
+```
+
+Đã xảy ra thật khi thêm cột `bookings.checkout_code`: migration đã áp, `prisma generate` đã chạy,
+`pnpm typecheck` xanh, script kiểm tra trên database thật đạt — nhưng bấm đặt sân trên `pnpm dev`
+vẫn ra "Đã có sự cố xảy ra".
+
+**Nguyên nhân**: `@prisma/client` là package ngoài (không đi qua bundler). Tiến trình Node của
+`next dev` đã nạp client CŨ vào bộ nhớ từ lúc khởi động, và hot reload chỉ nạp lại mã của mình,
+không nạp lại package trong `node_modules`. Code mới gửi cột mới, client cũ không biết cột đó.
+
+**Fix**: Ctrl+C rồi `pnpm dev` lại. Mọi lần đổi `schema.prisma` + `prisma generate` đều vậy — kể cả
+worker (`pnpm worker:dev`).
+
+Cách biết chắc: so giờ khởi động của server với giờ sinh client.
+
+```bash
+ps -eo pid,lstart,command | grep "next dev"                        # server chạy từ lúc nào
+ls -la node_modules/.pnpm/@prisma+client@*/node_modules/.prisma/client/index.d.ts   # client sinh lúc nào
+```
+
+Server khởi động TRƯỚC giờ sinh client = đang chạy client cũ. Lần này đúng như vậy: server 10:37,
+client 10:47, và lời dặn "khởi động lại" bị bỏ lỡ nên lỗi lặp lại hai lần.
+
+Từ đó `src/instrumentation.ts` tự in lời nhắc ngay dưới lỗi `Unknown argument` trong terminal khi
+chạy dev — người gặp lỗi không cần tìm tới tài liệu này mới biết phải làm gì.
+
+## 19. Action theo sân: kiểm quyền trên `venueId` của URL CHƯA ĐỦ
+
+```ts
+export const approvePaymentAction = defineVenueAction(
+  "payment:confirm",
+  async (ctx, _, formData) => {
+    await paymentService.approveManual({ paymentId: formData.get("paymentId") }); // ❌
+  },
+);
+```
+
+`defineVenueAction` chứng minh người bấm có quyền trên **sân trong URL**. Nó không nói gì về id
+lấy từ **form** — và Server Action là endpoint công khai, ai cũng gửi được form tự chế. Nhân viên
+sân A đặt `venueId` = sân A (có quyền) và `paymentId` = giao dịch của sân B → duyệt được tiền của
+sân B. Lỗi này từng nằm ở năm action: duyệt tiền, từ chối tiền, nhận sân, huỷ lượt, bật/tắt sân
+con.
+
+**Luật**: mọi id đến từ form trong action theo sân phải được lọc theo `ctx.venueId` **ngay trong
+câu truy vấn của service** (`where: { id, booking: { venueId } }`), không phải một phép kiểm rời
+có thể quên. Lệch sân thì ném lỗi **không tìm thấy**, không phải "không có quyền" — đừng xác nhận
+cho người dò rằng id đó tồn tại.
+
+Test cho mỗi thao tác như vậy phải có một ca "id của sân khác → NOT_FOUND" — mock `findMany` phải
+LỌC THẬT theo `venueId`, mock trả bừa mọi thứ thì bài test không chứng minh được gì.
+
 ## Lưu ý chung khi code
 
 - **Ưu tiên `pnpm typecheck`/`pnpm test` qua terminal hơn tin theo IDE** khi vừa đổi
@@ -335,3 +444,10 @@ chung. Bộ e2e giờ có bài chặn nó tái diễn (`phan-quyen.spec.ts` → 
   chỉ bằng unit test — xem gotcha #10.
 - **Không chạy `prisma migrate dev`** — nó xoá index viết tay. Dùng `migrate diff` + đọc SQL +
   `migrate deploy`, xem gotcha #11.
+- **Không mặc định chuyển hướng về `/users`** sau đăng nhập/đăng ký — đó là trang của quản trị,
+  người thường nhận 404. `?next=` trước, rồi `landingPathFor()`. Lỗi này từng nằm ở CẢ BỐN lối
+  vào: mật khẩu, 2FA, passkey, đăng ký.
+- **Route handler chuyển hướng người dùng thì dùng `redirectRelative()`** — xem gotcha #16.
+- **Id lấy từ form trong action theo sân phải lọc theo `ctx.venueId`** — xem gotcha #19.
+- **Đổi `schema.prisma` xong thì khởi động lại `pnpm dev`** — xem gotcha #18.
+- **Đừng để đúng-sai phụ thuộc worker còn sống**: hạn giữ chỗ tự tính ở lịch, cron chỉ dọn cho gọn.

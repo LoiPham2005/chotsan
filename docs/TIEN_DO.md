@@ -3,7 +3,7 @@
 Cập nhật: **04/09/2026**. Kế hoạch đầy đủ ở [KE_HOACH_REFACTOR.md](KE_HOACH_REFACTOR.md); tệp này
 chỉ nói **đã làm được gì, còn gì**, để mở ra là biết đứng ở đâu.
 
-Số liệu hiện tại: **555 unit test / 49 tệp** + **37 bài e2e Playwright** — tất cả xanh, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
+Số liệu hiện tại: **564 unit test / 49 tệp** + **37 bài e2e Playwright** — tất cả xanh, `pnpm check` xanh, `pnpm db:check-conflict` **14/14**
 trên database thật.
 
 ## Bảng tổng
@@ -52,7 +52,7 @@ trên database thật.
 | Quy ước màu/chữ/khoảng cách          | `.claude/skills/chotsan-thiet-ke/`     |
 | Lưới sân × khung giờ + dải tổng quan | `src/components/booking/slot-grid.tsx` |
 
-## Bốn chốt chặn tiền đã chứng minh trên database thật
+## Các chốt chặn tiền đã chứng minh trên database thật
 
 Chạy `pnpm db:check-conflict` — script tự tạo sân riêng, chạy thao tác **đồng thời thật**, rồi tự
 xoá. Unit test dùng mock chỉ kiểm ĐƯỜNG XỬ LÝ khi lỗi bắn ra; script này kiểm rằng lỗi **thật sự**
@@ -62,6 +62,11 @@ bắn ra.
 2. Khách bấm "Thanh toán" hai lần → đúng một giao dịch, không mở được hai trang thanh toán.
 3. Webhook cổng thanh toán gửi lại → không xác nhận lần hai.
 4. Cổng báo về số tiền lệch → dừng, không xác nhận, dù webhook nói "thành công".
+5. Hai lần đặt nhiều sân tranh cùng một dãy → bên thua **không để lại nửa lần đặt** (transaction
+   cuộn lại cả lượt đã giữ).
+6. Chỗ giữ quá hạn mà cron chưa nhả → **không chặn** người đặt sau.
+7. Khách đã báo chuyển khoản → cron **không nhả** chỗ của họ trong lúc chờ chủ sân đối chiếu.
+8. Duyệt một lần cho cả lần đặt nhiều sân; **sân khác không duyệt được** tiền của sân này.
 
 Script này **đã bắt được hai lỗi mà 440 unit test không thấy** — xem
 [GOTCHAS #10](GOTCHAS.md#10-prisma-7--driver-adapter-errormetatarget-không-còn-tên-ràng-buộc-chỉ-nằm-trong-meta).
@@ -140,7 +145,58 @@ cái link chứa mã là mất đường vào chính lượt đặt của mình.
 Nay chưa đăng nhập thì nút chuyển thành "Đăng nhập để đặt sân", kèm `?next=` giữ nguyên sân và
 ngày đang xem. Đã đăng nhập thì KHÔNG hỏi lại tên; số điện thoại chỉ hỏi khi hồ sơ chưa có.
 
+**Các ô đã chọn đi theo qua bước đăng nhập / đăng ký.** Đường quay lại mang thêm
+`&chon=<courtId>~<phút>,…` (`encodeSelection` trong `src/lib/slots.ts`). Về tới trang sân:
+
+1. Lưới dựng lại đúng các ô đó — chỉ những ô **còn trống**; ô bị người khác đặt mất trong lúc
+   đăng nhập thì rơi ra và có dòng báo (`keepFreeSlots`).
+2. Báo "Đã giữ nguyên N khung bạn chọn", cuộn thẳng tới nút đặt.
+3. Gỡ `chon` khỏi thanh địa chỉ, để đặt xong bấm Quay lại không "hồi sinh" các ô vừa đặt.
+
+**Không tự bấm đặt thay khách**: giữ chỗ là bắt đầu đếm ngược 10 phút thanh toán, và giá có thể đã
+đổi trong lúc họ đăng nhập. Trang đưa họ về sát nút đặt; bấm là quyết định của họ.
+
 Đặt hộ tại quầy vẫn giữ tên + số rời (`source: COUNTER`) — luồng khác, do nhân viên sân thao tác.
+
+### Đặt nhiều sân một lần = MỘT lần thanh toán
+
+Chọn Sân 1 lúc 13:00 và Sân 8 lúc 14:00 là **hai lượt đặt** ở database (mỗi lượt một sân + một dãy
+giờ liền — ràng buộc chống trùng tính trên từng lượt), nhưng với khách đó là **một lần đặt**.
+
+Trước đây nhiều lượt thì bị đá sang "Lượt đặt của tôi": không mã QR, phải thanh toán từng lượt.
+v1 cũng hổng đúng chỗ này — nó chỉ tính tiền lượt đầu, phần còn lại ghi `TODO`.
+
+| Tầng        | Làm gì                                                                                  |
+| ----------- | --------------------------------------------------------------------------------------- |
+| Database    | `bookings.checkout_code` = mã của lượt đầu, chung cho cả lần đặt; `NULL` = đứng riêng   |
+| Giữ chỗ     | `BookingService.holdCheckout` — MỘT transaction: giữ được hết hoặc không giữ gì         |
+| Thanh toán  | Mỗi lượt vẫn một `Payment`, nhưng chung nội dung `CS <mã lần đặt>`; QR = tổng tiền      |
+| Màn khách   | `/bookings/<mã>` — liệt kê từng sân + giờ, một QR, một nút "Tôi đã chuyển khoản"        |
+| Màn chủ sân | Hàng chờ gộp theo lần đặt: một thẻ, tổng tiền, một nút "Đã nhận đủ tiền" cho cả lần đặt |
+
+Giữ **một `Payment` cho mỗi lượt** thay vì một giao dịch cho cả nhóm: huỷ một lượt, hoàn tiền một
+lượt, doanh thu theo sân vẫn chạy nguyên như cũ, và chỉ số "một giao dịch sống cho mỗi lượt" vẫn
+đúng nghĩa.
+
+### Hạn giữ chỗ — ba luật
+
+1. **Quá hạn thì không chiếm chỗ, dù cron chưa nhả.** Lịch tự tính (`occupyingBookingWhere`), và
+   giữ chỗ mới nhả luôn chỗ quá hạn gối lên ngay trong transaction. Trước đây mọi `HOLDING` đều
+   chiếm chỗ tới khi worker nhả — máy dev không chạy worker thì khoá sân **vĩnh viễn**.
+2. **Khách báo chuyển khoản thì hạn bị xoá** (`holdExpiresAt = null`). Trước đây chỉ xoá hạn của
+   giao dịch: chủ sân đối chiếu chậm hơn 10 phút là cron nhả chỗ của khách đã trả tiền.
+3. **Chủ sân từ chối thì cấp hạn mới** — đủ để khách đọc lý do, sửa và báo lại.
+
+Màn thanh toán của lần đặt đã quá hạn **không hiện QR**; thay bằng nút "Đặt lại các khung này" với
+đúng các ô cũ được chọn sẵn (`?chon=`).
+
+### Thao tác theo sân: id từ form phải thuộc đúng sân
+
+`defineVenueAction` kiểm quyền trên `venueId` của URL — nhưng id lượt đặt, giao dịch, sân con thì
+lấy từ **form**. Trước đây không ai kiểm id đó có thuộc sân kia không: nhân viên sân A gửi id của
+sân B là **duyệt được tiền, huỷ được lượt, tắt được sân con của sân B**. Đã khoá cả năm chỗ
+(duyệt tiền, từ chối tiền, nhận sân, huỷ, bật/tắt sân con) và bảng giá không nhận sân con của cơ
+sở khác. Lệch sân thì báo **không tìm thấy**.
 
 **Đã làm xong**: bảng `PlatformInvoice` (`@@unique([venueId, periodStart])` chống xuất trùng),
 `InvoiceService`, cron xuất hoá đơn 02:00 mùng 1 hằng tháng và đánh dấu quá hạn 04:00 mỗi ngày,

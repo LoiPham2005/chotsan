@@ -86,13 +86,14 @@ test.describe("Đăng nhập", () => {
 });
 
 test.describe("Đăng ký", () => {
-  test("tạo tài khoản mới và giữ được họ tên đã nhập", async ({ page }) => {
+  test("tạo tài khoản mới, giữ được họ tên, và về đúng trang đang dở", async ({ page }) => {
     // Email phải khác nhau giữa các lần chạy — database không được reset giữa
     // các test, và đăng ký trùng email là lỗi hợp lệ.
     const email = `e2e-${Date.now()}@example.com`;
     const fullName = "Người Dùng E2E";
 
-    await page.goto("/register");
+    // Khách đang xem sân thì bấm "Đăng ký" — đăng ký xong phải về lại sân đó.
+    await page.goto(`/register?next=${encodeURIComponent("/venues/cau-long-thanh-cong")}`);
 
     await page.getByLabel("Tên hiển thị").fill(fullName);
     await page.getByLabel("Email").fill(email);
@@ -105,6 +106,12 @@ test.describe("Đăng ký", () => {
     // có họ tên là biến mất.
     // Header hiện tên người dùng thành link tới màn thiết bị đăng nhập.
     await expect(page.getByRole("link", { name: fullName })).toBeVisible();
+
+    // Kiểm ở trên từng XANH GIẢ: đăng ký xong bị đá vào `/users` (chỉ quản trị
+    // xem được) — trang 404 vẫn có header mang tên người dùng. Phải kiểm cả
+    // nơi đến lẫn nội dung của nó.
+    await expect(page).toHaveURL(/\/venues\/cau-long-thanh-cong$/);
+    await expect(page.getByRole("heading", { name: "Chọn khung giờ" })).toBeVisible();
   });
 });
 

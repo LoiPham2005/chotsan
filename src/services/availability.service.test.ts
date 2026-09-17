@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@prisma/client";
-import { AvailabilityService } from "./availability.service";
+import { AvailabilityService, occupyingBookingWhere } from "./availability.service";
 
 /**
  * Lưới sân × khung giờ là màn được mở nhiều nhất của sản phẩm, và cũng là chỗ
@@ -324,5 +324,86 @@ describe("excludeBookingId — dùng khi đổi giờ", () => {
     ).mock.calls[0]!;
 
     expect(where.id).toBeUndefined();
+  });
+});
+
+describe("chỗ giữ quá hạn — không chiếm khung dù cron chưa nhả", () => {
+  const NOW = new Date("2026-09-04T03:00:00Z");
+
+  /**
+   * Lỗi thật: giữ chỗ lúc 09:38, tới 10:41 vẫn khoá sân — vì thứ duy nhất nhả
+   * chỗ là cron ở worker, mà máy dev chỉ chạy `pnpm dev`. Lịch phải tự tính đúng
+   * bất kể worker sống hay chết.
+   */
+  it("truy vấn chỉ lấy HOLDING còn hạn hoặc không có hạn, cùng mọi lượt đã xác nhận", async () => {
+    const db = createDb();
+    await new AvailabilityService(db).forDay("v1", DATE, { now: NOW });
+
+    const where = vi.mocked(db.booking.findMany).mock.calls[0]![0]!.where;
+    expect(where).toMatchObject(occupyingBookingWhere(NOW));
+    expect(occupyingBookingWhere(NOW)).toEqual({
+      OR: [
+        { status: { in: ["CONFIRMED", "CHECKED_IN"] } },
+        { status: "HOLDING", OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: NOW } }] },
+      ],
+    });
+  });
+
+  it("khách đã báo chuyển khoản (hạn = null) thì VẪN chiếm khung", () => {
+    // Đang chờ chủ sân đối chiếu tiền — nhả chỗ lúc này là bán lại chỗ đã trả tiền.
+    const holding = occupyingBookingWhere(NOW).OR[1]!;
+    expect(holding).toMatchObject({ OR: expect.arrayContaining([{ holdExpiresAt: null }]) });
+  });
+});
+
+describe("quoteMany — báo giá nhiều dãy của một lần đặt", () => {
+  it("đọc lịch MỘT lần cho mọi dãy", async () => {
+    const db = createDb({
+      courts: [
+        { id: "c1", name: "Sân 1" },
+        { id: "c2", name: "Sân 2" },
+      ],
+    });
+    const quotes = await new AvailabilityService(db).quoteMany({
+      venueId: "v1",
+      date: DATE,
+      now: NOT_TODAY,
+      ranges: [
+        { courtId: "c1", startMinute: 18 * 60, endMinute: 19 * 60 },
+        { courtId: "c2", startMinute: 20 * 60, endMinute: 20 * 60 + 30 },
+        { courtId: "c1", startMinute: 21 * 60, endMinute: 22 * 60 },
+      ],
+    });
+
+    expect(db.booking.findMany).toHaveBeenCalledTimes(1);
+    expect(quotes.map((quote) => [quote.courtName, quote.available, quote.slotCount])).toEqual([
+      ["Sân 1", true, 2],
+      ["Sân 2", true, 1],
+      ["Sân 1", true, 2],
+    ]);
+  });
+
+  it("trả ĐỦ mọi dãy, dãy hỏng đánh dấu không đặt được kèm tên sân để báo lỗi đúng chỗ", async () => {
+    const db = createDb({
+      courts: [
+        { id: "c1", name: "Sân 1" },
+        { id: "c2", name: "Sân 2" },
+      ],
+      bookings: [{ courtId: "c2", startAt: at(20 * 60), endAt: at(21 * 60) }],
+    });
+    const quotes = await new AvailabilityService(db).quoteMany({
+      venueId: "v1",
+      date: DATE,
+      now: NOT_TODAY,
+      ranges: [
+        { courtId: "c1", startMinute: 20 * 60, endMinute: 21 * 60 },
+        { courtId: "c2", startMinute: 20 * 60, endMinute: 21 * 60 },
+        { courtId: "san-la", startMinute: 20 * 60, endMinute: 21 * 60 },
+      ],
+    });
+
+    expect(quotes[0]).toMatchObject({ available: true, courtName: "Sân 1" });
+    expect(quotes[1]).toMatchObject({ available: false, courtName: "Sân 2", total: 0 });
+    expect(quotes[2]).toMatchObject({ available: false, courtName: null });
   });
 });

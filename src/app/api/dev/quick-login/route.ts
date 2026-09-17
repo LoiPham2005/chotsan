@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { redirectRelative } from "@/lib/api/redirect";
 import { createSession } from "@/lib/auth";
 import { landingPathFor } from "@/lib/landing";
 import { safeRedirectPath } from "@/lib/safe-redirect";
@@ -56,5 +57,6 @@ export async function POST(request: Request): Promise<Response> {
   const next = form.get("next");
   const dich = typeof next === "string" && next ? next : await landingPathFor(user.id);
   // 303: sau một POST phải chuyển sang GET, nếu không bấm F5 là gửi lại form.
-  return NextResponse.redirect(new URL(safeRedirectPath(dich, "/"), request.url), 303);
+  // Tương đối, không dựng từ `request.url` — xem `src/lib/api/redirect.ts`.
+  return redirectRelative(safeRedirectPath(dich, "/"), 303);
 }

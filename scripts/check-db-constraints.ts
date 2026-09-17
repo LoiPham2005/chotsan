@@ -87,7 +87,12 @@ async function main() {
       bankName: "VCB",
       bankAccountNumber: "1234567890",
       bankAccountName: "SAN KIEM TRA",
-      courts: { create: [{ name: "Sân 1", sortOrder: 1, isActive: true, sportId: sport.id }] },
+      courts: {
+        create: [
+          { name: "Sân 1", sortOrder: 1, isActive: true, sportId: sport.id },
+          { name: "Sân 2", sortOrder: 2, isActive: true, sportId: sport.id },
+        ],
+      },
       priceRules: {
         create: [
           { weekdays: [], startMinute: 0, endMinute: 24 * 60, pricePerSlot: 60_000, priority: 0 },
@@ -97,7 +102,8 @@ async function main() {
     include: { courts: true },
   });
 
-  const court = venue.courts[0]!;
+  const court = venue.courts.find((item) => item.name === "Sân 1")!;
+  const court2 = venue.courts.find((item) => item.name === "Sân 2")!;
   const service = new BookingService(db, new AvailabilityService(db));
   const ngayMai = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
@@ -177,7 +183,12 @@ async function main() {
   );
 
   // 5. Hết hạn giữ chỗ.
-  const soHetHan = await service.expireHolds({ now: new Date(Date.now() + 60 * 60_000) });
+  // Chỉ trong sân kiểm tra: gọi không giới hạn là nhả luôn chỗ đang giữ của
+  // người đang dùng app trên cùng database này.
+  const soHetHan = await service.expireHolds({
+    now: new Date(Date.now() + 60 * 60_000),
+    venueId: venue.id,
+  });
   const conSong = await db.booking.count({
     where: { courtId: court.id, status: { in: ["HOLDING", "CONFIRMED", "CHECKED_IN"] } },
   });
@@ -210,7 +221,7 @@ async function main() {
 
   // 7. Khai đã chuyển rồi vẫn mở được giao dịch VNPay = thu tiền hai lần.
   const gd = gdA;
-  await thanhToan.declareTransfer({ paymentId: gd.id, note: "kiểm tra" });
+  await thanhToan.declareTransfer({ paymentIds: [gd.id], note: "kiểm tra" });
   const gdThuHai = await thanhToan.start({ bookingId: luot.id, provider: "VNPAY" });
   bao(
     "khai chuyển khoản rồi thì không mở thêm giao dịch VNPay",
@@ -219,7 +230,7 @@ async function main() {
   );
 
   // 8. Mã QR VietQR dựng từ tài khoản của sân.
-  const instruction = await thanhToan.transferInstruction(gd.id);
+  const instruction = await thanhToan.transferInstruction([gd.id]);
   bao(
     "dựng được mã QR chuyển khoản",
     instruction.qrPayload !== null && instruction.transferNote === `CS ${luot.code}`,
@@ -227,7 +238,7 @@ async function main() {
   );
 
   // 9. Chủ sân duyệt → lượt đặt tự chuyển sang CONFIRMED.
-  await thanhToan.approveManual({ paymentId: gd.id, reviewerId: "kiem-tra" });
+  await thanhToan.approveManual({ paymentIds: [gd.id], venueId: venue.id, reviewerId: "kiem-tra" });
   const sauDuyet = await db.booking.findUniqueOrThrow({ where: { id: luot.id } });
   bao(
     "duyệt tay xong lượt đặt tự thành CONFIRMED",
@@ -279,6 +290,135 @@ async function main() {
     "cổng báo lệch tiền thì không xác nhận",
     lechTien === "PaymentAmountMismatchError" && luot3Sau.status === "HOLDING",
     `${lechTien}, lượt đặt vẫn ${luot3Sau.status}`,
+  );
+
+  // ---------------------------------------------------------------------
+  // Phần ba: MỘT LẦN ĐẶT NHIỀU LƯỢT và CHỖ GIỮ QUÁ HẠN
+  //
+  // Mock không chứng minh được hai thứ ở đây: transaction cuộn lại THẬT khi
+  // ràng buộc EXCLUDE bắn giữa chừng, và Postgres cho giữ đè lên một chỗ giữ
+  // quá hạn sau khi nó được nhả trong cùng transaction.
+  // ---------------------------------------------------------------------
+
+  const datNhieu = (
+    ten: string,
+    ranges: { courtId: string; startMinute: number; endMinute: number }[],
+  ) =>
+    service.holdCheckout({
+      venueId: venue.id,
+      date: ngayMai,
+      ranges,
+      customerName: ten,
+      customerPhone: "0900000000",
+    });
+
+  // 12. Hai sân một lần: chung mã lần đặt.
+  const nhom = await datNhieu("Người H", [
+    { courtId: court.id, startMinute: 12 * 60, endMinute: 13 * 60 },
+    { courtId: court2.id, startMinute: 12 * 60, endMinute: 12 * 60 + 30 },
+  ]);
+  bao(
+    "đặt hai sân một lần: chung mã lần đặt",
+    nhom.length === 2 && nhom.every((b) => b.checkoutCode === nhom[0]!.code),
+    nhom.map((b) => `${b.code}→${b.checkoutCode}`).join(", "),
+  );
+
+  // 13. Hai lần đặt nhiều lượt tranh cùng một dãy: bên thua KHÔNG được để lại
+  // nửa lần đặt. Chạy đồng thời để có lúc cả hai cùng qua bước báo giá và bên
+  // thua chỉ vấp ràng buộc EXCLUDE ở câu INSERT thứ hai — lúc đó transaction
+  // phải cuộn lại cả lượt đầu.
+  const tranh = await Promise.allSettled([
+    datNhieu("Người I", [
+      { courtId: court.id, startMinute: 14 * 60, endMinute: 15 * 60 },
+      { courtId: court2.id, startMinute: 15 * 60, endMinute: 16 * 60 },
+    ]),
+    datNhieu("Người K", [
+      { courtId: court.id, startMinute: 16 * 60, endMinute: 17 * 60 },
+      { courtId: court2.id, startMinute: 15 * 60, endMinute: 16 * 60 },
+    ]),
+  ]);
+  const thangNhom = tranh.filter((r) => r.status === "fulfilled").length;
+  const conSongCuaHai = await db.booking.groupBy({
+    by: ["customerName"],
+    where: { venueId: venue.id, customerName: { in: ["Người I", "Người K"] }, status: "HOLDING" },
+    _count: true,
+  });
+  bao(
+    "tranh cùng dãy: bên thua không để lại nửa lần đặt",
+    thangNhom === 1 && conSongCuaHai.length === 1 && conSongCuaHai[0]!._count === 2,
+    conSongCuaHai.map((row) => `${row.customerName}: ${row._count} lượt`).join(", ") ||
+      "không ai giữ được",
+  );
+
+  // 14. Chỗ giữ QUÁ HẠN mà cron chưa nhả: người sau vẫn đặt được.
+  const cu = await dat("Người L", 18 * 60, 19 * 60);
+  await db.booking.update({
+    where: { id: cu.id },
+    data: { holdExpiresAt: new Date(Date.now() - 60_000) },
+  });
+  let giuDe = "CHO QUA";
+  try {
+    await dat("Người M", 18 * 60, 18 * 60 + 30);
+  } catch (error) {
+    giuDe = error instanceof Error ? error.constructor.name : String(error);
+  }
+  const cuSau = await db.booking.findUniqueOrThrow({ where: { id: cu.id } });
+  bao(
+    "chỗ giữ quá hạn không chặn người sau",
+    giuDe === "CHO QUA" && cuSau.status === "EXPIRED",
+    `${giuDe === "CHO QUA" ? "đặt được" : `BỊ CHẶN: ${giuDe}`}, chỗ cũ ${cuSau.status}`,
+  );
+
+  // 15. Khách đã báo chuyển khoản thì cron KHÔNG được nhả chỗ.
+  const daKhai = await dat("Người N", 7 * 60, 8 * 60);
+  const gdKhai = await thanhToan.start({ bookingId: daKhai.id, provider: "BANK_TRANSFER" });
+  await thanhToan.declareTransfer({ paymentIds: [gdKhai.id] });
+  // Đúng điều kiện của cron `expireHolds`, nhưng chỉ trên lượt này — gọi cron
+  // thật với "một giờ sau" sẽ nhả luôn chỗ giữ của người khác trong database.
+  const cronSeNha = await db.booking.count({
+    where: {
+      id: daKhai.id,
+      status: "HOLDING",
+      holdExpiresAt: { lte: new Date(Date.now() + 24 * 60 * 60_000) },
+    },
+  });
+  bao(
+    "đã báo chuyển khoản thì cron không nhả chỗ",
+    cronSeNha === 0,
+    cronSeNha === 0 ? "hạn giữ chỗ đã được xoá" : "CRON SẼ NHẢ CHỖ CỦA KHÁCH ĐÃ TRẢ TIỀN",
+  );
+
+  // 16. Duyệt một lần cho cả nhóm — và sân khác thì không duyệt được.
+  const gdNhom = await Promise.all(
+    nhom.map((b) => thanhToan.start({ bookingId: b.id, provider: "BANK_TRANSFER" })),
+  );
+  const chiDanNhom = await thanhToan.transferInstruction(gdNhom.map((g) => g.id));
+  await thanhToan.declareTransfer({ paymentIds: gdNhom.map((g) => g.id) });
+
+  let sanKhac = "CHO QUA";
+  try {
+    await thanhToan.approveManual({
+      paymentIds: gdNhom.map((g) => g.id),
+      venueId: `san-khac-${suffix}`,
+      reviewerId: "kiem-tra",
+    });
+  } catch (error) {
+    sanKhac = error instanceof Error ? error.constructor.name : String(error);
+  }
+
+  await thanhToan.approveManual({
+    paymentIds: gdNhom.map((g) => g.id),
+    venueId: venue.id,
+    reviewerId: "kiem-tra",
+  });
+  const nhomSau = await db.booking.findMany({ where: { id: { in: nhom.map((b) => b.id) } } });
+  bao(
+    "nhóm: một QR tổng tiền, một lần duyệt, sân khác không duyệt được",
+    chiDanNhom.amount === nhom[0]!.total + nhom[1]!.total &&
+      chiDanNhom.transferNote === `CS ${nhom[0]!.code}` &&
+      sanKhac === "PaymentNotFoundError" &&
+      nhomSau.every((b) => b.status === "CONFIRMED"),
+    `QR ${chiDanNhom.amount.toLocaleString("vi-VN")}đ "${chiDanNhom.transferNote}", sân khác: ${sanKhac}, sau duyệt: ${nhomSau.map((b) => b.status).join("/")}`,
   );
 
   // Dọn: xoá theo đúng thứ tự khoá ngoại.

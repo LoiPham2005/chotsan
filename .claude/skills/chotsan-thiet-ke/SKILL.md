@@ -263,3 +263,18 @@ document.documentElement.scrollWidth <= window.innerWidth; // phải đúng ở 
 
 Đo ở 320 · 360 · 390 · 430 · 768 · 1024 · 1280 · 1920. 320px là iPhone SE đời cũ — dưới ngưỡng đó
 thì ẩn chữ trong logo, giữ biểu tượng.
+
+## Lưới đặt sân — năm luật đã chốt sau nhiều vòng sửa
+
+1. **Không đường kẻ.** Ô là khối bo tròn (`rounded-xl`) tách nhau bằng khoảng trắng 6px. Kẻ vạch
+   giữa mọi ô làm cả lưới trông như giấy ô li.
+2. **Nhãn giờ nằm trên RANH GIỚI giữa hai ô**, không nằm giữa ô — ô giữa nhãn 17:00 và 17:30 là
+   khung 17:00–17:30. Đánh dấu ranh giới bằng chấm nhỏ, không bằng vạch. Vạch cuối mang giờ đóng
+   cửa.
+3. **Mọi nhãn giờ cùng cỡ, cùng độ đậm** (`text-xs font-semibold`). Giờ vàng chỉ đổi MÀU chữ.
+4. **Ẩn khung đã qua giờ** ở đầu ngày, ghi một dòng "Đã ẩn N khung". Không bày cả dãy ô "Đã qua".
+5. **Ô nói bằng chữ**: còn trống ghi giá (`70k`), đã đặt ghi "Đã đặt", bảo trì ghi "Bảo trì" trên
+   nền sọc chéo, đang chọn là dấu ✓ trên nền xanh thương hiệu.
+
+Chọn tự do nhiều ô, nhiều sân; máy chủ gom thành từng lượt đặt (một sân + một dãy liền) bằng
+`slotsToRanges`. Hai kiểu xem "Theo sân" / "Theo giờ" — trên điện thoại "Theo giờ" dễ dùng hơn.

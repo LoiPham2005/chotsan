@@ -47,7 +47,10 @@ export default async function LoginPage({
           <Link href="/forgot-password">Quên mật khẩu?</Link>
         </p>
         <p style={{ marginTop: 8, fontSize: "0.9rem", color: "var(--text-muted)" }}>
-          Chưa có tài khoản? <Link href="/register">Đăng ký</Link>
+          Chưa có tài khoản?{" "}
+          <Link href={next ? `/register?next=${encodeURIComponent(next)}` : "/register"}>
+            Đăng ký
+          </Link>
         </p>
 
         <DangNhapNhanh nextPath={next} />

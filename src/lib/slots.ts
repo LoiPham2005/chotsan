@@ -102,6 +102,82 @@ export function groupConsecutive(minutes: readonly number[]): { start: number; e
 }
 
 /**
+ * Gom các ô đã chọn trên lưới thành từng lượt đặt: MỘT sân + MỘT dãy giờ liền.
+ *
+ * Lưới cho chọn tự do — nhiều sân, nhiều khung rời nhau — nhưng mỗi lượt đặt
+ * ở database chỉ là một sân và một khoảng liền (ràng buộc chống trùng tính
+ * trên khoảng đó). Chọn 18:00 + 18:30 sân 1 và 20:00 sân 3 là HAI lượt đặt.
+ *
+ * Thứ tự trả về ổn định (theo thứ tự sân xuất hiện, rồi theo giờ) để thông
+ * báo lỗi "sân 3 lúc 20:00 vừa có người đặt" luôn chỉ đúng cùng một dãy.
+ */
+export function slotsToRanges(
+  slots: readonly { courtId: string; minute: number }[],
+): { courtId: string; startMinute: number; endMinute: number }[] {
+  const byCourt = new Map<string, number[]>();
+
+  for (const slot of slots) {
+    byCourt.set(slot.courtId, [...(byCourt.get(slot.courtId) ?? []), slot.minute]);
+  }
+
+  return [...byCourt.entries()].flatMap(([courtId, minutes]) =>
+    groupConsecutive(minutes).map((block) => ({
+      courtId,
+      startMinute: block.start,
+      endMinute: block.end,
+    })),
+  );
+}
+
+/**
+ * Lựa chọn trên lưới ↔ tham số URL `?chon=`.
+ *
+ * ---
+ * VÌ SAO LỰA CHỌN PHẢI ĐI THEO QUA BƯỚC ĐĂNG NHẬP
+ *
+ * Khách chưa đăng nhập chọn 3 ô rồi bấm đặt → bị đưa sang màn đăng nhập → quay
+ * lại thì lưới trống trơn, phải dò chọn lại từ đầu. Với người vừa chọn hai sân
+ * cho cả nhóm, đó là lúc họ bỏ đi.
+ *
+ * Lựa chọn nằm trong state của React nên mất khi rời trang. Gói nó vào `next`
+ * để đăng nhập xong quay về đúng trang, đúng các ô đã chọn.
+ *
+ * Định dạng: `courtId~minute` nối bằng dấu phẩy. cuid không chứa `~` hay `,`.
+ */
+export function encodeSelection(slots: readonly { courtId: string; minute: number }[]): string {
+  return slots.map((slot) => `${slot.courtId}~${slot.minute}`).join(",");
+}
+
+/**
+ * Giải mã `?chon=`. Mọi thứ từ URL đều không đáng tin: bỏ phần tử sai định dạng,
+ * phút không tròn 30, và giới hạn số lượng — URL tự chế không được làm đổ trang.
+ */
+export function decodeSelection(raw: unknown, limit = 48): { courtId: string; minute: number }[] {
+  // `?chon=a&chon=b` cho ra MẢNG chứ không phải chuỗi — kiểu của `searchParams`
+  // không nói điều đó, và gọi `.split` trên mảng là đổ cả trang.
+  if (typeof raw !== "string" || raw === "") return [];
+
+  const out: { courtId: string; minute: number }[] = [];
+  const seen = new Set<string>();
+
+  for (const part of raw.split(",").slice(0, limit)) {
+    const match = /^([a-z0-9]{8,40})~(\d{1,4})$/i.exec(part.trim());
+    if (!match) continue;
+
+    const minute = Number(match[2]);
+    if (!isSlotAligned(minute) || minute >= MINUTES_PER_DAY) continue;
+
+    const key = `${match[1]}~${minute}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    out.push({ courtId: match[1]!, minute });
+  }
+
+  return out;
+}
+
+/**
  * Số phút từ 00:00 của một mốc thời gian, theo múi giờ Việt Nam.
  *
  * ⚠️ Không dùng `date.getHours()`: nó theo múi giờ của MÁY CHỦ. Container chạy

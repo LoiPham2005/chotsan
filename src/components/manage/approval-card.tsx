@@ -9,22 +9,28 @@ import {
 } from "@/app/(manage)/manage/[venueId]/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { timeOfDay } from "@/lib/date";
+import { fullDateLabel, timeOfDay } from "@/lib/date";
 import { formatVnd } from "@/lib/slots";
 
 export type ApprovalData = {
-  paymentId: string;
+  checkoutCode: string;
+  /** TỔNG của cả lần chuyển khoản — đúng con số chủ sân thấy trong sao kê. */
   amount: number;
-  transferNote: string | null;
+  transferNote: string;
   declaredAt: string | null;
   declaredNote: string | null;
   proofImageUrl: string | null;
-  bookingCode: string;
   customerName: string;
   customerPhone: string;
-  courtName: string;
-  startAt: string;
-  endAt: string;
+  /** Từng lượt mà lần chuyển khoản này trả cho. */
+  items: {
+    paymentId: string;
+    bookingCode: string;
+    courtName: string;
+    startAt: string;
+    endAt: string;
+    amount: number;
+  }[];
 };
 
 /**
@@ -36,6 +42,13 @@ export type ApprovalData = {
  * Việc chủ sân thật sự làm ở đây: mở app ngân hàng, tìm một dòng khớp CẢ HAI
  * thứ đó. Mọi thứ còn lại là bối cảnh. Bày tên khách to hơn số tiền là bắt mắt
  * họ đi tìm lại thứ cần dùng.
+ *
+ * ---
+ * MỘT NÚT CHO CẢ LẦN CHUYỂN KHOẢN
+ *
+ * Khách đặt ba sân rồi chuyển một lần. Bấm "đã nhận đủ tiền" là xác nhận CẢ
+ * BA lượt trong một transaction — form gửi đủ các `paymentId`. Duyệt từng lượt
+ * là để lọt một lượt treo "chờ thanh toán" rồi hết hạn dù khách đã trả tiền.
  *
  * ---
  * NÚT "ĐÃ NHẬN TIỀN", KHÔNG PHẢI "DUYỆT"
@@ -63,22 +76,37 @@ export function ApprovalCard({ item, venueId }: { item: ApprovalData; venueId: s
             Nội dung chuyển khoản
           </p>
           <p className="font-mono text-lg font-bold tracking-wider text-content">
-            {item.transferNote ?? `CS ${item.bookingCode}`}
+            {item.transferNote}
           </p>
         </div>
 
         <p className="text-2xl font-bold tabular-nums text-content">{formatVnd(item.amount)}</p>
       </div>
 
-      <dl className="mt-3 grid gap-x-6 gap-y-1 border-t border-line pt-3 text-sm sm:grid-cols-2">
+      <ul className="mt-3 divide-y divide-line rounded-token-md border border-line text-sm">
+        {item.items.map((line) => (
+          <li key={line.paymentId} className="flex items-center justify-between gap-3 px-3 py-2">
+            <span className="min-w-0 text-content">
+              <span className="font-semibold">{line.courtName}</span> ·{" "}
+              {timeOfDay(new Date(line.startAt))}–{timeOfDay(new Date(line.endAt))}
+              <span className="block text-xs text-subtle">
+                {fullDateLabel(new Date(line.startAt))} · mã{" "}
+                <span className="font-mono">{line.bookingCode}</span>
+              </span>
+            </span>
+            {item.items.length > 1 && (
+              <span className="shrink-0 tabular-nums text-muted">{formatVnd(line.amount)}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      <dl className="mt-3 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
         <Row label="Khách">
           {item.customerName} ·{" "}
           <a href={`tel:${item.customerPhone}`} className="font-medium text-brand hover:underline">
             {item.customerPhone}
           </a>
-        </Row>
-        <Row label="Sân & giờ">
-          {item.courtName} · {timeOfDay(new Date(item.startAt))}–{timeOfDay(new Date(item.endAt))}
         </Row>
         <Row label="Khách báo lúc">
           {item.declaredAt ? timeOfDay(new Date(item.declaredAt)) : "—"}
@@ -110,7 +138,7 @@ export function ApprovalCard({ item, venueId }: { item: ApprovalData; venueId: s
 
       <div className="mt-3 flex flex-wrap gap-2">
         <form action={approve}>
-          <input type="hidden" name="paymentId" value={item.paymentId} />
+          <PaymentIdInputs item={item} />
           <ApproveButton />
         </form>
 
@@ -123,16 +151,16 @@ export function ApprovalCard({ item, venueId }: { item: ApprovalData; venueId: s
 
       {showReject && (
         <form action={reject} className="mt-3 rounded-token-md border border-line bg-elevated p-3">
-          <input type="hidden" name="paymentId" value={item.paymentId} />
+          <PaymentIdInputs item={item} />
 
           <label
-            htmlFor={`reason-${item.paymentId}`}
+            htmlFor={`reason-${item.checkoutCode}`}
             className="text-sm font-semibold text-content"
           >
             Lý do — khách sẽ đọc câu này
           </label>
           <Input
-            id={`reason-${item.paymentId}`}
+            id={`reason-${item.checkoutCode}`}
             name="reason"
             required
             minLength={4}
@@ -151,6 +179,13 @@ export function ApprovalCard({ item, venueId }: { item: ApprovalData; venueId: s
       )}
     </li>
   );
+}
+
+/** Mọi giao dịch của lần chuyển khoản — cùng tên `paymentId`, action đọc bằng `getAll`. */
+function PaymentIdInputs({ item }: { item: ApprovalData }) {
+  return item.items.map((line) => (
+    <input key={line.paymentId} type="hidden" name="paymentId" value={line.paymentId} />
+  ));
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {

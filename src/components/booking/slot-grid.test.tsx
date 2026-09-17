@@ -1,36 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { DayAvailability, SlotStatus } from "@/services/availability.service";
+import { firstBookableMinute, keepFreeSlots, slotKey, visibleMinutes } from "./slot-grid";
 
 /**
- * Lưới mở ở giờ nào.
+ * Lưới tự cuộn tới khung đầu tiên còn đặt được.
  *
- * Sân mở 05:30 nhưng người mở trang lúc 3 giờ chiều thì trang đầu toàn ô xám
- * của khung đã trôi qua — họ phải bấm "Muộn hơn" hai lần mới thấy thứ mua
- * được. Đây là phép tính quyết định chuyện đó, tách ra để kiểm được mà không
- * phải dựng cả React.
+ * Sân mở 05:30 nhưng người mở trang lúc 3 giờ chiều thì phần đầu lưới toàn ô
+ * "Đã qua" — họ phải tự cuộn qua mười mấy cột mới thấy thứ mua được.
  */
-function firstBookablePage(day: DayAvailability, hoursPerPage: number): number {
-  const grouped = new Map<number, number[]>();
-  for (const minute of day.minutes) {
-    const hour = Math.floor(minute / 60);
-    grouped.set(hour, [...(grouped.get(hour) ?? []), minute]);
-  }
-  const hours = [...grouped.entries()].map(([hour, minutes]) => ({ hour, minutes }));
 
-  const conBan = hours.findIndex((group) =>
-    group.minutes.some((minute) =>
-      day.courts.some(
-        (court) => court.slots.find((slot) => slot.minute === minute)?.status === "FREE",
-      ),
-    ),
-  );
-
-  if (conBan <= 0) return 0;
-  return Math.min(Math.max(0, conBan - 1), Math.max(0, hours.length - hoursPerPage));
-}
-
-/** Ngày mở 06:00–22:00; mọi khung trước `tuPhut` là đã trôi qua. */
-function dungNgay(tuPhut: number, status: SlotStatus = "PAST"): DayAvailability {
+/** Ngày mở 06:00–22:00; mọi khung trước `tuPhut` mang trạng thái `truoc`. */
+function dungNgay(tuPhut: number, truoc: SlotStatus = "PAST", soSan = 1): DayAvailability {
   const minutes: number[] = [];
   for (let m = 6 * 60; m < 22 * 60; m += 30) minutes.push(m);
 
@@ -40,43 +20,98 @@ function dungNgay(tuPhut: number, status: SlotStatus = "PAST"): DayAvailability 
     minutes,
     summary: minutes.map(() => 1),
     isClosed: false,
-    courts: [
-      {
-        courtId: "c1",
-        courtName: "Sân 1",
-        slots: minutes.map((minute) => ({
-          minute,
-          status: minute < tuPhut ? status : "FREE",
-          price: 70_000,
-          isPeak: false,
-        })),
-      },
-    ],
+    courts: Array.from({ length: soSan }, (_, index) => ({
+      courtId: `c${index + 1}`,
+      courtName: `Sân ${index + 1}`,
+      slots: minutes.map((minute) => ({
+        minute,
+        status: minute < tuPhut ? truoc : "FREE",
+        price: 70_000,
+        isPeak: false,
+      })),
+    })),
   };
 }
 
-describe("lưới mở ở giờ nào", () => {
-  it("ngày tương lai còn trống từ đầu thì mở ở giờ mở cửa", () => {
-    expect(firstBookablePage(dungNgay(0), 7)).toBe(0);
+describe("firstBookableMinute", () => {
+  it("ngày tương lai còn trống từ đầu thì là giờ mở cửa", () => {
+    expect(firstBookableMinute(dungNgay(0))).toBe(6 * 60);
   });
 
-  it("hôm nay đã qua nửa ngày thì nhảy tới gần giờ còn bán được", () => {
-    // Đã qua tới 15:00. Giờ đầu còn bán là 15 (chỉ số 9 tính từ 06:00).
-    // Lùi một giờ để thấy bối cảnh → 8.
-    expect(firstBookablePage(dungNgay(15 * 60), 7)).toBe(8);
+  it("hôm nay đã qua nửa ngày thì là khung đầu tiên chưa qua", () => {
+    expect(firstBookableMinute(dungNgay(15 * 60))).toBe(15 * 60);
   });
 
-  it("không nhảy quá cuối dải — trang cuối vẫn đủ số cột", () => {
-    // Chỉ còn khung 21:30. 16 giờ tổng cộng, 7 giờ mỗi trang → trần là 9.
-    expect(firstBookablePage(dungNgay(21 * 60 + 30), 7)).toBe(9);
+  it("sân bảo trì cả buổi sáng cũng bỏ qua, không chỉ giờ đã trôi", () => {
+    expect(firstBookableMinute(dungNgay(14 * 60 + 30, "CLOSED"))).toBe(14 * 60 + 30);
   });
 
-  it("hết sạch chỗ thì về đầu chứ không nhảy lung tung", () => {
-    // `findIndex` trả -1 khi không còn ô FREE nào.
-    expect(firstBookablePage(dungNgay(24 * 60), 7)).toBe(0);
+  it("hết sạch chỗ thì null — không cuộn lung tung", () => {
+    expect(firstBookableMinute(dungNgay(24 * 60, "TAKEN"))).toBeNull();
   });
 
-  it("sân bảo trì cả buổi sáng cũng nhảy qua, không chỉ giờ đã trôi qua", () => {
-    expect(firstBookablePage(dungNgay(14 * 60, "CLOSED"), 7)).toBe(7);
+  it("chỉ cần MỘT sân còn trống là tính", () => {
+    const day = dungNgay(20 * 60, "TAKEN", 2);
+    // Sân 2 trống từ 08:00 dù sân 1 kín tới 20:00.
+    day.courts[1]!.slots = day.courts[1]!.slots.map((slot) => ({
+      ...slot,
+      status: slot.minute >= 8 * 60 ? "FREE" : "TAKEN",
+    }));
+
+    expect(firstBookableMinute(day)).toBe(8 * 60);
+  });
+});
+
+describe("visibleMinutes — ẩn khung đã qua", () => {
+  it("ẩn dải đầu ngày mà mọi sân đều đã qua giờ", () => {
+    // Mở lúc 10 giờ: 8 khung 06:00–09:30 là một bức tường "Đã qua" không ai cần.
+    const { minutes, hidden } = visibleMinutes(dungNgay(10 * 60));
+    expect(hidden).toBe(8);
+    expect(minutes[0]).toBe(10 * 60);
+  });
+
+  it("ngày tương lai không ẩn gì", () => {
+    expect(visibleMinutes(dungNgay(0)).hidden).toBe(0);
+  });
+
+  it("KHÔNG ẩn khung bảo trì hay đã đặt — chỉ ẩn khung đã qua giờ", () => {
+    // Sân kín cả buổi sáng vẫn phải hiện: người dùng cần thấy "đã có người".
+    expect(visibleMinutes(dungNgay(12 * 60, "TAKEN")).hidden).toBe(0);
+    expect(visibleMinutes(dungNgay(12 * 60, "CLOSED")).hidden).toBe(0);
+  });
+
+  it("hết giờ trong ngày thì không còn cột nào", () => {
+    expect(visibleMinutes(dungNgay(24 * 60)).minutes).toEqual([]);
+  });
+});
+
+describe("slotKey", () => {
+  it("khác sân hoặc khác giờ thì khác khoá", () => {
+    expect(slotKey("c1", 1080)).not.toBe(slotKey("c2", 1080));
+    expect(slotKey("c1", 1080)).not.toBe(slotKey("c1", 1110));
+  });
+});
+
+describe("keepFreeSlots", () => {
+  it("giữ ô còn trống kèm giá, bỏ ô đã có người đặt trong lúc khách đăng nhập", () => {
+    const day = dungNgay(0, "PAST", 2);
+    day.courts[1]!.slots = day.courts[1]!.slots.map((slot) =>
+      slot.minute === 18 * 60 ? { ...slot, status: "TAKEN" } : slot,
+    );
+
+    const picked = keepFreeSlots(day, [
+      { courtId: "c1", minute: 18 * 60 },
+      { courtId: "c2", minute: 18 * 60 },
+    ]);
+
+    expect(picked).toEqual({
+      [slotKey("c1", 18 * 60)]: { courtId: "c1", minute: 18 * 60, price: 70_000 },
+    });
+  });
+
+  it("sân không thuộc cơ sở này hoặc giờ ngoài lịch thì bỏ — URL là do người ngoài viết", () => {
+    const day = dungNgay(0);
+    expect(keepFreeSlots(day, [{ courtId: "san-la", minute: 18 * 60 }])).toEqual({});
+    expect(keepFreeSlots(day, [{ courtId: "c1", minute: 3 * 60 }])).toEqual({});
   });
 });

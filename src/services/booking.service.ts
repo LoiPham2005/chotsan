@@ -1,5 +1,5 @@
 import { randomInt } from "node:crypto";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import {
   BookingNotFoundError,
@@ -30,7 +30,7 @@ import { type AvailabilityService, availabilityService } from "./availability.se
 const CODE_ALPHABET = "23456789ACDEFGHJKMNPQRTUVWXY";
 
 /** Số phút giữ chỗ mặc định khi sân không tự khai. */
-const DEFAULT_HOLD_MINUTES = 10;
+export const DEFAULT_HOLD_MINUTES = 10;
 
 function generateCode(): string {
   let code = "";
@@ -75,6 +75,15 @@ export type HoldInput = {
   now?: Date;
 };
 
+/** Một lượt trong lần đặt: MỘT sân + MỘT dãy giờ liền. */
+export type CheckoutRange = { courtId: string; startMinute: number; endMinute: number };
+
+export type HoldCheckoutInput = Omit<HoldInput, "courtId" | "startMinute" | "endMinute"> & {
+  ranges: readonly CheckoutRange[];
+};
+
+type Tx = Prisma.TransactionClient;
+
 export class BookingService {
   constructor(
     private readonly db: PrismaClient = prisma,
@@ -88,20 +97,64 @@ export class BookingService {
    * thanh toán rồi bỏ đi sẽ khoá khung giờ đẹp nhất vô thời hạn.
    */
   async hold(input: HoldInput) {
+    const { courtId, startMinute, endMinute, ...rest } = input;
+    const [booking] = await this.holdCheckout({
+      ...rest,
+      ranges: [{ courtId, startMinute, endMinute }],
+    });
+    return booking!;
+  }
+
+  /**
+   * Giữ chỗ cho MỘT LẦN ĐẶT gồm một hoặc nhiều lượt (nhiều sân, nhiều khung rời).
+   *
+   * ---
+   * TẤT CẢ HOẶC KHÔNG GÌ — TRONG MỘT TRANSACTION
+   *
+   * Nhóm 8 người chọn Sân 1 và Sân 3 cùng giờ. Giữ được Sân 1 mà mất Sân 3 thì
+   * Sân 1 một mình vô dụng với họ, nhưng vẫn khoá chỗ của người khác. Trước đây
+   * nơi gọi giữ từng lượt rồi tự huỷ các lượt đã giữ khi một lượt hỏng — để lại
+   * những dòng `CANCELLED` rác, và nếu tiến trình chết giữa chừng thì còn nguyên
+   * nửa lần đặt. Transaction làm việc đó đúng mà không cần dọn.
+   *
+   * ---
+   * CÁC LƯỢT MANG CHUNG `checkoutCode` = MÃ CỦA LƯỢT ĐẦU
+   *
+   * Để khách chuyển khoản MỘT lần cho cả nhóm và chủ sân duyệt MỘT lần. Đặt một
+   * lượt thì `checkoutCode` để `null` — không có nhóm nào để nối.
+   *
+   * ---
+   * THỬ LẠI CẢ TRANSACTION KHI TRÙNG MÃ
+   *
+   * Trùng mã (28^6 ≈ 481 triệu tổ hợp) hiếm nhưng tăng theo số lượt đã có.
+   * Không thử lại ngay trong transaction được: câu `INSERT` hỏng làm Postgres
+   * huỷ cả transaction. Nên cuộn lại toàn bộ rồi sinh bộ mã mới. Trùng KHUNG
+   * GIỜ thì không thử lại — người khác đã lấy mất, thử lại cũng vô ích.
+   */
+  async holdCheckout(input: HoldCheckoutInput) {
     const now = input.now ?? new Date();
 
-    const quote = await this.availability.quote({
+    if (input.ranges.length === 0) {
+      throw new SlotUnavailableError("Chọn ít nhất một khung giờ");
+    }
+
+    const quotes = await this.availability.quoteMany({
       venueId: input.venueId,
-      courtId: input.courtId,
       date: input.date,
-      startMinute: input.startMinute,
-      endMinute: input.endMinute,
+      ranges: input.ranges,
       now,
     });
 
-    if (!quote) {
+    const label = (index: number) => {
+      const range = input.ranges[index]!;
+      const court = quotes[index]?.courtName ?? "Sân";
+      return `${court} ${formatHhMm(range.startMinute)}–${formatHhMm(range.endMinute)}`;
+    };
+
+    const unavailable = quotes.findIndex((quote) => !quote.available);
+    if (unavailable !== -1) {
       throw new SlotUnavailableError(
-        `Khung ${formatHhMm(input.startMinute)}–${formatHhMm(input.endMinute)} không đặt được`,
+        `${label(unavailable)} không đặt được — đã có người đặt hoặc ngoài giờ mở cửa`,
       );
     }
 
@@ -111,47 +164,100 @@ export class BookingService {
     });
 
     const holdMinutes = venue?.holdMinutes ?? DEFAULT_HOLD_MINUTES;
+    const holdExpiresAt = new Date(now.getTime() + holdMinutes * 60_000);
 
-    const startAt = atMinuteVN(input.date, input.startMinute);
-    const endAt = atMinuteVN(input.date, input.endMinute);
-
-    /*
-     * Thử tối đa 3 lần vì HAI lý do khác nhau, và chỉ một trong hai đáng thử lại:
-     *   • Trùng mã đặt sân — hiếm (28^6 ≈ 481 triệu) nhưng có thể; sinh mã mới.
-     *   • Trùng khung giờ — người khác vừa lấy mất; thử lại cũng vô ích.
-     */
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        return await this.db.booking.create({
-          data: {
-            code: generateCode(),
-            venueId: input.venueId,
-            courtId: input.courtId,
-            userId: input.userId ?? null,
-            customerName: input.customerName.trim(),
-            customerPhone: input.customerPhone.trim(),
-            customerNote: input.customerNote ?? null,
-            startAt,
-            endAt,
-            slotCount: quote.slotCount,
-            status: "HOLDING",
-            source: input.source ?? "WEB",
-            subtotal: quote.total,
-            total: quote.total,
-            holdExpiresAt: new Date(now.getTime() + holdMinutes * 60_000),
-            createdBy: input.createdBy ?? null,
-          },
-        });
-      } catch (error) {
-        if (isSlotConflict(error)) throw new SlotTakenError();
+      const codes = input.ranges.map(() => generateCode());
+      const checkoutCode = input.ranges.length > 1 ? codes[0]! : null;
 
-        // Trùng mã: vòng lặp sinh mã khác. Lỗi khác thì ném lên nguyên vẹn.
-        if (!isCodeCollision(error)) throw error;
-        if (attempt === 2) throw error;
+      try {
+        return await this.db.$transaction(
+          async (tx) => {
+            const created = [];
+
+            for (const [index, range] of input.ranges.entries()) {
+              const startAt = atMinuteVN(input.date, range.startMinute);
+              const endAt = atMinuteVN(input.date, range.endMinute);
+
+              await this.releaseStaleHolds(tx, range.courtId, startAt, endAt, now);
+
+              try {
+                created.push(
+                  await tx.booking.create({
+                    data: {
+                      code: codes[index]!,
+                      checkoutCode,
+                      venueId: input.venueId,
+                      courtId: range.courtId,
+                      userId: input.userId ?? null,
+                      customerName: input.customerName.trim(),
+                      customerPhone: input.customerPhone.trim(),
+                      customerNote: input.customerNote ?? null,
+                      startAt,
+                      endAt,
+                      slotCount: quotes[index]!.slotCount,
+                      status: "HOLDING",
+                      source: input.source ?? "WEB",
+                      subtotal: quotes[index]!.total,
+                      total: quotes[index]!.total,
+                      holdExpiresAt,
+                      createdBy: input.createdBy ?? null,
+                    },
+                  }),
+                );
+              } catch (error) {
+                if (isSlotConflict(error)) {
+                  throw new SlotTakenError(
+                    `${label(index)} vừa có người đặt mất. Chọn giờ khác giúp bạn nhé.`,
+                  );
+                }
+                throw error;
+              }
+            }
+
+            return created;
+          },
+          // Mặc định 5 giây của Prisma là sát với sáu lượt × hai câu lệnh qua
+          // mạng tới Neon. Hết giờ giữa chừng thì cả lần đặt hỏng vô cớ.
+          { maxWait: 10_000, timeout: 20_000 },
+        );
+      } catch (error) {
+        if (isCodeCollision(error) && attempt < 2) continue;
+        throw error;
       }
     }
 
     throw new SlotTakenError();
+  }
+
+  /**
+   * Nhả những chỗ giữ ĐÃ QUÁ HẠN đang gối lên khung sắp giữ.
+   *
+   * Lịch (`AvailabilityService`) coi chỗ giữ quá hạn là trống, nhưng ràng buộc
+   * `EXCLUDE` ở database vẫn tính nó — Postgres không biết "bây giờ" là mấy giờ
+   * trong một ràng buộc. Không nhả trước thì khách thấy ô trống, bấm đặt, và
+   * nhận "vừa có người đặt mất" từ một người đã bỏ đi từ lâu.
+   *
+   * Chỗ giữ có `holdExpiresAt = null` (khách đã báo chuyển khoản) KHÔNG bị đụng:
+   * `lte` không bao giờ khớp `null`.
+   */
+  private async releaseStaleHolds(
+    tx: Tx,
+    courtId: string,
+    startAt: Date,
+    endAt: Date,
+    now: Date,
+  ): Promise<void> {
+    await tx.booking.updateMany({
+      where: {
+        courtId,
+        status: "HOLDING",
+        holdExpiresAt: { lte: now },
+        startAt: { lt: endAt },
+        endAt: { gt: startAt },
+      },
+      data: { status: "EXPIRED", holdExpiresAt: null },
+    });
   }
 
   /** Nội dung chuyển khoản khách phải ghi — khớp `transferNoteForBooking`. */
@@ -174,8 +280,8 @@ export class BookingService {
     });
   }
 
-  async checkIn(bookingId: string, options: { now?: Date } = {}) {
-    const booking = await this.requireBooking(bookingId);
+  async checkIn(bookingId: string, options: { now?: Date; venueId?: string } = {}) {
+    const booking = await this.requireBooking(bookingId, options.venueId);
 
     if (booking.status === "CHECKED_IN") return booking;
     if (booking.status !== "CONFIRMED") {
@@ -206,10 +312,12 @@ export class BookingService {
       cancelledBy?: string | null;
       /** Đè chính sách của sân. Chỉ dùng khi nền tảng chủ động huỷ hộ. */
       freeCancelHours?: number;
+      /** Nhân viên sân huỷ hộ: lượt đặt PHẢI thuộc sân này. Xem `requireBooking`. */
+      venueId?: string;
       now?: Date;
     } = {},
   ) {
-    const booking = await this.requireBooking(bookingId);
+    const booking = await this.requireBooking(bookingId, options.venueId);
 
     if (["CANCELLED", "EXPIRED"].includes(booking.status)) {
       throw new BookingStateError(this.describeState(booking.status));
@@ -305,6 +413,8 @@ export class BookingService {
           },
         });
 
+        await this.releaseStaleHolds(tx, params.courtId, startAt, endAt, params.now ?? new Date());
+
         return tx.booking.update({
           where: { id: params.bookingId },
           data: {
@@ -332,9 +442,23 @@ export class BookingService {
    * `updateMany` một câu chứ không đọc rồi cập nhật từng dòng: hai bản worker
    * chạy song song thì câu này vẫn đúng, còn vòng lặp đọc-rồi-ghi thì không.
    */
-  async expireHolds(options: { now?: Date } = {}): Promise<number> {
+  async expireHolds(
+    options: {
+      now?: Date;
+      /**
+       * Chỉ nhả trong MỘT sân. Cron không truyền. Dành cho script kiểm tra chạy
+       * trên database dùng chung: gọi cron thật với "một giờ sau" là nhả luôn
+       * chỗ đang giữ của người đang thử app trên cùng database.
+       */
+      venueId?: string;
+    } = {},
+  ): Promise<number> {
     const result = await this.db.booking.updateMany({
-      where: { status: "HOLDING", holdExpiresAt: { lte: options.now ?? new Date() } },
+      where: {
+        status: "HOLDING",
+        holdExpiresAt: { lte: options.now ?? new Date() },
+        ...(options.venueId ? { venueId: options.venueId } : {}),
+      },
       data: { status: "EXPIRED", holdExpiresAt: null },
     });
 
@@ -398,6 +522,105 @@ export class BookingService {
   }
 
   /**
+   * Một LẦN ĐẶT tra từ mã của bất kỳ lượt nào trong đó — nguồn cho màn thanh toán.
+   *
+   * Đặt một lượt: lần đặt chỉ có lượt đó. Đặt nhiều lượt: mọi lượt mang chung
+   * `checkoutCode`, và mã của lần đặt là `checkoutCode` — mã khách thấy trên màn
+   * thanh toán và ghi vào nội dung chuyển khoản.
+   *
+   * Hạn giữ chỗ và "đã quá hạn chưa" tính Ở ĐÂY chứ không ở trang: trang là
+   * Server Component, và đọc đồng hồ khi dựng giao diện là thứ lint của React
+   * chặn (kết quả dựng phải thuần).
+   */
+  async findCheckout(code: string, options: { now?: Date } = {}) {
+    const now = options.now ?? new Date();
+
+    const anchor = await this.db.booking.findUnique({
+      where: { code: code.trim().toUpperCase() },
+      select: { code: true, checkoutCode: true },
+    });
+
+    if (!anchor) return null;
+
+    const rows = await this.db.booking.findMany({
+      where: anchor.checkoutCode ? { checkoutCode: anchor.checkoutCode } : { code: anchor.code },
+      orderBy: [{ startAt: "asc" }, { court: { sortOrder: "asc" } }, { code: "asc" }],
+      select: {
+        id: true,
+        code: true,
+        status: true,
+        courtId: true,
+        startAt: true,
+        endAt: true,
+        slotCount: true,
+        total: true,
+        holdExpiresAt: true,
+        customerName: true,
+        customerPhone: true,
+        court: { select: { name: true } },
+        venue: {
+          select: {
+            id: true,
+            slug: true,
+            name: true,
+            address: true,
+            ward: true,
+            province: true,
+            phone: true,
+          },
+        },
+        payments: {
+          orderBy: { createdAt: "desc" },
+          select: { id: true, status: true, amount: true, rejectReason: true },
+        },
+      },
+    });
+
+    const first = rows[0];
+    if (!first) return null;
+
+    const bookings = rows.map((row) => {
+      const startMinute = minuteOfDayInVN(row.startAt);
+      return {
+        ...row,
+        startMinute,
+        endMinute: startMinute + (row.endAt.getTime() - row.startAt.getTime()) / 60_000,
+      };
+    });
+
+    const holding = bookings.filter((booking) => booking.status === "HOLDING");
+
+    // Hạn của cả lần đặt là hạn SỚM NHẤT. Có lượt không mang hạn (`null`) nghĩa
+    // là khách đã báo chuyển khoản — cả lần đặt đang chờ chủ sân, không hết hạn.
+    const expiries = holding.map((booking) => booking.holdExpiresAt);
+    const holdExpiresAt =
+      expiries.length === 0 || expiries.some((expiry) => expiry === null)
+        ? null
+        : new Date(Math.min(...expiries.map((expiry) => expiry!.getTime())));
+
+    // Lý do chủ sân từ chối lần khai gần nhất — khách phải đọc được để sửa.
+    const rejectReason =
+      holding
+        .flatMap((booking) => booking.payments)
+        .find((payment) => payment.status === "FAILED" && payment.rejectReason)?.rejectReason ??
+      null;
+
+    return {
+      code: anchor.checkoutCode ?? anchor.code,
+      venue: first.venue,
+      customerName: first.customerName,
+      customerPhone: first.customerPhone,
+      bookings,
+      holding,
+      /** Tổng tiền của những lượt CÒN chờ thanh toán — đúng số khách phải chuyển. */
+      holdingTotal: holding.reduce((sum, booking) => sum + booking.total, 0),
+      holdExpiresAt,
+      holdExpired: holdExpiresAt !== null && holdExpiresAt <= now,
+      rejectReason,
+    };
+  }
+
+  /**
    * Lượt đặt của MỘT NGƯỜI — nguồn cho màn "Lượt đặt của tôi".
    *
    * Chia hai nhóm ngay ở tầng này chứ không để giao diện tự lọc: "sắp tới" và
@@ -414,6 +637,7 @@ export class BookingService {
       startAt: true,
       endAt: true,
       total: true,
+      checkoutCode: true,
       court: { select: { name: true } },
       venue: { select: { slug: true, name: true, address: true, ward: true, province: true } },
       review: { select: { id: true } },
@@ -485,9 +709,19 @@ export class BookingService {
     });
   }
 
-  private async requireBooking(bookingId: string) {
+  /**
+   * `venueId` truyền vào = thao tác của NHÂN VIÊN SÂN, lượt đặt phải thuộc đúng sân.
+   *
+   * `bookingId` đến từ form, người gọi tự đặt được. Quyền thì được kiểm trên
+   * `venueId` của URL (`defineVenueAction`) — nhưng trước đây KHÔNG ai kiểm lượt
+   * đặt có thuộc sân đó không: nhân viên sân A gửi id lượt đặt của sân B là huỷ
+   * được lượt của sân B. Lệch sân thì báo KHÔNG TÌM THẤY, không báo "không có
+   * quyền" — không xác nhận cho người dò rằng id đó tồn tại.
+   */
+  private async requireBooking(bookingId: string, venueId?: string) {
     const booking = await this.db.booking.findUnique({ where: { id: bookingId } });
     if (!booking) throw new BookingNotFoundError();
+    if (venueId !== undefined && booking.venueId !== venueId) throw new BookingNotFoundError();
     return booking;
   }
 

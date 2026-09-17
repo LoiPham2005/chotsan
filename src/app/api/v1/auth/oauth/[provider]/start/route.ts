@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { redirectRelative } from "@/lib/api/redirect";
 import { buildAuthorizationUrl } from "@/lib/oauth/client";
 import { PROVIDER_CONFIG, isProviderConfigured } from "@/lib/oauth/config";
 import { setOAuthFlowCookie } from "@/lib/oauth/flow-cookie";
@@ -19,10 +20,13 @@ export async function GET(request: Request, { params }: RouteContext) {
   }
 
   if (!isProviderConfigured(provider)) {
-    return NextResponse.redirect(new URL("/login?oauthError=not_configured", request.url));
+    return redirectRelative("/login?oauthError=not_configured", 302);
   }
 
-  const next = safeRedirectPath(new URL(request.url).searchParams.get("next"), "/users");
+  // Rỗng = "chưa biết về đâu": callback sẽ hỏi `landingPathFor()` sau khi biết
+  // người đăng nhập là ai. Bộ khung để mặc định `/users` — màn quản trị cần
+  // quyền `user:read`, nên đăng nhập bằng Google xong là rơi vào 404.
+  const next = safeRedirectPath(new URL(request.url).searchParams.get("next"), "");
 
   const state = generateOAuthState();
   const codeVerifier = PROVIDER_CONFIG[provider].usePkce ? generateCodeVerifier() : undefined;

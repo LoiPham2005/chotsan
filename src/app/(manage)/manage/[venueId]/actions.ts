@@ -18,15 +18,27 @@ export type ManageState = { error?: string; ok?: string };
 
 const idSchema = z.string().min(1);
 
+/**
+ * Các giao dịch của MỘT lần chuyển khoản — form gửi nhiều ô `paymentId` cùng tên.
+ *
+ * Service tự lọc theo `ctx.venueId`: id của sân khác gửi lên thì cả lô bị từ
+ * chối như không tồn tại. Xem `PaymentService.requireVenuePayments`.
+ */
+const paymentIdsSchema = z.array(idSchema).min(1).max(50);
+
 /** Duyệt một khoản chuyển khoản tay. Đây là chỗ tiền được công nhận. */
 export const approvePaymentAction = defineVenueAction(
   "payment:confirm",
   async (ctx, _prev: ManageState, formData: FormData): Promise<ManageState> => {
-    const parsed = idSchema.safeParse(formData.get("paymentId"));
+    const parsed = paymentIdsSchema.safeParse(formData.getAll("paymentId"));
     if (!parsed.success) return { error: "Thiếu mã giao dịch" };
 
     try {
-      await paymentService.approveManual({ paymentId: parsed.data, reviewerId: ctx.actorId });
+      await paymentService.approveManual({
+        paymentIds: parsed.data,
+        venueId: ctx.venueId,
+        reviewerId: ctx.actorId,
+      });
     } catch (error) {
       if (error instanceof DomainError) return { error: error.message };
       throw error;
@@ -49,10 +61,10 @@ export const rejectPaymentAction = defineVenueAction(
   async (ctx, _prev: ManageState, formData: FormData): Promise<ManageState> => {
     const parsed = z
       .object({
-        paymentId: idSchema,
+        paymentIds: paymentIdsSchema,
         reason: z.string().trim().min(4, "Ghi rõ lý do để khách biết phải làm gì").max(300),
       })
-      .safeParse(Object.fromEntries(formData));
+      .safeParse({ paymentIds: formData.getAll("paymentId"), reason: formData.get("reason") });
 
     if (!parsed.success) {
       return { error: z.flattenError(parsed.error).fieldErrors.reason?.[0] ?? "Thiếu lý do" };
@@ -60,7 +72,8 @@ export const rejectPaymentAction = defineVenueAction(
 
     try {
       await paymentService.rejectManual({
-        paymentId: parsed.data.paymentId,
+        paymentIds: parsed.data.paymentIds,
+        venueId: ctx.venueId,
         reviewerId: ctx.actorId,
         reason: parsed.data.reason,
       });
@@ -82,7 +95,8 @@ export const checkInAction = defineVenueAction(
     if (!parsed.success) return { error: "Thiếu mã lượt đặt" };
 
     try {
-      await bookingService.checkIn(parsed.data);
+      // `venueId`: lượt đặt phải thuộc đúng sân mà người bấm có quyền.
+      await bookingService.checkIn(parsed.data, { venueId: ctx.venueId });
     } catch (error) {
       if (error instanceof DomainError) return { error: error.message };
       throw error;
@@ -113,6 +127,7 @@ export const cancelBookingAction = defineVenueAction(
       const result = await bookingService.cancel(parsed.data.bookingId, {
         reason: parsed.data.reason || "Sân huỷ",
         cancelledBy: ctx.actorId,
+        venueId: ctx.venueId,
       });
 
       revalidatePath(`/manage/${ctx.venueId}`);

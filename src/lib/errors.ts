@@ -416,8 +416,9 @@ export class PhoneOtpThrottledError extends DomainError {
  */
 export class SlotTakenError extends DomainError {
   readonly code = "CONFLICT" as const;
-  constructor() {
-    super("Khung giờ này vừa có người đặt mất. Chọn giờ khác giúp bạn nhé.");
+  /** Đặt nhiều lượt một lần thì câu báo phải chỉ ĐÚNG lượt nào bị mất. */
+  constructor(message = "Khung giờ này vừa có người đặt mất. Chọn giờ khác giúp bạn nhé.") {
+    super(message);
   }
 }
 

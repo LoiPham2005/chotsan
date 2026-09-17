@@ -5,6 +5,7 @@ import { z } from "zod";
 import { defineAuthedAction } from "@/lib/define-action";
 import { DomainError } from "@/lib/errors";
 import { fromDateKey } from "@/lib/date";
+import { isSlotAligned, MINUTES_PER_DAY, slotsToRanges } from "@/lib/slots";
 import { bookingService } from "@/services/booking.service";
 import { userService } from "@/services/user.service";
 
@@ -33,20 +34,39 @@ import { userService } from "@/services/user.service";
  * kiểm lại lịch trống chứ không tin dữ liệu gửi lên. Giá cũng do service tự
  * tính — form KHÔNG gửi số tiền.
  */
+/** Tối đa bao nhiêu ô một lần — chặn một request tự chế giữ sạch cả ngày của sân. */
+const MAX_SLOTS = 48;
+
+/** Tối đa bao nhiêu lượt đặt một lần. */
+const MAX_RANGES = 6;
+
+const slotsSchema = z
+  .array(
+    z.object({
+      courtId: z.string().min(1),
+      minute: z
+        .number()
+        .int()
+        .min(0)
+        .max(MINUTES_PER_DAY - 1)
+        .refine(isSlotAligned, "Khung giờ phải tròn 30 phút"),
+    }),
+  )
+  .min(1, "Chọn ít nhất một khung giờ")
+  .max(MAX_SLOTS, `Tối đa ${MAX_SLOTS} khung một lần`);
+
 const schema = z.object({
   venueId: z.string().min(1),
-  courtId: z.string().min(1),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày không hợp lệ"),
-  startMinute: z.coerce
-    .number()
-    .int()
-    .min(0)
-    .max(24 * 60),
-  endMinute: z.coerce
-    .number()
-    .int()
-    .min(0)
-    .max(24 * 60),
+  /** JSON `[{ courtId, minute }]` — các ô khách đã bấm chọn trên lưới. */
+  slots: z.string().transform((raw, ctx) => {
+    try {
+      return slotsSchema.parse(JSON.parse(raw));
+    } catch {
+      ctx.addIssue({ code: "custom", message: "Danh sách khung giờ không hợp lệ" });
+      return z.NEVER;
+    }
+  }),
   /**
    * Số điện thoại — chỉ hỏi khi hồ sơ chưa có.
    *
@@ -80,7 +100,7 @@ export const holdBookingAction = defineAuthedAction(
        * Đã xảy ra thật: form gửi `days` trong khi schema đòi `date`, và chỉ có
        * bộ e2e phát hiện ra.
        */
-      const hidden = ["venueId", "courtId", "date", "startMinute", "endMinute"] as const;
+      const hidden = ["venueId", "date", "slots"] as const;
       if (hidden.some((key) => fields[key]?.length)) {
         return { error: "Chọn lại khung giờ giúp bạn nhé — dữ liệu gửi lên không hợp lệ." };
       }
@@ -89,8 +109,14 @@ export const holdBookingAction = defineAuthedAction(
     }
 
     const input = parsed.data;
-    if (input.endMinute <= input.startMinute) {
-      return { error: "Khung giờ không hợp lệ" };
+
+    // Gom các ô thành từng lượt đặt: MỘT sân + MỘT dãy giờ liền. Chọn 18:00 +
+    // 18:30 sân 1 và 20:00 sân 3 là hai lượt đặt riêng.
+    const ranges = slotsToRanges(input.slots);
+    if (ranges.length > MAX_RANGES) {
+      return {
+        error: `Tối đa ${MAX_RANGES} lượt đặt một lần. Bớt vài khung rời nhau giúp bạn nhé.`,
+      };
     }
 
     const nguoiDat = await userService.findById(ctx.actorId);
@@ -102,15 +128,14 @@ export const holdBookingAction = defineAuthedAction(
       return { error: "Cho biết số điện thoại để sân gọi được khi có việc" };
     }
 
-    let code: string;
-
+    let bookings;
     try {
-      const booking = await bookingService.hold({
+      // MỘT transaction cho cả lần đặt: giữ được hết hoặc không giữ gì — xem
+      // `BookingService.holdCheckout`. Câu báo lỗi đã ghi rõ sân + giờ nào hỏng.
+      bookings = await bookingService.holdCheckout({
         venueId: input.venueId,
-        courtId: input.courtId,
         date: fromDateKey(input.date),
-        startMinute: input.startMinute,
-        endMinute: input.endMinute,
+        ranges,
         // Vẫn ghi tên + số vào lượt đặt: nhân viên trực sân đọc DÒNG LỊCH, không
         // đi tra hồ sơ từng người. Và hồ sơ đổi tên sau này thì lượt đặt cũ vẫn
         // giữ đúng tên lúc đặt.
@@ -120,18 +145,23 @@ export const holdBookingAction = defineAuthedAction(
         userId: ctx.actorId,
         source: "WEB",
       });
-
-      code = booking.code;
     } catch (error) {
-      // Lỗi nghiệp vụ đã có sẵn câu tiếng Việt viết cho người dùng cuối
-      // ("Khung giờ này vừa có người đặt mất…"). Lỗi khác thì KHÔNG lộ ra —
-      // thông điệp của Prisma có tên bảng, tên cột và cả câu truy vấn.
       if (error instanceof DomainError) return { error: error.message };
+      // Lỗi khác thì KHÔNG lộ ra — thông điệp của Prisma có tên bảng, tên cột
+      // và cả câu truy vấn.
       throw error;
     }
 
-    // `redirect` ném một ngoại lệ đặc biệt của Next, nên phải nằm NGOÀI khối
-    // try — bắt nhầm nó là trang đứng im mà không ai hiểu vì sao.
-    redirect(`/bookings/${code}`);
+    /*
+     * LUÔN tới màn thanh toán, kể cả khi đặt nhiều lượt.
+     *
+     * Trước đây nhiều lượt thì đá sang "Lượt đặt của tôi", nơi mỗi lượt có nút
+     * "Thanh toán" riêng: khách phải chuyển khoản N lần, và người vừa bấm "Đặt
+     * sân và thanh toán" lại không thấy chỗ nào để thanh toán. Giờ các lượt mang
+     * chung `checkoutCode` và màn thanh toán gộp thành MỘT lần chuyển.
+     *
+     * `redirect` ném một ngoại lệ đặc biệt của Next, nên phải nằm NGOÀI khối try.
+     */
+    redirect(`/bookings/${bookings[0]!.code}`);
   },
 );

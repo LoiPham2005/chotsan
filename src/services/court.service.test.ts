@@ -214,7 +214,53 @@ describe("close — đóng sân bảo trì", () => {
   });
 });
 
+describe("update — sửa sân con", () => {
+  it("đúng cơ sở thì sửa bình thường", async () => {
+    const { db, mock } = createDb();
+    await new CourtService(db).update("c1", { isActive: false }, { venueId: "v1" });
+
+    expect(mock.court.update).toHaveBeenCalledWith({
+      where: { id: "c1" },
+      data: { isActive: false },
+    });
+  });
+
+  /**
+   * Lỗ hổng thật trước đây: quyền kiểm trên `venueId` của URL, `courtId` lấy từ
+   * form. Nhân viên cơ sở A gửi id sân con của cơ sở B là tắt được sân của B.
+   */
+  it("sân con của CƠ SỞ KHÁC thì coi như không tồn tại", async () => {
+    const { db, mock } = createDb();
+
+    await expect(
+      new CourtService(db).update("c1", { isActive: false }, { venueId: "co-so-khac" }),
+    ).rejects.toBeInstanceOf(CourtNotFoundError);
+    expect(mock.court.update).not.toHaveBeenCalled();
+  });
+});
+
 describe("setPriceRules — bảng giá", () => {
+  it("TỪ CHỐI luật gắn vào sân con của cơ sở khác", async () => {
+    // Chỉ `c1` thuộc cơ sở này; `c-la` là id tự gõ vào form.
+    const { db, mock } = createDb({ courts: [{ id: "c1" }] });
+
+    await expect(
+      new CourtService(db).setPriceRules("v1", [
+        { ...GIA, courtId: "c1" },
+        { ...GIA, courtId: "c-la" },
+      ]),
+    ).rejects.toBeInstanceOf(VenueConfigError);
+    expect(mock.priceRule.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("luật chung cả cơ sở (không gắn sân con) thì không cần tra sân", async () => {
+    const { db, mock } = createDb();
+    await new CourtService(db).setPriceRules("v1", [GIA]);
+
+    expect(mock.court.findMany).not.toHaveBeenCalled();
+    expect(mock.priceRule.createMany).toHaveBeenCalledTimes(1);
+  });
+
   it("thay CẢ BỘ, không sửa lẻ từng luật", async () => {
     // Giá chồng lớp lên nhau theo priority; sửa lẻ để lại một bảng giá không
     // ai hiểu nổi, kể cả người vừa sửa.

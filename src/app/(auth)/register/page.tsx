@@ -5,7 +5,15 @@ import { RegisterForm } from "./register-form";
 
 export const metadata: Metadata = { title: "Đăng ký" };
 
-export default function RegisterPage() {
+export default async function RegisterPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string }>;
+}) {
+  // `next` phải đi qua ĐỦ mọi lối ra của trang: form, nút mạng xã hội, và cả
+  // link "Đăng nhập" — người bấm nhầm sang đây rồi quay lại vẫn về đúng chỗ.
+  const { next } = await searchParams;
+
   return (
     <main className="container" style={{ maxWidth: 440 }}>
       <div className="card">
@@ -14,12 +22,13 @@ export default function RegisterPage() {
           Tài khoản mới luôn được tạo với quyền USER.
         </p>
 
-        <OAuthButtons />
+        <OAuthButtons next={next} />
 
-        <RegisterForm />
+        <RegisterForm nextPath={next} />
 
         <p style={{ marginTop: 20, fontSize: "0.9rem", color: "var(--text-muted)" }}>
-          Đã có tài khoản? <Link href="/login">Đăng nhập</Link>
+          Đã có tài khoản?{" "}
+          <Link href={next ? `/login?next=${encodeURIComponent(next)}` : "/login"}>Đăng nhập</Link>
         </p>
       </div>
     </main>

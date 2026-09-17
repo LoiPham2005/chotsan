@@ -13,6 +13,7 @@ import {
 import { isUniqueViolation } from "@/lib/prisma-errors";
 import { prisma } from "@/lib/prisma";
 import { BANK_BINS, buildVietQrPayload, transferNoteForBooking } from "@/lib/vietqr";
+import { DEFAULT_HOLD_MINUTES } from "./booking.service";
 
 /**
  * Thanh toán — cổng tự động (VNPay/MoMo/ZaloPay/SePay), chuyển khoản tay có
@@ -87,6 +88,18 @@ export class PaymentService {
    *
    * Gọi lại khi đã có giao dịch sống thì TRẢ VỀ giao dịch đó, không ném lỗi và
    * không tạo cái thứ hai. Khách bấm hai lần không phải là lỗi của khách.
+   *
+   * ---
+   * ĐỌC TRƯỚC, TẠO SAU — KHÔNG "CỨ TẠO RỒI BẮT LỖI TRÙNG"
+   *
+   * Màn thanh toán gọi hàm này MỖI LẦN tải trang. Trước đây nó luôn `create`
+   * trước rồi bắt lỗi trùng: đúng về dữ liệu, nhưng từ lần tải thứ hai trở đi
+   * MỖI lần mở trang là một câu `INSERT` hỏng, và Prisma in nguyên một khối
+   * `prisma:error ... Unique constraint failed on the fields: (booking_id)` ra
+   * log dù lỗi đã được xử lý — trông y như sự cố thật.
+   *
+   * Khối bắt lỗi trùng VẪN GIỮ: hai lần tải trang cùng lúc đều đọc thấy "chưa
+   * có", và chỉ chỉ số trong database quyết được ai tạo.
    */
   async start(params: {
     bookingId: string;
@@ -100,6 +113,7 @@ export class PaymentService {
       select: {
         id: true,
         code: true,
+        checkoutCode: true,
         total: true,
         status: true,
         holdExpiresAt: true,
@@ -114,6 +128,17 @@ export class PaymentService {
 
     const now = params.now ?? new Date();
 
+    // Chỗ giữ đã quá hạn thì lịch coi là trống, người khác đặt được bất cứ lúc
+    // nào. Mở giao dịch cho nó là mời khách trả tiền cho một chỗ có thể mất.
+    if (booking.status === "HOLDING" && booking.holdExpiresAt && booking.holdExpiresAt <= now) {
+      throw new BookingStateError("Đã hết thời gian giữ chỗ. Đặt lại giúp bạn nhé.");
+    }
+
+    const live = await this.db.payment.findFirst({
+      where: { bookingId: booking.id, status: { in: LIVE_STATUSES } },
+    });
+    if (live) return live;
+
     try {
       return await this.db.payment.create({
         data: {
@@ -123,8 +148,12 @@ export class PaymentService {
           amount: booking.total,
           merchantRef: buildMerchantRef(booking.code),
           receivedBy: params.receivedBy ?? "PLATFORM",
+          // Đặt nhiều lượt một lần thì MỌI giao dịch mang chung nội dung của lần
+          // đặt: khách chuyển một lần, chủ sân tìm một dòng trong sao kê.
           transferNote:
-            params.provider === "BANK_TRANSFER" ? transferNoteForBooking(booking.code) : null,
+            params.provider === "BANK_TRANSFER"
+              ? transferNoteForBooking(booking.checkoutCode ?? booking.code)
+              : null,
           // Giao dịch không sống lâu hơn chỗ nó đang giữ.
           expiresAt: booking.holdExpiresAt ?? new Date(now.getTime() + 15 * 60_000),
         },
@@ -144,18 +173,25 @@ export class PaymentService {
   /**
    * Thông tin để khách chuyển khoản tay: số tài khoản của sân + mã QR VietQR.
    *
+   * Nhận NHIỀU giao dịch — các lượt của một lần đặt — và gộp thành MỘT lần
+   * chuyển: số tiền là tổng, nội dung là nội dung chung của lần đặt.
+   *
    * Chuỗi QR dựng tại máy chủ của ta, trình duyệt tự vẽ — không đẩy số tài
    * khoản của chủ sân qua dịch vụ sinh ảnh QR nào. Xem `src/lib/vietqr.ts`.
    */
-  async transferInstruction(paymentId: string): Promise<TransferInstruction> {
-    const payment = await this.db.payment.findUnique({
-      where: { id: paymentId },
+  async transferInstruction(paymentIds: readonly string[]): Promise<TransferInstruction> {
+    const ids = [...new Set(paymentIds)];
+
+    const payments = await this.db.payment.findMany({
+      where: { id: { in: ids } },
       select: {
         amount: true,
         transferNote: true,
         booking: {
           select: {
             code: true,
+            checkoutCode: true,
+            venueId: true,
             venue: {
               select: { bankName: true, bankAccountNumber: true, bankAccountName: true },
             },
@@ -164,88 +200,149 @@ export class PaymentService {
       },
     });
 
-    if (!payment) throw new PaymentNotFoundError();
+    const first = payments[0];
+    if (!first || payments.length !== ids.length) throw new PaymentNotFoundError();
 
-    const venue = payment.booking.venue;
+    // Gộp giao dịch của hai sân khác nhau vào một mã QR là chuyển tiền của sân
+    // này vào tài khoản sân kia. Không bao giờ được xảy ra, kể cả do nơi gọi sai.
+    if (payments.some((payment) => payment.booking.venueId !== first.booking.venueId)) {
+      throw new PaymentStateError("Không gộp được giao dịch của nhiều sân khác nhau");
+    }
+
+    const venue = first.booking.venue;
     if (!venue.bankName || !venue.bankAccountNumber || !venue.bankAccountName) {
       throw new VenueBankAccountMissingError();
     }
 
-    const transferNote = payment.transferNote ?? transferNoteForBooking(payment.booking.code);
+    const transferNote =
+      first.transferNote ??
+      transferNoteForBooking(first.booking.checkoutCode ?? first.booking.code);
+    const amount = payments.reduce((sum, payment) => sum + payment.amount, 0);
 
     return {
       bankName: venue.bankName,
       accountNumber: venue.bankAccountNumber,
       accountName: venue.bankAccountName,
       transferNote,
-      amount: payment.amount,
+      amount,
       // Ngân hàng ngoài danh sách BIN thì vẫn chuyển khoản tay được, chỉ là
       // không có QR. Thà không có QR còn hơn có một QR sai.
       qrPayload: buildVietQrPayload({
         bankBin: BANK_BINS[venue.bankName] ?? "",
         accountNumber: venue.bankAccountNumber,
-        amount: payment.amount,
+        amount,
         transferNote,
       }),
     };
   }
 
   /**
-   * Khách bấm "Tôi đã chuyển khoản".
+   * Khách bấm "Tôi đã chuyển khoản" — cho MỌI giao dịch của một lần đặt.
    *
    * KHÔNG xác nhận lượt đặt — chỉ đẩy giao dịch vào hàng chờ duyệt của chủ sân.
    * Tin lời khách là ai cũng đặt được sân miễn phí.
+   *
+   * ---
+   * TỪ LÚC NÀY CHỖ GIỮ KHÔNG ĐƯỢC HẾT HẠN
+   *
+   * Trước đây hàm này chỉ xoá hạn của GIAO DỊCH, còn hạn của LƯỢT ĐẶT vẫn chạy.
+   * Chủ sân đối chiếu chậm hơn 10 phút là cron nhả chỗ của một khách ĐÃ TRẢ
+   * TIỀN; chủ sân bấm "đã nhận tiền" sau đó thì tiền thành công mà lượt đặt vẫn
+   * nằm `EXPIRED`, và khung giờ có thể đã bán cho người khác.
+   *
+   * Nên xoá `holdExpiresAt` của lượt đặt trong CÙNG transaction. Lượt đặt không
+   * còn `HOLDING` (đã bị nhả cho người khác) thì từ chối cả lần khai.
    */
   async declareTransfer(params: {
-    paymentId: string;
+    paymentIds: readonly string[];
     note?: string | null;
     proofImageUrl?: string | null;
     now?: Date;
   }) {
-    const payment = await this.requirePayment(params.paymentId);
+    const ids = [...new Set(params.paymentIds)];
 
-    if (payment.status === "AWAITING_CONFIRMATION") return payment;
-    if (payment.status !== "PENDING") {
-      throw new PaymentStateError(this.describeState(payment.status));
+    const payments = await this.db.payment.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, status: true, bookingId: true },
+    });
+
+    if (payments.length === 0 || payments.length !== ids.length) {
+      throw new PaymentNotFoundError();
     }
 
-    return this.db.payment.update({
-      where: { id: params.paymentId },
-      data: {
-        status: "AWAITING_CONFIRMATION",
-        declaredAt: params.now ?? new Date(),
-        declaredNote: params.note ?? null,
-        proofImageUrl: params.proofImageUrl ?? null,
-        // Chờ người duyệt thì không được tự hết hạn giữa chừng.
-        expiresAt: null,
-      },
+    const invalid = payments.find((payment) => !LIVE_STATUSES.includes(payment.status));
+    if (invalid) throw new PaymentStateError(this.describeState(invalid.status));
+
+    // Khai hai lần không hỏng: đã chờ duyệt hết rồi thì không còn gì để làm.
+    const pending = payments.filter((payment) => payment.status === "PENDING");
+    if (pending.length === 0) return { count: 0 };
+
+    const now = params.now ?? new Date();
+    const bookingIds = [...new Set(pending.map((payment) => payment.bookingId))];
+
+    return this.db.$transaction(async (tx) => {
+      const held = await tx.booking.updateMany({
+        where: { id: { in: bookingIds }, status: "HOLDING" },
+        data: { holdExpiresAt: null },
+      });
+
+      if (held.count !== bookingIds.length) {
+        throw new BookingStateError(
+          "Chỗ giữ đã hết hạn và được nhả cho người khác nên không nhận chuyển khoản cho lần đặt này nữa. Nếu bạn đã chuyển, gọi sân để được hoàn tiền.",
+        );
+      }
+
+      return tx.payment.updateMany({
+        where: { id: { in: pending.map((payment) => payment.id) }, status: "PENDING" },
+        data: {
+          status: "AWAITING_CONFIRMATION",
+          declaredAt: now,
+          declaredNote: params.note ?? null,
+          proofImageUrl: params.proofImageUrl ?? null,
+          // Chờ người duyệt thì không được tự hết hạn giữa chừng.
+          expiresAt: null,
+        },
+      });
     });
   }
 
   /**
-   * Chủ sân xác nhận đã nhận được tiền → xác nhận luôn lượt đặt.
+   * Chủ sân xác nhận đã nhận được tiền → xác nhận luôn các lượt đặt.
    *
-   * Hai việc trong MỘT transaction: tiền đã nhận mà lượt đặt vẫn treo "chờ
-   * thanh toán" thì cron sẽ nhả chỗ của một khách đã trả tiền.
+   * Nhận NHIỀU giao dịch vì một lần chuyển khoản có thể trả cho nhiều lượt. Tất
+   * cả trong MỘT transaction: tiền đã nhận mà một lượt vẫn treo "chờ thanh
+   * toán" thì khách đến sân chỉ được chơi một nửa số giờ đã trả.
+   *
+   * `venueId` là của sân người duyệt CÓ QUYỀN. Giao dịch không thuộc sân đó thì
+   * coi như không tồn tại — xem chú thích ở `requireBooking` của BookingService.
    *
    * Chỉ áp dụng cho tiền mặt và chuyển khoản tay — xem `ManualApprovalNotAllowedError`.
    */
-  async approveManual(params: { paymentId: string; reviewerId: string; now?: Date }) {
-    const payment = await this.requirePayment(params.paymentId);
+  async approveManual(params: {
+    paymentIds: readonly string[];
+    venueId: string;
+    reviewerId: string;
+    now?: Date;
+  }) {
+    const payments = await this.requireVenuePayments(params.paymentIds, params.venueId);
 
-    if (AUTO_PROVIDERS.includes(payment.provider)) {
-      throw new ManualApprovalNotAllowedError(payment.provider);
-    }
-    if (payment.status === "SUCCEEDED") return payment;
-    if (!LIVE_STATUSES.includes(payment.status)) {
-      throw new PaymentStateError(this.describeState(payment.status));
-    }
+    const auto = payments.find((payment) => AUTO_PROVIDERS.includes(payment.provider));
+    if (auto) throw new ManualApprovalNotAllowedError(auto.provider);
+
+    const live = payments.filter((payment) => LIVE_STATUSES.includes(payment.status));
+    const invalid = payments.find(
+      (payment) => !LIVE_STATUSES.includes(payment.status) && payment.status !== "SUCCEEDED",
+    );
+    if (invalid) throw new PaymentStateError(this.describeState(invalid.status));
+
+    // Duyệt hai lần không thu hai lần.
+    if (live.length === 0) return { count: 0 };
 
     const now = params.now ?? new Date();
 
     return this.db.$transaction(async (tx) => {
-      const updated = await tx.payment.update({
-        where: { id: params.paymentId },
+      const updated = await tx.payment.updateMany({
+        where: { id: { in: live.map((payment) => payment.id) }, status: { in: LIVE_STATUSES } },
         data: {
           status: "SUCCEEDED",
           paidAt: now,
@@ -257,7 +354,7 @@ export class PaymentService {
       });
 
       await tx.booking.updateMany({
-        where: { id: payment.bookingId, status: "HOLDING" },
+        where: { id: { in: live.map((payment) => payment.bookingId) }, status: "HOLDING" },
         data: { status: "CONFIRMED", holdExpiresAt: null },
       });
 
@@ -268,34 +365,55 @@ export class PaymentService {
   /**
    * Chủ sân không thấy tiền về.
    *
-   * Giao dịch thành FAILED, lượt đặt GIỮ NGUYÊN trạng thái — khách còn hạn giữ
-   * chỗ thì mở giao dịch khác được, hết hạn thì cron nhả chỗ như thường lệ.
+   * Giao dịch thành FAILED, lượt đặt vẫn `HOLDING`. Lúc khách báo chuyển khoản
+   * thì hạn giữ chỗ đã bị xoá (xem `declareTransfer`) — không trả lại hạn là chỗ
+   * bị giữ VĨNH VIỄN. Nên cấp một hạn mới tính từ lúc từ chối: đủ để khách đọc
+   * lý do, sửa nội dung chuyển khoản và báo lại; quá hạn thì nhả như thường lệ.
    */
   async rejectManual(params: {
-    paymentId: string;
+    paymentIds: readonly string[];
+    venueId: string;
     reviewerId: string;
     reason: string;
     now?: Date;
   }) {
-    const payment = await this.requirePayment(params.paymentId);
+    const payments = await this.requireVenuePayments(params.paymentIds, params.venueId);
 
-    if (!LIVE_STATUSES.includes(payment.status)) {
-      throw new PaymentStateError(this.describeState(payment.status));
-    }
+    const invalid = payments.find((payment) => !LIVE_STATUSES.includes(payment.status));
+    if (invalid) throw new PaymentStateError(this.describeState(invalid.status));
 
     const now = params.now ?? new Date();
 
-    return this.db.payment.update({
-      where: { id: params.paymentId },
-      data: {
-        status: "FAILED",
-        failedAt: now,
-        failReason: params.reason,
-        rejectReason: params.reason,
-        reviewedBy: params.reviewerId,
-        reviewedAt: now,
-        expiresAt: null,
-      },
+    const venue = await this.db.venue.findUnique({
+      where: { id: params.venueId },
+      select: { holdMinutes: true },
+    });
+    const holdMinutes = venue?.holdMinutes ?? DEFAULT_HOLD_MINUTES;
+
+    return this.db.$transaction(async (tx) => {
+      const updated = await tx.payment.updateMany({
+        where: { id: { in: payments.map((payment) => payment.id) }, status: { in: LIVE_STATUSES } },
+        data: {
+          status: "FAILED",
+          failedAt: now,
+          failReason: params.reason,
+          rejectReason: params.reason,
+          reviewedBy: params.reviewerId,
+          reviewedAt: now,
+          expiresAt: null,
+        },
+      });
+
+      await tx.booking.updateMany({
+        where: {
+          id: { in: payments.map((payment) => payment.bookingId) },
+          status: "HOLDING",
+          holdExpiresAt: null,
+        },
+        data: { holdExpiresAt: new Date(now.getTime() + holdMinutes * 60_000) },
+      });
+
+      return updated;
     });
   }
 
@@ -412,11 +530,18 @@ export class PaymentService {
     return result.count;
   }
 
-  /** Hàng chờ duyệt chuyển khoản tay của một sân. */
+  /**
+   * Hàng chờ duyệt chuyển khoản tay của một sân — MỖI LẦN CHUYỂN KHOẢN MỘT MỤC.
+   *
+   * Khách đặt ba sân trong một lần thì chuyển một lần, với một nội dung. Hiện
+   * ba dòng ba số tiền là bắt chủ sân đi tìm ba giao dịch không tồn tại trong
+   * sao kê. Nên gộp theo lần đặt (`checkoutCode`, lượt đứng riêng thì theo mã
+   * của nó): số tiền là tổng, bên dưới liệt kê từng sân + giờ.
+   */
   async pendingApprovals(venueId: string) {
-    return this.db.payment.findMany({
+    const payments = await this.db.payment.findMany({
       where: { status: "AWAITING_CONFIRMATION", booking: { venueId } },
-      orderBy: { declaredAt: "asc" },
+      orderBy: [{ declaredAt: "asc" }, { createdAt: "asc" }],
       select: {
         id: true,
         amount: true,
@@ -424,20 +549,68 @@ export class PaymentService {
         declaredNote: true,
         proofImageUrl: true,
         transferNote: true,
-        provider: true,
         booking: {
           select: {
-            id: true,
             code: true,
+            checkoutCode: true,
             customerName: true,
             customerPhone: true,
             startAt: true,
             endAt: true,
-            courtId: true,
+            court: { select: { name: true } },
           },
         },
       },
     });
+
+    type Group = {
+      checkoutCode: string;
+      transferNote: string;
+      amount: number;
+      declaredAt: Date | null;
+      declaredNote: string | null;
+      proofImageUrl: string | null;
+      customerName: string;
+      customerPhone: string;
+      items: {
+        paymentId: string;
+        bookingCode: string;
+        courtName: string;
+        startAt: Date;
+        endAt: Date;
+        amount: number;
+      }[];
+    };
+
+    const groups = new Map<string, Group>();
+
+    for (const payment of payments) {
+      const key = payment.booking.checkoutCode ?? payment.booking.code;
+      const group = groups.get(key) ?? {
+        checkoutCode: key,
+        transferNote: payment.transferNote ?? transferNoteForBooking(key),
+        amount: 0,
+        declaredAt: payment.declaredAt,
+        declaredNote: payment.declaredNote,
+        proofImageUrl: payment.proofImageUrl,
+        customerName: payment.booking.customerName,
+        customerPhone: payment.booking.customerPhone,
+        items: [],
+      };
+
+      group.amount += payment.amount;
+      group.items.push({
+        paymentId: payment.id,
+        bookingCode: payment.booking.code,
+        courtName: payment.booking.court.name,
+        startAt: payment.booking.startAt,
+        endAt: payment.booking.endAt,
+        amount: payment.amount,
+      });
+      groups.set(key, group);
+    }
+
+    return [...groups.values()];
   }
 
   /**
@@ -512,6 +685,26 @@ export class PaymentService {
         data: { status: "SUCCEEDED", approvedBy: params.approvedBy, refundedAt: now },
       });
     });
+  }
+
+  /**
+   * Các giao dịch được gửi lên từ form của nhân viên sân — PHẢI thuộc đúng sân.
+   *
+   * Lọc theo sân NGAY TRONG câu truy vấn. Thiếu một cái (sai id, hoặc id của sân
+   * khác) là từ chối CẢ lô bằng "không tìm thấy": duyệt một nửa lô là ghi nhận
+   * tiền cho một nửa lần chuyển khoản.
+   */
+  private async requireVenuePayments(paymentIds: readonly string[], venueId: string) {
+    const ids = [...new Set(paymentIds)];
+    if (ids.length === 0) throw new PaymentNotFoundError();
+
+    const payments = await this.db.payment.findMany({
+      where: { id: { in: ids }, booking: { venueId } },
+      select: { id: true, status: true, provider: true, bookingId: true },
+    });
+
+    if (payments.length !== ids.length) throw new PaymentNotFoundError();
+    return payments;
   }
 
   private async requirePayment(paymentId: string) {

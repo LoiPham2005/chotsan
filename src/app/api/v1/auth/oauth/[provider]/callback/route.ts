@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { redirectRelative } from "@/lib/api/redirect";
+import { landingPathFor } from "@/lib/landing";
 import { createSession } from "@/lib/auth";
 import { logger } from "@/lib/logger";
 import { exchangeCodeForToken } from "@/lib/oauth/client";
@@ -42,20 +43,14 @@ function errorCode(error: unknown): string {
   return "unknown";
 }
 
-async function handleCallback(
-  request: Request,
-  provider: string,
-  payload: CallbackPayload,
-): Promise<NextResponse> {
+async function handleCallback(provider: string, payload: CallbackPayload): Promise<Response> {
   if (!isOAuthProviderId(provider)) {
-    return NextResponse.redirect(new URL("/login?oauthError=invalid_provider", request.url));
+    return redirectRelative("/login?oauthError=invalid_provider", 302);
   }
 
   // Người dùng tự huỷ ở màn hình consent — không phải lỗi, không log.
   if (payload.error) {
-    return NextResponse.redirect(
-      new URL(`/login?oauthError=${encodeURIComponent(payload.error)}`, request.url),
-    );
+    return redirectRelative(`/login?oauthError=${encodeURIComponent(payload.error)}`, 302);
   }
 
   const flow = await consumeOAuthFlowCookie();
@@ -73,7 +68,8 @@ async function handleCallback(
     await createSession({ typ: "access", sub: user.id, email: user.email, roles: user.roles });
     logger.info("OAuth login", { userId: user.id, provider });
 
-    return NextResponse.redirect(new URL(flow.next, request.url));
+    // `next` rỗng = đăng nhập từ màn login trơn → về đúng chỗ làm việc của vai.
+    return redirectRelative(flow.next || (await landingPathFor(user.id)), 302);
   } catch (error) {
     const code = errorCode(error);
     if (code === "unknown") {
@@ -81,7 +77,7 @@ async function handleCallback(
     } else {
       logger.warn("OAuth callback bị từ chối", { provider, code });
     }
-    return NextResponse.redirect(new URL(`/login?oauthError=${code}`, request.url));
+    return redirectRelative(`/login?oauthError=${code}`, 302);
   }
 }
 
@@ -90,7 +86,7 @@ export async function GET(request: Request, { params }: RouteContext) {
   const { provider } = await params;
   const url = new URL(request.url);
 
-  return handleCallback(request, provider, {
+  return handleCallback(provider, {
     code: url.searchParams.get("code") ?? undefined,
     state: url.searchParams.get("state") ?? undefined,
     error: url.searchParams.get("error") ?? undefined,
@@ -116,7 +112,7 @@ export async function POST(request: Request, { params }: RouteContext) {
   const state = form.get("state");
   const error = form.get("error");
 
-  return handleCallback(request, provider, {
+  return handleCallback(provider, {
     code: typeof code === "string" ? code : undefined,
     state: typeof state === "string" ? state : undefined,
     error: typeof error === "string" ? error : undefined,

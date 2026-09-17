@@ -31,7 +31,7 @@ const FIELDS: Field[] = [
   },
 ];
 
-export function RegisterForm() {
+export function RegisterForm({ nextPath }: { nextPath?: string }) {
   const [state, formAction, isPending] = useActionState(registerAction, initialState);
 
   return (
@@ -42,6 +42,7 @@ export function RegisterForm() {
         isPending={isPending}
         submitLabel="Đăng ký"
         pendingLabel="Đang tạo tài khoản…"
+        nextPath={nextPath}
       />
     </form>
   );

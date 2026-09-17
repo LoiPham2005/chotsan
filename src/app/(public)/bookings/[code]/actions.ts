@@ -38,20 +38,30 @@ export const declareTransferAction = definePublicAction(
     const parsed = schema.safeParse(Object.fromEntries(formData));
     if (!parsed.success) return { error: "Thiếu mã đặt sân" };
 
-    const booking = await bookingService.findByCode(parsed.data.code);
-    if (!booking) return { error: "Không tìm thấy lượt đặt này" };
+    const checkout = await bookingService.findCheckout(parsed.data.code);
+    if (!checkout) return { error: "Không tìm thấy lượt đặt này" };
 
-    // Lấy giao dịch còn sống. `ngay()` đã chặn ở database chuyện có hai cái,
-    // nên ở đây nhiều nhất là một.
-    const payment = booking.payments.find((payment) =>
-      ["PENDING", "AWAITING_CONFIRMATION"].includes(payment.status),
+    /*
+     * Khai cho MỌI lượt còn chờ của lần đặt, không phải lượt nào đó.
+     *
+     * Một lần chuyển khoản trả cho cả nhóm. Khai thiếu một lượt thì chủ sân
+     * duyệt xong vẫn còn một lượt treo "chờ thanh toán" — và nó hết hạn, nhả
+     * chỗ của khách đã trả tiền.
+     */
+    const live = checkout.holding.map((booking) =>
+      booking.payments.find((payment) =>
+        ["PENDING", "AWAITING_CONFIRMATION"].includes(payment.status),
+      ),
     );
 
-    if (!payment) return { error: "Lượt đặt này không còn giao dịch nào đang chờ" };
+    if (live.length === 0) return { error: "Lần đặt này không còn lượt nào chờ thanh toán" };
+    if (live.some((payment) => payment === undefined)) {
+      return { error: "Thông tin thanh toán vừa thay đổi. Tải lại trang giúp bạn nhé." };
+    }
 
     try {
       await paymentService.declareTransfer({
-        paymentId: payment.id,
+        paymentIds: live.map((payment) => payment!.id),
         note: parsed.data.note ?? null,
       });
     } catch (error) {
@@ -59,7 +69,7 @@ export const declareTransferAction = definePublicAction(
       throw error;
     }
 
-    revalidatePath(`/bookings/${booking.code}`);
+    revalidatePath(`/bookings/${checkout.code}`);
     return { ok: true };
   },
 );

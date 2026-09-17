@@ -5,7 +5,6 @@ import { ApprovalCard } from "@/components/manage/approval-card";
 import { ManageNav } from "@/components/manage/manage-nav";
 import { requireVenueAccess } from "@/lib/auth";
 import { formatVnd } from "@/lib/slots";
-import { courtService } from "@/services/court.service";
 import { paymentService } from "@/services/payment.service";
 import { venueService } from "@/services/venue.service";
 
@@ -15,7 +14,10 @@ export const metadata: Metadata = { title: "Chờ duyệt tiền", robots: { ind
  * Hàng chờ đối chiếu chuyển khoản tay.
  *
  * Xếp theo lúc khách BÁO, cũ nhất lên trước: người chờ lâu nhất được xử lý
- * trước, và chỗ của họ cũng sắp hết hạn giữ.
+ * trước.
+ *
+ * Mỗi mục là MỘT LẦN CHUYỂN KHOẢN — khách đặt ba sân một lần thì chuyển một
+ * lần, nên ở đây cũng chỉ một mục với tổng tiền. Xem `pendingApprovals`.
  */
 export default async function PaymentApprovalsPage({
   params,
@@ -25,15 +27,13 @@ export default async function PaymentApprovalsPage({
   const { venueId } = await params;
   const user = await requireVenueAccess(venueId, "payment:confirm");
 
-  const [venue, pending, courts] = await Promise.all([
+  const [venue, pending] = await Promise.all([
     venueService.forManage(venueId),
     paymentService.pendingApprovals(venueId),
-    courtService.listForVenue(venueId),
   ]);
 
   if (!venue) notFound();
 
-  const courtName = new Map(courts.map((court) => [court.id, court.name]));
   const total = pending.reduce((sum, item) => sum + item.amount, 0);
 
   return (
@@ -69,24 +69,28 @@ export default async function PaymentApprovalsPage({
           </p>
 
           <ul className="mt-3 space-y-3">
-            {pending.map((item) => (
+            {pending.map((group) => (
               <ApprovalCard
-                key={item.id}
+                key={group.checkoutCode}
                 venueId={venueId}
                 item={{
-                  paymentId: item.id,
-                  amount: item.amount,
-                  transferNote: item.transferNote,
+                  checkoutCode: group.checkoutCode,
+                  amount: group.amount,
+                  transferNote: group.transferNote,
                   // `Date` không đi qua ranh giới Server → Client được.
-                  declaredAt: item.declaredAt?.toISOString() ?? null,
-                  declaredNote: item.declaredNote,
-                  proofImageUrl: item.proofImageUrl,
-                  bookingCode: item.booking.code,
-                  customerName: item.booking.customerName,
-                  customerPhone: item.booking.customerPhone,
-                  courtName: courtName.get(item.booking.courtId) ?? "—",
-                  startAt: item.booking.startAt.toISOString(),
-                  endAt: item.booking.endAt.toISOString(),
+                  declaredAt: group.declaredAt?.toISOString() ?? null,
+                  declaredNote: group.declaredNote,
+                  proofImageUrl: group.proofImageUrl,
+                  customerName: group.customerName,
+                  customerPhone: group.customerPhone,
+                  items: group.items.map((line) => ({
+                    paymentId: line.paymentId,
+                    bookingCode: line.bookingCode,
+                    courtName: line.courtName,
+                    startAt: line.startAt.toISOString(),
+                    endAt: line.endAt.toISOString(),
+                    amount: line.amount,
+                  })),
                 }}
               />
             ))}

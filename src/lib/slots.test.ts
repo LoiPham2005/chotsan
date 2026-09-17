@@ -6,6 +6,9 @@ import {
   formatVnd,
   formatVndShort,
   groupConsecutive,
+  slotsToRanges,
+  encodeSelection,
+  decodeSelection,
   isSlotAligned,
   minuteOfDayInVN,
   overlaps,
@@ -108,6 +111,89 @@ describe("groupConsecutive", () => {
 
   it("mảng rỗng cho mảng rỗng", () => {
     expect(groupConsecutive([])).toEqual([]);
+  });
+});
+
+describe("slotsToRanges", () => {
+  it("một sân, các khung liền nhau → một lượt đặt", () => {
+    expect(
+      slotsToRanges([
+        { courtId: "c1", minute: 1080 },
+        { courtId: "c1", minute: 1110 },
+      ]),
+    ).toEqual([{ courtId: "c1", startMinute: 1080, endMinute: 1140 }]);
+  });
+
+  it("cùng sân nhưng có khoảng hở → hai lượt đặt", () => {
+    // Giữ một khoảng dài phủ qua chỗ hở là bán luôn khung khách KHÔNG chọn.
+    expect(
+      slotsToRanges([
+        { courtId: "c1", minute: 1080 },
+        { courtId: "c1", minute: 1200 },
+      ]),
+    ).toEqual([
+      { courtId: "c1", startMinute: 1080, endMinute: 1110 },
+      { courtId: "c1", startMinute: 1200, endMinute: 1230 },
+    ]);
+  });
+
+  it("hai sân cùng giờ → hai lượt đặt, không gộp chéo sân", () => {
+    expect(
+      slotsToRanges([
+        { courtId: "c1", minute: 1080 },
+        { courtId: "c3", minute: 1080 },
+      ]),
+    ).toEqual([
+      { courtId: "c1", startMinute: 1080, endMinute: 1110 },
+      { courtId: "c3", startMinute: 1080, endMinute: 1110 },
+    ]);
+  });
+
+  it("thứ tự chọn lộn xộn vẫn ra dãy đúng", () => {
+    expect(
+      slotsToRanges([
+        { courtId: "c1", minute: 1140 },
+        { courtId: "c1", minute: 1080 },
+        { courtId: "c1", minute: 1110 },
+      ]),
+    ).toEqual([{ courtId: "c1", startMinute: 1080, endMinute: 1170 }]);
+  });
+});
+
+describe("encodeSelection / decodeSelection", () => {
+  const CHON = [
+    { courtId: "cmtmlvmpt001jp2itqjbb6o9v", minute: 1080 },
+    { courtId: "cmtmlvmpt001lp2itrfu2pt5i", minute: 1110 },
+  ];
+
+  it("đi một vòng qua URL vẫn nguyên vẹn", () => {
+    // Khách chọn ô → bị đưa sang đăng nhập → quay lại phải thấy đúng các ô đó.
+    expect(decodeSelection(encodeSelection(CHON))).toEqual(CHON);
+  });
+
+  it("bỏ phần tử sai định dạng thay vì làm đổ trang", () => {
+    const raw = `${encodeSelection(CHON)},rác,<script>~10,abc~17,${CHON[0]!.courtId}~1085`;
+    expect(decodeSelection(raw)).toEqual(CHON);
+  });
+
+  it("bỏ trùng lặp và phút ngoài ngày", () => {
+    const a = CHON[0]!.courtId;
+    expect(decodeSelection(`${a}~1080,${a}~1080,${a}~1440`)).toEqual([
+      { courtId: a, minute: 1080 },
+    ]);
+  });
+
+  it("chặn URL tự chế dài vô hạn", () => {
+    const many = Array.from({ length: 500 }, (_, i) => `cmtmlvmpt001jp2itqjbb6o9v~${i * 30}`).join(
+      ",",
+    );
+    expect(decodeSelection(many).length).toBeLessThanOrEqual(48);
+  });
+
+  it("không có tham số, hoặc tham số lặp thành mảng, thì mảng rỗng", () => {
+    expect(decodeSelection(undefined)).toEqual([]);
+    expect(decodeSelection("")).toEqual([]);
+    expect(decodeSelection(["a~60", "b~90"])).toEqual([]);
   });
 });
 

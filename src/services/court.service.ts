@@ -68,8 +68,10 @@ export class CourtService {
       sortOrder: number;
       isActive: boolean;
     }>,
+    /** Thao tác của nhân viên sân: sân con PHẢI thuộc cơ sở này. Xem `requireCourt`. */
+    options: { venueId?: string } = {},
   ) {
-    await this.requireCourt(courtId);
+    await this.requireCourt(courtId, options.venueId);
 
     return this.db.court.update({ where: { id: courtId }, data: input });
   }
@@ -195,6 +197,26 @@ export class CourtService {
     });
 
     if (!venue) throw new VenueNotFoundError();
+
+    /*
+     * Luật gắn sân con nào thì sân con đó phải thuộc CƠ SỞ NÀY.
+     *
+     * `courtId` đến từ form. Không kiểm thì cơ sở A ghi được luật giá trỏ vào
+     * sân con của cơ sở B — lịch của B không đọc luật của A nên chưa hỏng giá,
+     * nhưng đó là dữ liệu rác trỏ chéo sang sân người khác, và một thay đổi vô
+     * hại ở tầng đọc sau này là đủ biến nó thành giá sai thật.
+     */
+    const courtIds = [...new Set(rules.flatMap((rule) => (rule.courtId ? [rule.courtId] : [])))];
+    if (courtIds.length > 0) {
+      const owned = await this.db.court.findMany({
+        where: { id: { in: courtIds }, venueId, deletedAt: null },
+        select: { id: true },
+      });
+
+      if (owned.length !== courtIds.length) {
+        throw new VenueConfigError("Luật giá chỉ gắn được vào sân con của chính cơ sở này");
+      }
+    }
 
     for (const rule of rules) {
       this.assertRange(rule.startMinute, rule.endMinute);
@@ -327,13 +349,21 @@ export class CourtService {
     }
   }
 
-  private async requireCourt(courtId: string) {
+  /**
+   * `venueId` truyền vào = thao tác từ màn quản lý của MỘT sân.
+   *
+   * Quyền được kiểm trên `venueId` của URL, còn `courtId` lấy từ form — người
+   * gọi tự đặt được. Lệch cơ sở thì báo KHÔNG TÌM THẤY, không báo "không có
+   * quyền": không xác nhận cho người dò rằng id đó tồn tại.
+   */
+  private async requireCourt(courtId: string, venueId?: string) {
     const court = await this.db.court.findFirst({
       where: { id: courtId, deletedAt: null },
       select: { id: true, venueId: true },
     });
 
     if (!court) throw new CourtNotFoundError();
+    if (venueId !== undefined && court.venueId !== venueId) throw new CourtNotFoundError();
     return court;
   }
 }

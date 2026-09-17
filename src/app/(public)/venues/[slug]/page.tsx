@@ -5,7 +5,7 @@ import { SportIcon, sportStyle } from "@/components/venue/sport-icon";
 import { DateStrip } from "@/components/booking/date-strip";
 import { getCurrentUser } from "@/lib/auth";
 import { parseDateKey, dateKey, fullDateLabel } from "@/lib/date";
-import { formatHhMm } from "@/lib/slots";
+import { decodeSelection, formatHhMm } from "@/lib/slots";
 import { availabilityService } from "@/services/availability.service";
 import { venueService } from "@/services/venue.service";
 
@@ -13,7 +13,8 @@ const WEEKDAY_NAMES = ["Chủ nhật", "Thứ 2", "Thứ 3", "Thứ 4", "Thứ 5
 
 type Props = {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ date?: string }>;
+  /** `chon` = các ô khách đã chọn trước khi bị đưa sang đăng nhập — xem `encodeSelection`. */
+  searchParams: Promise<{ date?: string; chon?: string }>;
 };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -120,11 +121,11 @@ export default async function VenueDetailPage({ params, searchParams }: Props) {
             Chọn khung giờ
           </h2>
           <p className="mt-0.5 text-sm text-muted">
-            {fullDateLabel(date)} · kéo qua nhiều ô liền nhau để đặt dài hơn
+            {fullDateLabel(date)} · bấm chọn một hoặc nhiều ô, khác sân cũng được
           </p>
 
           <div className="mt-3">
-            <DateStrip basePath={`/venue/${venue.slug}`} selected={date} />
+            <DateStrip basePath={`/venues/${venue.slug}`} selected={date} />
           </div>
 
           <div className="mt-4">
@@ -134,10 +135,15 @@ export default async function VenueDetailPage({ params, searchParams }: Props) {
               </p>
             ) : (
               <SelectAndBook
+                // `key` theo ngày: đổi ngày là dựng lại từ đầu. Không có nó, ô
+                // 18:00 chọn ở thứ 5 vẫn "đang chọn" khi chuyển sang thứ 6 — và
+                // bị đặt cho thứ 6, ngày khách không hề chọn.
+                key={key}
                 day={lich}
                 venueId={venue.id}
                 date={key}
                 duongDanHienTai={`/venues/${venue.slug}?date=${key}`}
+                initialSelection={decodeSelection(query.chon)}
                 nguoiDung={
                   nguoiDung
                     ? {

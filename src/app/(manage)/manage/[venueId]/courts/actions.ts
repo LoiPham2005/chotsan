@@ -69,7 +69,12 @@ export const toggleCourtAction = defineVenueAction(
     if (!parsed.success) return { error: "Thiếu thông tin sân" };
 
     try {
-      await courtService.update(parsed.data.courtId, { isActive: parsed.data.isActive });
+      // `venueId`: sân con phải thuộc đúng cơ sở mà người bấm có quyền.
+      await courtService.update(
+        parsed.data.courtId,
+        { isActive: parsed.data.isActive },
+        { venueId: ctx.venueId },
+      );
     } catch (error) {
       if (error instanceof DomainError) return { error: error.message };
       throw error;

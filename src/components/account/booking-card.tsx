@@ -6,22 +6,15 @@ import { useFormStatus } from "react-dom";
 import { cancelOwnBookingAction, type CancelState } from "@/app/(account)/account/bookings/actions";
 import { ReviewForm } from "@/components/account/review-form";
 import { Button } from "@/components/ui/button";
+import { BOOKING_STATUS } from "@/lib/booking-status";
 import { fullDateLabel, timeOfDay } from "@/lib/date";
 import { formatVnd } from "@/lib/slots";
-
-const STATUS: Record<string, { text: string; className: string }> = {
-  HOLDING: { text: "Chờ thanh toán", className: "bg-peak-tint text-peak-text ring-peak-line" },
-  CONFIRMED: { text: "Đã xác nhận", className: "bg-brand-tint text-brand-hover ring-brand-line" },
-  CHECKED_IN: { text: "Đã tới sân", className: "bg-sky-50 text-sky-700 ring-sky-200" },
-  COMPLETED: { text: "Hoàn tất", className: "bg-elevated text-muted ring-line" },
-  CANCELLED: { text: "Đã huỷ", className: "bg-elevated text-subtle ring-line" },
-  EXPIRED: { text: "Hết hạn giữ chỗ", className: "bg-elevated text-subtle ring-line" },
-  NO_SHOW: { text: "Không tới", className: "bg-red-50 text-red-700 ring-red-200" },
-};
 
 export type MyBooking = {
   id: string;
   code: string;
+  /** Mã của lần đặt chung (đặt nhiều sân một lần). `null` = lượt đứng riêng. */
+  checkoutCode: string | null;
   status: string;
   startAt: string;
   endAt: string;
@@ -52,7 +45,7 @@ export function BookingCard({
   canReview: boolean;
 }) {
   const [state, action] = useActionState<CancelState, FormData>(cancelOwnBookingAction, {});
-  const status = STATUS[booking.status] ?? {
+  const status = BOOKING_STATUS[booking.status] ?? {
     text: booking.status,
     className: "bg-elevated text-muted ring-line",
   };
@@ -102,7 +95,8 @@ export function BookingCard({
         <div className="flex gap-2">
           {booking.status === "HOLDING" && (
             <Button asChild size="sm">
-              <Link href={`/bookings/${booking.code}`}>Thanh toán</Link>
+              {/* Đặt nhiều sân một lần thì thanh toán CHUNG — mở màn của cả lần đặt. */}
+              <Link href={`/bookings/${booking.checkoutCode ?? booking.code}`}>Thanh toán</Link>
             </Button>
           )}
           {canCancel && (

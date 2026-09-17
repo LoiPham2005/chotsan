@@ -55,8 +55,85 @@ export type DayAvailability = {
   isClosed: boolean;
 };
 
-/** Trạng thái lượt đặt được coi là ĐANG GIỮ CHỖ. Khớp ràng buộc EXCLUDE trong migration. */
-const LIVE_BOOKING_STATUSES = ["HOLDING", "CONFIRMED", "CHECKED_IN"] as const;
+/**
+ * Lượt đặt đang CHIẾM khung giờ.
+ *
+ * ---
+ * CHỖ GIỮ ĐÃ QUÁ HẠN KHÔNG CHIẾM GÌ CẢ — DÙ CRON CHƯA KỊP NHẢ
+ *
+ * `HOLDING` chỉ chiếm chỗ khi còn hạn (`holdExpiresAt` ở tương lai) hoặc khi
+ * không có hạn (`null` — khách đã báo chuyển khoản, đang chờ chủ sân đối chiếu).
+ *
+ * Trước đây mọi `HOLDING` đều chiếm chỗ, và thứ duy nhất nhả chúng là cron
+ * `booking:expire-holds` ở worker. Worker không chạy (máy dev chỉ `pnpm dev`,
+ * hoặc worker production chết) = mỗi lần khách mở màn thanh toán rồi bỏ đi là
+ * khoá khung đó VĨNH VIỄN. Đã xảy ra thật: giữ chỗ lúc 09:38, tới 10:41 vẫn
+ * khoá sân. Tính đúng ở đây thì đúng bất kể worker sống hay chết.
+ *
+ * Ràng buộc `EXCLUDE` ở database vẫn tính mọi `HOLDING` (nó không đọc được
+ * "bây giờ"), nên `BookingService` nhả chỗ quá hạn gối lên khung mới NGAY
+ * TRONG transaction giữ chỗ — xem `releaseStaleHolds`.
+ */
+export function occupyingBookingWhere(now: Date) {
+  return {
+    OR: [
+      { status: { in: ["CONFIRMED", "CHECKED_IN"] as ("CONFIRMED" | "CHECKED_IN")[] } },
+      {
+        status: "HOLDING" as const,
+        OR: [{ holdExpiresAt: null }, { holdExpiresAt: { gt: now } }],
+      },
+    ],
+  };
+}
+
+/** Báo giá của một dãy trong một lần đặt nhiều dãy. */
+export type RangeQuote = {
+  courtId: string;
+  startMinute: number;
+  endMinute: number;
+  /** `null` khi sân con không thuộc cơ sở này (hoặc đã tắt). */
+  courtName: string | null;
+  /** `false` khi có bất kỳ khung nào không đặt được — khi đó tiền là 0. */
+  available: boolean;
+  slotCount: number;
+  total: number;
+};
+
+/**
+ * Báo giá một dãy từ lịch ĐÃ ĐỌC SẴN. Tách ra để một lần đặt sáu dãy chỉ đọc
+ * lịch MỘT lần, thay vì sáu lần × bảy truy vấn.
+ */
+export function quoteFromDay(
+  day: DayAvailability,
+  range: { courtId: string; startMinute: number; endMinute: number },
+): RangeQuote {
+  const court = day.isClosed
+    ? undefined
+    : day.courts.find((item) => item.courtId === range.courtId);
+  const base = { ...range, courtName: court?.courtName ?? null };
+
+  if (!court) return { ...base, available: false, slotCount: 0, total: 0 };
+
+  const wanted = court.slots.filter(
+    (slot) => slot.minute >= range.startMinute && slot.minute < range.endMinute,
+  );
+  const expected = Math.floor((range.endMinute - range.startMinute) / SLOT_MINUTES);
+
+  if (
+    wanted.length === 0 ||
+    wanted.length !== expected ||
+    wanted.some((slot) => slot.status !== "FREE")
+  ) {
+    return { ...base, available: false, slotCount: 0, total: 0 };
+  }
+
+  return {
+    ...base,
+    available: true,
+    slotCount: wanted.length,
+    total: wanted.reduce((sum, slot) => sum + slot.price, 0),
+  };
+}
 
 export class AvailabilityService {
   constructor(private readonly db: PrismaClient = prisma) {}
@@ -95,7 +172,7 @@ export class AvailabilityService {
       this.db.booking.findMany({
         where: {
           venueId,
-          status: { in: [...LIVE_BOOKING_STATUSES] },
+          ...occupyingBookingWhere(now),
           startAt: { lt: dayEnd },
           endAt: { gt: dayStart },
           // Đổi giờ thì lượt đặt phải được giấu khỏi lịch của chính nó, nếu
@@ -239,24 +316,35 @@ export class AvailabilityService {
       now: params.now,
       excludeBookingId: params.excludeBookingId,
     });
-    if (day.isClosed) return null;
 
-    const court = day.courts.find((item) => item.courtId === params.courtId);
-    if (!court) return null;
+    const quote = quoteFromDay(day, params);
+    if (!quote.available) return null;
 
-    const wanted = court.slots.filter(
-      (slot) => slot.minute >= params.startMinute && slot.minute < params.endMinute,
-    );
+    const slots =
+      day.courts
+        .find((item) => item.courtId === params.courtId)
+        ?.slots.filter(
+          (slot) => slot.minute >= params.startMinute && slot.minute < params.endMinute,
+        ) ?? [];
 
-    const expected = Math.floor((params.endMinute - params.startMinute) / SLOT_MINUTES);
-    if (wanted.length === 0 || wanted.length !== expected) return null;
-    if (wanted.some((slot) => slot.status !== "FREE")) return null;
+    return { slotCount: quote.slotCount, total: quote.total, slots };
+  }
 
-    return {
-      slotCount: wanted.length,
-      total: wanted.reduce((sum, slot) => sum + slot.price, 0),
-      slots: wanted,
-    };
+  /**
+   * Báo giá cho NHIỀU dãy trong cùng một ngày — một lần đặt nhiều sân.
+   *
+   * Đọc lịch một lần rồi báo giá từng dãy. Trả đủ mọi dãy, kể cả dãy không đặt
+   * được (`available: false`), để nơi gọi báo đúng tên sân + giờ bị hỏng thay
+   * vì một câu chung chung.
+   */
+  async quoteMany(params: {
+    venueId: string;
+    date: Date;
+    ranges: readonly { courtId: string; startMinute: number; endMinute: number }[];
+    now?: Date;
+  }): Promise<RangeQuote[]> {
+    const day = await this.forDay(params.venueId, params.date, { now: params.now });
+    return params.ranges.map((range) => quoteFromDay(day, range));
   }
 }
 

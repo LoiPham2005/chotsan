@@ -583,6 +583,10 @@ model Booking {
   discountTotal Int                 @default(0) @map("discount_total")
   total         Int
   holdExpiresAt DateTime?           @map("hold_expires_at") @db.Timestamptz(3)
+  /// Các lượt đặt TẠO CÙNG MỘT LẦN (nhiều sân, nhiều khung rời nhau) mang chung
+  /// mã này = mã của lượt đầu tiên, để khách trả MỘT lần chuyển khoản và chủ sân
+  /// duyệt MỘT lần. `null` = lượt đặt đứng riêng. Xem `BookingService.holdCheckout`.
+  checkoutCode  String?             @map("checkout_code")
   checkedInAt   DateTime?           @map("checked_in_at") @db.Timestamptz(3)
   cancelledAt   DateTime?           @map("cancelled_at") @db.Timestamptz(3)
   cancelReason  String?             @map("cancel_reason")
@@ -600,6 +604,7 @@ model Booking {
   @@index([courtId, startAt])
   @@index([userId, startAt])
   @@index([status, holdExpiresAt])
+  @@index([checkoutCode])
   @@map("bookings")
 }
 

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { dangNhap, TAI_KHOAN } from "./tro-giup";
+import { dangNhap, MAT_KHAU, TAI_KHOAN } from "./tro-giup";
 
 /**
  * Luồng khách đặt sân — từ trang chủ tới màn thanh toán.
@@ -46,13 +46,15 @@ test.describe("Khách đặt sân", () => {
     await expect(page.getByText("Sân 10", { exact: true })).toHaveCount(0);
 
     // Ô khung giờ là nút bấm được, không phải ô tĩnh.
-    await expect(page.locator("button[aria-pressed]").first()).toBeVisible();
+    await expect(page.locator("button[data-minute]").first()).toBeVisible();
   });
 
   test("chưa đăng nhập thì được dẫn tới đăng nhập, KHÔNG hỏi tên và số", async ({ page }) => {
     await page.goto("/venues/cau-long-thanh-cong");
 
-    const oTrong = page.locator('button[aria-pressed="false"]:not([disabled])').first();
+    const oTrong = page
+      .locator('button[data-minute][aria-pressed="false"]:not([disabled])')
+      .first();
     await expect(oTrong).toBeVisible({ timeout: 20_000 });
     await oTrong.click();
 
@@ -73,7 +75,9 @@ test.describe("Khách đặt sân", () => {
     await dangNhap(page, TAI_KHOAN.khach);
     await page.goto("/venues/cau-long-thanh-cong");
 
-    const oTrong = page.locator('button[aria-pressed="false"]:not([disabled])').first();
+    const oTrong = page
+      .locator('button[data-minute][aria-pressed="false"]:not([disabled])')
+      .first();
     await expect(oTrong).toBeVisible({ timeout: 20_000 });
     await oTrong.click();
 
@@ -93,6 +97,72 @@ test.describe("Khách đặt sân", () => {
     await expect(page.getByText("Nội dung chuyển khoản", { exact: false })).toBeVisible();
     await expect(page.locator("canvas")).toBeVisible();
     await expect(page.getByRole("button", { name: /Tôi đã chuyển khoản/ })).toBeVisible();
+  });
+
+  test("chọn ô rồi mới đăng nhập — quay về còn nguyên các ô và đặt tiếp được", async ({ page }) => {
+    await page.goto("/venues/cau-long-thanh-cong");
+
+    // Cả hai lần đều bấm `.first()` của ô CÒN TRỐNG: ô vừa bấm đổi sang
+    // `aria-pressed="true"` nên lần sau tự trỏ sang ô kế tiếp.
+    const oTrong = page.locator('button[data-minute][aria-pressed="false"]:not([disabled])');
+    const oDangChon = page.locator('button[data-minute][aria-pressed="true"]');
+    await expect(oTrong.first()).toBeVisible({ timeout: 20_000 });
+    await oTrong.first().click();
+    await expect(oDangChon).toHaveCount(1);
+    await oTrong.first().click();
+    await expect(oDangChon).toHaveCount(2);
+
+    await page.getByRole("link", { name: "Đăng nhập để đặt sân" }).click();
+    await page.waitForURL(/\/login\?next=/);
+
+    await page.locator('input[name="identifier"]').fill(TAI_KHOAN.khach);
+    await page.locator('input[name="password"]').fill(MAT_KHAU);
+    await page.getByRole("button", { name: "Đăng nhập", exact: true }).click();
+
+    // Về lại ĐÚNG trang sân — không phải trang chủ, không phải màn của vai.
+    await page.waitForURL(/\/venues\/cau-long-thanh-cong/, { timeout: 30_000 });
+
+    // Đây là lỗi người dùng gặp: đăng nhập xong lưới trống trơn, phải chọn lại
+    // từ đầu. Hai ô phải còn nguyên, kèm lời báo để khách biết việc tiếp theo.
+    await expect(oDangChon).toHaveCount(2);
+    await expect(
+      page.getByRole("status").filter({ hasText: "Đã giữ nguyên 2 khung" }),
+    ).toBeVisible();
+
+    // `chon` phải rời thanh địa chỉ, nếu không đặt xong bấm Quay lại sẽ thấy
+    // đúng các ô vừa đặt "được chọn" lần nữa.
+    await expect(page).not.toHaveURL(/chon=/);
+
+    const oSoDienThoai = page.locator('input[name="customerPhone"]');
+    if ((await oSoDienThoai.count()) > 0) await oSoDienThoai.fill("0912345678");
+
+    await page.getByRole("button", { name: "Đặt sân và thanh toán" }).click();
+
+    // Một hay nhiều lượt đều tới MÀN THANH TOÁN — không bao giờ đá sang danh
+    // sách lượt đặt. Xem combined-checkout.spec.ts.
+    await page.waitForURL(/\/bookings\/[A-Z0-9]{6}$/, { timeout: 30_000 });
+  });
+
+  test("bấm ngày khác trên dải ngày thì đổi lịch — không 404, không mang ô của ngày cũ", async ({
+    page,
+  }) => {
+    await page.goto("/venues/cau-long-thanh-cong");
+
+    const oTrong = page.locator('button[data-minute][aria-pressed="false"]:not([disabled])');
+    await expect(oTrong.first()).toBeVisible({ timeout: 20_000 });
+    await oTrong.first().click();
+    await expect(page.locator('button[data-minute][aria-pressed="true"]')).toHaveCount(1);
+
+    // Dải ngày từng trỏ `/venue/…` (thiếu chữ s): bấm ngày nào cũng ra 404.
+    const ngayKhac = page.getByRole("group", { name: "Chọn ngày" }).getByRole("link").nth(2);
+    await ngayKhac.click();
+
+    await page.waitForURL(/\/venues\/cau-long-thanh-cong\?date=\d{4}-\d{2}-\d{2}/);
+    await expect(ngayKhac).toHaveAttribute("aria-current", "date");
+    await expect(page.getByRole("heading", { name: "Chọn khung giờ" })).toBeVisible();
+
+    // Ô chọn ở ngày cũ không được lặng lẽ nằm lại và bị đặt cho ngày mới.
+    await expect(page.locator('button[data-minute][aria-pressed="true"]')).toHaveCount(0);
   });
 
   test("mã đặt sân không tồn tại thì 404, không phải trang trống", async ({ page }) => {
