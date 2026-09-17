@@ -6,7 +6,7 @@
 # thuần Node, nên ràng buộc glibc biến mất.
 #
 # Đổi base: 349MB → 135MB, áp dụng cho MỌI stage.
-FROM node:24-alpine AS base
+FROM node:26-alpine AS base
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
